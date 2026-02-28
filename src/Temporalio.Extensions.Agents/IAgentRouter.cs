@@ -5,7 +5,7 @@ namespace Temporalio.Extensions.Agents;
 /// <summary>
 /// Decides which registered agent should handle an incoming message.
 /// Implement this interface to provide a custom routing strategy, or use
-/// <see cref="LlmAgentRouter"/> for LLM-powered classification.
+/// <see cref="AIAgentRouter"/> for LLM-powered classification.
 /// </summary>
 public interface IAgentRouter
 {

@@ -48,10 +48,10 @@ public static class TemporalWorkerBuilderExtensions
         // Options singleton — consumed by DefaultTemporalAgentClient for per-agent TTL resolution.
         services.AddSingleton(agentsOptions);
 
-        // GAP 2: register LlmAgentRouter when a router agent has been configured.
+        // Register AIAgentRouter when a router agent has been configured.
         if (agentsOptions.GetRouterAgent() is { } routerAgent)
         {
-            services.TryAddSingleton<IAgentRouter>(new LlmAgentRouter(routerAgent));
+            services.TryAddSingleton<IAgentRouter>(new AIAgentRouter(routerAgent));
         }
 
         // ITemporalAgentClient — uses WorkflowUpdate for synchronous request/response semantics.

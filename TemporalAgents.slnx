@@ -15,5 +15,6 @@
     <Project Path="samples/WorkflowOrchestration/WorkflowOrchestration.csproj" />
     <Project Path="samples/EvaluatorOptimizer/EvaluatorOptimizer.csproj" />
     <Project Path="samples/MultiAgentRouting/MultiAgentRouting.csproj" />
+    <Project Path="samples/HumanInTheLoop/HumanInTheLoop.csproj" />
   </Folder>
 </Solution>

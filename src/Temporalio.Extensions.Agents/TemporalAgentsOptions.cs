@@ -172,8 +172,8 @@ public sealed class TemporalAgentsOptions
     }
 
     /// <summary>
-    /// Sets the <see cref="AIAgent"/> used by <see cref="LlmAgentRouter"/> to classify
-    /// incoming messages. When set, <see cref="LlmAgentRouter"/> is automatically registered
+    /// Sets the <see cref="AIAgent"/> used by <see cref="AIAgentRouter"/> to classify
+    /// incoming messages. When set, <see cref="AIAgentRouter"/> is automatically registered
     /// in the DI container by <c>AddTemporalAgents()</c>.
     /// </summary>
     /// <remarks>

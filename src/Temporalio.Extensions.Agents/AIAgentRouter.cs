@@ -4,7 +4,7 @@ using Microsoft.Extensions.AI;
 namespace Temporalio.Extensions.Agents;
 
 /// <summary>
-/// Default <see cref="IAgentRouter"/> implementation that calls an LLM-backed
+/// Default <see cref="IAgentRouter"/> implementation that calls an AI model-backed
 /// <see cref="AIAgent"/> to classify which registered agent should handle a request.
 /// </summary>
 /// <remarks>
@@ -13,10 +13,10 @@ namespace Temporalio.Extensions.Agents;
 /// parsed with a fuzzy match fallback to tolerate minor formatting variation.
 /// <para>
 /// Register a router agent via <see cref="TemporalAgentsOptions.SetRouterAgent"/>; the
-/// <see cref="LlmAgentRouter"/> is registered automatically when a router agent is present.
+/// <see cref="AIAgentRouter"/> is registered automatically when a router agent is present.
 /// </para>
 /// </remarks>
-public sealed class LlmAgentRouter(AIAgent routerAgent) : IAgentRouter
+public sealed class AIAgentRouter(AIAgent routerAgent) : IAgentRouter
 {
     /// <inheritdoc/>
     public async Task<string> RouteAsync(

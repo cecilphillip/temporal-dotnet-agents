@@ -74,7 +74,7 @@ public class RoutingOptionsTests
     }
 
     [Fact]
-    public void AddTemporalAgents_WithRouterAgent_RegistersLlmAgentRouterAsSingleton()
+    public void AddTemporalAgents_WithRouterAgent_RegistersAIAgentRouterAsSingleton()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -94,7 +94,7 @@ public class RoutingOptionsTests
         var provider = services.BuildServiceProvider();
         var router = provider.GetService<IAgentRouter>();
         Assert.NotNull(router);
-        Assert.IsType<LlmAgentRouter>(router);
+        Assert.IsType<AIAgentRouter>(router);
     }
 
     [Fact]

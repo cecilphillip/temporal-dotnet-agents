@@ -5,7 +5,7 @@ using Xunit;
 
 namespace Temporalio.Extensions.Agents.Tests;
 
-public class LlmAgentRouterTests
+public class AIAgentRouterTests
 {
     private static readonly List<AgentDescriptor> Descriptors =
     [
@@ -26,7 +26,7 @@ public class LlmAgentRouterTests
     public async Task RouteAsync_ExactMatch_ReturnsAgentName()
     {
         var routerAgent = new StubAIAgent("__router__", ResponseWithText("WeatherAgent"));
-        var router = new LlmAgentRouter(routerAgent);
+        var router = new AIAgentRouter(routerAgent);
 
         var messages = new List<ChatMessage> { new(ChatRole.User, "What is the weather today?") };
         var result = await router.RouteAsync(messages, Descriptors);
@@ -39,7 +39,7 @@ public class LlmAgentRouterTests
     {
         var routerAgent = new StubAIAgent("__router__",
             ResponseWithText("I think BillingAgent would be best for this."));
-        var router = new LlmAgentRouter(routerAgent);
+        var router = new AIAgentRouter(routerAgent);
 
         var messages = new List<ChatMessage> { new(ChatRole.User, "I have a question about my invoice.") };
         var result = await router.RouteAsync(messages, Descriptors);
@@ -51,7 +51,7 @@ public class LlmAgentRouterTests
     public async Task RouteAsync_UnknownName_ThrowsInvalidOperationException()
     {
         var routerAgent = new StubAIAgent("__router__", ResponseWithText("HallucinatedAgent"));
-        var router = new LlmAgentRouter(routerAgent);
+        var router = new AIAgentRouter(routerAgent);
         var messages = new List<ChatMessage> { new(ChatRole.User, "Help me.") };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -62,7 +62,7 @@ public class LlmAgentRouterTests
     public async Task RouteAsync_EmptyDescriptors_ThrowsInvalidOperationException()
     {
         var routerAgent = new StubAIAgent("__router__", ResponseWithText("WeatherAgent"));
-        var router = new LlmAgentRouter(routerAgent);
+        var router = new AIAgentRouter(routerAgent);
         var messages = new List<ChatMessage> { new(ChatRole.User, "Test") };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -74,7 +74,7 @@ public class LlmAgentRouterTests
     {
         // Router returns name in lower case — fuzzy match is case-insensitive.
         var routerAgent = new StubAIAgent("__router__", ResponseWithText("techsupport"));
-        var router = new LlmAgentRouter(routerAgent);
+        var router = new AIAgentRouter(routerAgent);
         var messages = new List<ChatMessage> { new(ChatRole.User, "My app crashed.") };
 
         var result = await router.RouteAsync(messages, Descriptors);
@@ -86,7 +86,7 @@ public class LlmAgentRouterTests
     public async Task RouteAsync_NullMessages_Throws()
     {
         var routerAgent = new StubAIAgent("__router__", ResponseWithText("WeatherAgent"));
-        var router = new LlmAgentRouter(routerAgent);
+        var router = new AIAgentRouter(routerAgent);
 
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
             router.RouteAsync(null!, Descriptors));
@@ -96,7 +96,7 @@ public class LlmAgentRouterTests
     public async Task RouteAsync_NullAgents_Throws()
     {
         var routerAgent = new StubAIAgent("__router__", ResponseWithText("WeatherAgent"));
-        var router = new LlmAgentRouter(routerAgent);
+        var router = new AIAgentRouter(routerAgent);
         var messages = new List<ChatMessage> { new(ChatRole.User, "Test") };
 
         await Assert.ThrowsAsync<ArgumentNullException>(() =>

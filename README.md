@@ -16,7 +16,7 @@ Temporal provides:
 |---|---|
 | Durable sessions | Each agent session maps to a long-lived Temporal workflow; history survives worker restarts |
 | Multi-turn conversations | Conversation history is stored in workflow state and replayed automatically |
-| LLM-powered routing | `IAgentRouter` / `LlmAgentRouter` classifies messages and dispatches to the best-matching agent |
+| LLM-powered routing | `IAgentRouter` / `AIModelAgentRouter` classifies messages and dispatches to the best-matching agent |
 | Parallel agent execution | `ExecuteAgentsInParallelAsync` runs multiple agents concurrently inside a workflow |
 | Human-in-the-loop approval | Tools can pause and request human review; external systems submit decisions |
 | MCP tool integration | Async agent factory connects to a Model Context Protocol server at startup |
@@ -360,7 +360,7 @@ public class MyStreamingHandler : IAgentResponseHandler
 
 ## LLM-Powered Routing
 
-When multiple agents are registered, `IAgentRouter` / `LlmAgentRouter` can classify an incoming message and dispatch it to the best-matching agent automatically.
+When multiple agents are registered, `IAgentRouter` / `AIModelAgentRouter` can classify an incoming message and dispatch it to the best-matching agent automatically.
 
 ### Configuration
 
@@ -387,7 +387,7 @@ builder.Services
         opts.AddAgentDescriptor("WeatherAgent", "Handles weather queries and forecasts");
         opts.AddAgentDescriptor("BookingAgent", "Handles travel bookings and reservations");
 
-        // LlmAgentRouter is registered automatically when a router agent is set
+        // AIModelAgentRouter is registered automatically when a router agent is set
         opts.SetRouterAgent(routerAgent);
     });
 ```
@@ -411,7 +411,7 @@ AgentResponse response = await client.RouteAsync(
 
 The `sessionKey` is used to construct a `TemporalAgentSessionId` from the chosen agent name and that key, so the same user always routes to the same session for a given agent.
 
-`LlmAgentRouter` uses a fuzzy-match fallback to tolerate minor formatting variation in the model's output. To use a custom routing strategy, implement `IAgentRouter` and register it in DI before calling `AddTemporalAgents`.
+`AIModelAgentRouter` uses a fuzzy-match fallback to tolerate minor formatting variation in the model's output. To use a custom routing strategy, implement `IAgentRouter` and register it in DI before calling `AddTemporalAgents`.
 
 ---
 

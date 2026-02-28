@@ -123,7 +123,7 @@ builder.Services
         opts.AddAIAgent(billingAgent, timeToLive: TimeSpan.FromHours(1));
         opts.AddAIAgent(techSupportAgent, timeToLive: TimeSpan.FromHours(1));
 
-        // Register descriptors — used by LlmAgentRouter to build the routing prompt
+        // Register descriptors — used by AIAgentRouter to build the routing prompt
         opts.AddAgentDescriptor("WeatherAgent",
             "Handles questions about weather conditions, forecasts, climate, and meteorology.");
         opts.AddAgentDescriptor("BillingAgent",
@@ -131,7 +131,7 @@ builder.Services
         opts.AddAgentDescriptor("TechSupportAgent",
             "Handles questions about software issues, hardware problems, troubleshooting, and technical configurations.");
 
-        // SetRouterAgent registers an LlmAgentRouter that automatically picks the right agent
+        // SetRouterAgent registers an AIAgentRouter that automatically picks the right agent
         opts.SetRouterAgent(routerAgent);
     })
     .AddWorkflow<RoutingWorkflow>();
