@@ -1,5 +1,3 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Agents.AI;
@@ -96,16 +94,19 @@ public sealed class TemporalAIAgent : AIAgent
 
         _history.Add(TemporalAgentStateRequest.FromRunRequest(request));
 
+        // TemporalAIAgent lives inside a workflow and creates sessions in-process,
+        // so StateBag persistence across turns is handled by the workflow history itself.
+        // We pass null for the StateBag (no cross-activity-call state needed here).
         var activityInput = new ExecuteAgentInput(_agentName, request, [.. _history]);
 
         Logs.LogInWorkflowAgentDispatching(Workflow.Logger, _agentName, _history.Count(e => e is TemporalAgentStateRequest));
 
-        var response = await Workflow.ExecuteActivityAsync(
+        var result = await Workflow.ExecuteActivityAsync(
             (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
             _activityOptions);
 
-        _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId, response));
-        return response;
+        _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId, result.Response));
+        return result.Response;
     }
 
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(

@@ -1,8 +1,5 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using System.Text.Json;
 using Microsoft.Extensions.AI;
-using Temporalio.Extensions.Agents;
 using Xunit;
 
 namespace Temporalio.Extensions.Agents.Tests;

@@ -1,5 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
-
+using System.Diagnostics;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -16,11 +15,9 @@ internal class DefaultTemporalAgentClient(
     ITemporalClient client,
     TemporalAgentsOptions options,
     string taskQueue,
-    ILogger<DefaultTemporalAgentClient>? logger = null) : ITemporalAgentClient
+    ILogger<DefaultTemporalAgentClient>? logger = null,
+    IAgentRouter? router = null) : ITemporalAgentClient
 {
-    private readonly ITemporalClient _client = client;
-    private readonly TemporalAgentsOptions _options = options;
-    private readonly string _taskQueue = taskQueue;
     private readonly ILogger<DefaultTemporalAgentClient> _logger =
         logger ?? NullLogger<DefaultTemporalAgentClient>.Instance;
 
@@ -32,36 +29,40 @@ internal class DefaultTemporalAgentClient(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workflowOptions = new WorkflowOptions(sessionId.WorkflowId, _taskQueue)
+        // GAP 4: emit a client-side span wrapping the update round-trip.
+        using var span = TemporalAgentTelemetry.ActivitySource.StartActivity(
+            TemporalAgentTelemetry.AgentClientSendSpanName,
+            ActivityKind.Client);
+
+        span?.SetTag(TemporalAgentTelemetry.AgentNameAttribute, sessionId.AgentName);
+        span?.SetTag(TemporalAgentTelemetry.AgentSessionIdAttribute, sessionId.WorkflowId);
+
+        var workflowOptions = new WorkflowOptions(sessionId.WorkflowId, taskQueue)
         {
             IdConflictPolicy = WorkflowIdConflictPolicy.UseExisting,
             IdReusePolicy = WorkflowIdReusePolicy.AllowDuplicate
         };
 
-        Logs.LogClientSendingUpdate(_logger, sessionId.AgentName, sessionId.WorkflowId);
+        _logger.LogClientSendingUpdate(sessionId.AgentName, sessionId.WorkflowId);
 
-        // Ensure the workflow exists (starts a new one, or no-ops if one is already running).
-        await _client.StartWorkflowAsync(
+        await client.StartWorkflowAsync(
             (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput
             {
                 AgentName = sessionId.AgentName,
-                TaskQueue = _taskQueue,
-                TimeToLive = _options.GetTimeToLive(sessionId.AgentName),
-                ActivityStartToCloseTimeout = _options.ActivityStartToCloseTimeout,
-                ActivityHeartbeatTimeout = _options.ActivityHeartbeatTimeout
+                TaskQueue = taskQueue,
+                TimeToLive = options.GetTimeToLive(sessionId.AgentName),
+                ActivityStartToCloseTimeout = options.ActivityStartToCloseTimeout,
+                ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout
             }),
             workflowOptions);
 
         // Use a handle WITHOUT a pinned RunId so updates follow the continue-as-new chain.
-        // The handle from StartWorkflowAsync pins to a specific run, which becomes stale
-        // if the workflow has done continue-as-new since it was first started.
-        var handle = _client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
+        var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
 
-        // Execute the update — returns the response directly, no polling needed.
         var response = await handle.ExecuteUpdateAsync<AgentWorkflow, AgentResponse>(
             wf => wf.RunAgentAsync(request));
 
-        Logs.LogClientUpdateCompleted(_logger, sessionId.AgentName, sessionId.WorkflowId);
+        _logger.LogClientUpdateCompleted(sessionId.AgentName, sessionId.WorkflowId);
         return response;
     }
 
@@ -73,28 +74,86 @@ internal class DefaultTemporalAgentClient(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var workflowOptions = new WorkflowOptions(sessionId.WorkflowId, _taskQueue)
+        var workflowOptions = new WorkflowOptions(sessionId.WorkflowId, taskQueue)
         {
             IdConflictPolicy = WorkflowIdConflictPolicy.UseExisting,
             IdReusePolicy = WorkflowIdReusePolicy.AllowDuplicate
         };
 
-        Logs.LogClientFireAndForget(_logger, sessionId.AgentName, sessionId.WorkflowId);
+        _logger.LogClientFireAndForget(sessionId.AgentName, sessionId.WorkflowId);
 
-        // Ensure the workflow exists.
-        await _client.StartWorkflowAsync(
+        await client.StartWorkflowAsync(
             (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput
             {
                 AgentName = sessionId.AgentName,
-                TaskQueue = _taskQueue,
-                TimeToLive = _options.GetTimeToLive(sessionId.AgentName),
-                ActivityStartToCloseTimeout = _options.ActivityStartToCloseTimeout,
-                ActivityHeartbeatTimeout = _options.ActivityHeartbeatTimeout
+                TaskQueue = taskQueue,
+                TimeToLive = options.GetTimeToLive(sessionId.AgentName),
+                ActivityStartToCloseTimeout = options.ActivityStartToCloseTimeout,
+                ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout
             }),
             workflowOptions);
 
-        // Use an unpinned handle so signals follow the continue-as-new chain.
-        var handle = _client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
+        var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
         await handle.SignalAsync<AgentWorkflow>(wf => wf.RunAgentFireAndForgetAsync(request));
+    }
+
+    // ── GAP 2: Routing ──────────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<AgentResponse> RouteAsync(
+        string sessionKey,
+        RunRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionKey);
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (router is null)
+        {
+            throw new InvalidOperationException(
+                "No IAgentRouter is configured. Call SetRouterAgent() on TemporalAgentsOptions to enable LLM routing.");
+        }
+
+        var descriptors = options.GetAgentDescriptors();
+        if (descriptors.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "No agent descriptors are registered. Call AddAgentDescriptor() on TemporalAgentsOptions for each routable agent.");
+        }
+
+        var chosenAgentName = await router
+            .RouteAsync(request.Messages, descriptors, cancellationToken)
+            .ConfigureAwait(false);
+
+        var routedSessionId = new TemporalAgentSessionId(chosenAgentName, sessionKey);
+
+        Logs.LogClientRouting(_logger, chosenAgentName, routedSessionId.WorkflowId);
+
+        return await RunAgentAsync(routedSessionId, request, cancellationToken).ConfigureAwait(false);
+    }
+
+    // ── GAP 3: Human-in-the-Loop ────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<ApprovalRequest?> GetPendingApprovalAsync(
+        TemporalAgentSessionId sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
+        return await handle.QueryAsync<AgentWorkflow, ApprovalRequest?>(
+            wf => wf.GetPendingApproval());
+    }
+
+    /// <inheritdoc/>
+    public async Task<ApprovalTicket> SubmitApprovalAsync(
+        TemporalAgentSessionId sessionId,
+        ApprovalDecision decision,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+
+        var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
+        return await handle.ExecuteUpdateAsync<AgentWorkflow, ApprovalTicket>(
+            wf => wf.SubmitApprovalAsync(decision));
     }
 }

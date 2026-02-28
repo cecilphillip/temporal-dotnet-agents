@@ -28,16 +28,20 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning);
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
-if (apiBaseUrl is null) throw new ArgumentNullException(nameof(apiBaseUrl));
+if (string.IsNullOrEmpty(apiBaseUrl))
+    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
+
+if (string.IsNullOrEmpty(apiKey))
+    throw new InvalidOperationException("OPENAI_API_KEY is not configured in appsettings.json.");
 
 var endpoint = new Uri(apiBaseUrl);
 var openAiOptions = new OpenAIClientOptions()
 {
     Endpoint = endpoint
 };
-var model = "openai/gpt-5";
+var model = "gpt-4o-mini";
 
-ApiKeyCredential credential = new(apiKey!);
+ApiKeyCredential credential = new(apiKey);
 OpenAIClient openAiClient = new(credential, openAiOptions);
 
 static string GetCurrentWeather() => Random.Shared.NextDouble() > 0.5 ? "It's sunny" : "It's raining";
@@ -73,4 +77,5 @@ builder.Services.ConfigureTemporalAgents(
 Console.WriteLine("Agent worker started. Listening on task queue 'agents'...");
 Console.WriteLine("Start the Client in another terminal, then press Ctrl+C here to stop.\n");
 
-await builder.Build().RunAsync(); // blocks until shutdown signal
+var host = builder.Build();
+await host.RunAsync(); // blocks until shutdown signal

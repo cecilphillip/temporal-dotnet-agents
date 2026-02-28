@@ -1,7 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using System.Text.Json;
-using Temporalio.Extensions.Agents;
 using Xunit;
 
 namespace Temporalio.Extensions.Agents.Tests;

@@ -1,10 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Moq;
-using Temporalio.Extensions.Agents;
-using Temporalio.Extensions.Agents.Tests.Helpers;
 using Xunit;
 
 namespace Temporalio.Extensions.Agents.Tests;

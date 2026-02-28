@@ -1,5 +1,3 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using Microsoft.Agents.AI;
 
 namespace Temporalio.Extensions.Agents;
@@ -15,6 +13,11 @@ public sealed class TemporalAgentsOptions
 
     private readonly Dictionary<string, TimeSpan?> _agentTimeToLive =
         new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, string> _agentDescriptors =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private AIAgent? _routerAgent;
 
     internal TemporalAgentsOptions()
     {
@@ -122,6 +125,68 @@ public sealed class TemporalAgentsOptions
         return this;
     }
 
+    // ── Async factory overload (GAP 7: MCP convenience) ──────────────────────
+
+    /// <summary>
+    /// Adds an agent using an <c>async</c> factory.
+    /// The factory is invoked synchronously (blocking) during worker startup, not on hot paths.
+    /// </summary>
+    /// <remarks>
+    /// Use this overload when agent setup requires async work, such as connecting to an MCP
+    /// server and listing its tools:
+    /// <code>
+    /// opts.AddAIAgentFactory("MyAgent", async sp =>
+    /// {
+    ///     // McpClientTool extends AIFunction (MEAI-native) — no adapter needed.
+    ///     var mcpClient = await McpClientFactory.CreateAsync(transport);
+    ///     var mcpTools  = await mcpClient.ListToolsAsync();
+    ///     return chatClient.AsAIAgent("MyAgent", tools: [.. staticTools, .. mcpTools]);
+    /// });
+    /// </code>
+    /// </remarks>
+    public TemporalAgentsOptions AddAIAgentFactory(
+        string name,
+        Func<IServiceProvider, Task<AIAgent>> asyncFactory,
+        TimeSpan? timeToLive = null)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(asyncFactory);
+
+        // Resolve at worker startup (blocking is safe here — DI container is being built).
+        return AddAIAgentFactory(name, sp => asyncFactory(sp).GetAwaiter().GetResult(), timeToLive);
+    }
+
+    // ── Routing support (GAP 2) ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Registers a human-readable description for the named agent, used by
+    /// <see cref="IAgentRouter"/> to build routing prompts.
+    /// Multiple agents should each have a descriptor for routing to work correctly.
+    /// </summary>
+    public TemporalAgentsOptions AddAgentDescriptor(string name, string description)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(description);
+        _agentDescriptors[name] = description;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the <see cref="AIAgent"/> used by <see cref="LlmAgentRouter"/> to classify
+    /// incoming messages. When set, <see cref="LlmAgentRouter"/> is automatically registered
+    /// in the DI container by <c>AddTemporalAgents()</c>.
+    /// </summary>
+    /// <remarks>
+    /// The router agent should be a lightweight chat agent whose system prompt instructs it
+    /// to respond with only the target agent name. Its output is consumed programmatically.
+    /// </remarks>
+    public TemporalAgentsOptions SetRouterAgent(AIAgent agent)
+    {
+        ArgumentNullException.ThrowIfNull(agent);
+        _routerAgent = agent;
+        return this;
+    }
+
     /// <summary>Gets all registered agent factories.</summary>
     internal IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>> GetAgentFactories() =>
         _agentFactories.AsReadOnly();
@@ -129,4 +194,13 @@ public sealed class TemporalAgentsOptions
     /// <summary>Gets the TTL for a specific agent, falling back to <see cref="DefaultTimeToLive"/>.</summary>
     internal TimeSpan? GetTimeToLive(string agentName) =>
         _agentTimeToLive.TryGetValue(agentName, out TimeSpan? ttl) ? ttl : DefaultTimeToLive;
+
+    /// <summary>Gets all registered agent descriptors for use by <see cref="IAgentRouter"/>.</summary>
+    internal IReadOnlyList<AgentDescriptor> GetAgentDescriptors() =>
+        _agentDescriptors
+            .Select(kv => new AgentDescriptor(kv.Key, kv.Value))
+            .ToList();
+
+    /// <summary>Gets the router agent, or <see langword="null"/> if not configured.</summary>
+    internal AIAgent? GetRouterAgent() => _routerAgent;
 }

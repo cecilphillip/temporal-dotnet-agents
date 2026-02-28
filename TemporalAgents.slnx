@@ -12,5 +12,8 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/BasicAgent/BasicAgent.csproj" />
+    <Project Path="samples/WorkflowOrchestration/WorkflowOrchestration.csproj" />
+    <Project Path="samples/EvaluatorOptimizer/EvaluatorOptimizer.csproj" />
+    <Project Path="samples/MultiAgentRouting/MultiAgentRouting.csproj" />
   </Folder>
 </Solution>

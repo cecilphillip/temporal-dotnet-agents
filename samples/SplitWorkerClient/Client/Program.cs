@@ -11,8 +11,6 @@
 //
 // Run:  dotnet run --project samples/SplitWorkerClient/Client/Client.csproj
 
-using Microsoft.Agents.AI;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Temporalio.Extensions.Agents;
@@ -81,5 +79,6 @@ var r4 = await proxy.RunAsync("Summarize what we discussed.", resumedSession);
 Console.WriteLine($"User : Summarize what we discussed.");
 Console.WriteLine($"Agent: {r4.Text}\n");
 
-await host.StopAsync();
+// TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException on shutdown.
+try { await host.StopAsync(); } catch (OperationCanceledException) { }
 Console.WriteLine("Done.");

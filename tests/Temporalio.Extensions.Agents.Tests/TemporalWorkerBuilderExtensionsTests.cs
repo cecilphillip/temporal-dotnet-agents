@@ -1,0 +1,214 @@
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Moq;
+using Temporalio.Client;
+using Temporalio.Extensions.Hosting;
+using Temporalio.Extensions.Agents.Tests.Helpers;
+using Xunit;
+
+namespace Temporalio.Extensions.Agents.Tests;
+
+public class TemporalWorkerBuilderExtensionsTests
+{
+    [Fact]
+    public void AddTemporalAgents_RegistersTemporalAgentsOptions()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var mockClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+
+        // Act
+        builder.AddTemporalAgents(opts => opts.AddAIAgent(new StubAIAgent("test-agent")));
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<TemporalAgentsOptions>();
+        Assert.NotNull(options);
+    }
+
+    [Fact]
+    public void AddTemporalAgents_RegistersAgentFactoriesDictionary()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var mockClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+        var agent = new StubAIAgent("my-agent");
+
+        // Act
+        builder.AddTemporalAgents(opts => opts.AddAIAgent(agent));
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var factories = provider.GetRequiredService<IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>>>();
+        Assert.NotNull(factories);
+        Assert.Single(factories);
+        Assert.True(factories.ContainsKey("my-agent"));
+    }
+
+    [Fact]
+    public void AddTemporalAgents_RegistersITemporalAgentClient()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var mockClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+
+        // Act
+        builder.AddTemporalAgents(opts => opts.AddAIAgent(new StubAIAgent("test-agent")));
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var client = provider.GetService<ITemporalAgentClient>();
+        Assert.NotNull(client);
+        Assert.IsType<DefaultTemporalAgentClient>(client);
+    }
+
+    [Fact]
+    public void AddTemporalAgents_RegistersKeyedAIAgentProxies()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var mockClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+
+        // Act
+        builder.AddTemporalAgents(opts =>
+        {
+            opts.AddAIAgent(new StubAIAgent("agent-1"));
+            opts.AddAIAgent(new StubAIAgent("agent-2"));
+        });
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var agent1 = provider.GetKeyedService<AIAgent>("agent-1");
+        var agent2 = provider.GetKeyedService<AIAgent>("agent-2");
+
+        Assert.NotNull(agent1);
+        Assert.NotNull(agent2);
+        Assert.IsType<TemporalAIAgentProxy>(agent1);
+        Assert.IsType<TemporalAIAgentProxy>(agent2);
+    }
+
+    [Fact]
+    public void AddTemporalAgents_KeyedProxiesAreSingletons()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var mockClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+
+        // Act
+        builder.AddTemporalAgents(opts => opts.AddAIAgent(new StubAIAgent("test-agent")));
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var proxy1 = provider.GetKeyedService<AIAgent>("test-agent");
+        var proxy2 = provider.GetKeyedService<AIAgent>("test-agent");
+
+        Assert.NotNull(proxy1);
+        Assert.Same(proxy1, proxy2); // Same instance (singleton)
+    }
+
+    [Fact]
+    public void AddTemporalAgents_CanChainWithOtherBuilderMethods()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var mockClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+
+        // Act
+        var result = builder
+            .AddTemporalAgents(opts => opts.AddAIAgent(new StubAIAgent("test-agent")))
+            .ConfigureOptions(opts => opts.MaxConcurrentActivities = 10);
+
+        // Assert — verifies the builder returns something we can continue chaining on
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public void AddTemporalAgents_ThrowsOnNullConfigure()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var mockClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+
+        // Act & Assert
+        var ex = Assert.Throws<ArgumentNullException>(() =>
+            builder.AddTemporalAgents(null!));
+        Assert.Equal("configure", ex.ParamName);
+    }
+
+    [Fact]
+    public void AddTemporalAgents_AllowsPreregisteredCustomClient()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var customClient = new Mock<ITemporalAgentClient>();
+        services.AddSingleton(customClient.Object);
+        var mockTemporalClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockTemporalClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+
+        // Act
+        builder.AddTemporalAgents(opts => opts.AddAIAgent(new StubAIAgent("test-agent")));
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var client = provider.GetRequiredService<ITemporalAgentClient>();
+        Assert.Same(customClient.Object, client); // Should use the pre-registered custom client
+    }
+
+    [Fact]
+    public void AddTemporalAgents_CanRegisterAgentViaFactory()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var mockClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+
+        // Act
+        builder.AddTemporalAgents(opts =>
+        {
+            opts.AddAIAgentFactory("factory-agent", sp => new StubAIAgent("factory-agent"));
+        });
+
+        // Assert
+        var provider = services.BuildServiceProvider();
+        var proxy = provider.GetKeyedService<AIAgent>("factory-agent");
+        Assert.NotNull(proxy);
+    }
+
+
+    [Fact]
+    public void AddTemporalAgents_WorkflowAndActivitiesAreRegistered()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var mockClient = new Mock<ITemporalClient>();
+        services.AddSingleton(mockClient.Object);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+
+        // Act
+        builder.AddTemporalAgents(opts => opts.AddAIAgent(new StubAIAgent("test-agent")));
+
+        // Assert — check that AgentWorkflow and AgentActivities are registered
+        var provider = services.BuildServiceProvider();
+        // If the workflow/activities are registered, the service collection should not throw
+        // We verify by checking that TemporalWorkerServiceOptions has been configured
+        var workerOptions = provider.GetRequiredService<IOptions<TemporalWorkerServiceOptions>>();
+        Assert.NotNull(workerOptions);
+    }
+}

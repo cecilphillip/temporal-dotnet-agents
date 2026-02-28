@@ -1,7 +1,5 @@
-// Copyright (c) Microsoft. All rights reserved.
-
+using System.Diagnostics;
 using Microsoft.Agents.AI;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Temporalio.Activities;
@@ -32,10 +30,10 @@ internal class AgentActivities
     }
 
     /// <summary>
-    /// Executes the agent with the given input and returns the response.
+    /// Executes the agent with the given input and returns the response plus updated StateBag.
     /// </summary>
     [Activity("Temporalio.Extensions.Agents.ExecuteAgent")]
-    public async Task<AgentResponse> ExecuteAgentAsync(ExecuteAgentInput input)
+    public async Task<ExecuteAgentResult> ExecuteAgentAsync(ExecuteAgentInput input)
     {
         var ctx = ActivityExecutionContext.Current;
         var ct = ctx.CancellationToken;
@@ -47,11 +45,13 @@ internal class AgentActivities
 
         var realAgent = factory(_services);
         var sessionId = TemporalAgentSessionId.Parse(ctx.Info.WorkflowId!);
-        var session = new TemporalAgentSession(sessionId);
+
+        // GAP 6: restore StateBag from the previous turn so providers skip re-initialization.
+        var session = TemporalAgentSession.FromStateBag(sessionId, input.SerializedStateBag);
+
         var wrapper = new AgentWorkflowWrapper(realAgent, input.Request, session, _services);
 
         // Rebuild the full conversation from the serialized history.
-        // The history already includes the new request entry, so all messages are present.
         var allMessages = input.ConversationHistory
             .SelectMany(e => e.Messages)
             .Select(m => m.ToChatMessage())
@@ -60,10 +60,18 @@ internal class AgentActivities
         Logs.LogActivityHistoryRebuilt(_logger, input.AgentName, sessionId.WorkflowId,
             input.ConversationHistory.Count, allMessages.Count);
 
-        // Set context for tools to use
         var agentSession = await wrapper.CreateSessionAsync(ct).ConfigureAwait(false);
         var temporalContext = new TemporalAgentContext(ctx.TemporalClient, session, _services);
         TemporalAgentContext.SetCurrent(temporalContext);
+
+        // GAP 4: emit an OpenTelemetry span for this agent turn.
+        using var span = TemporalAgentTelemetry.ActivitySource.StartActivity(
+            TemporalAgentTelemetry.AgentTurnSpanName,
+            ActivityKind.Internal);
+
+        span?.SetTag(TemporalAgentTelemetry.AgentNameAttribute, input.AgentName);
+        span?.SetTag(TemporalAgentTelemetry.AgentSessionIdAttribute, sessionId.WorkflowId);
+        span?.SetTag(TemporalAgentTelemetry.AgentCorrelationIdAttribute, input.Request.CorrelationId);
 
         try
         {
@@ -89,7 +97,6 @@ internal class AgentActivities
                     await foreach (var update in responseStream)
                     {
                         updates.Add(update);
-                        // Heartbeat to keep the activity alive during long streaming responses
                         ctx.Heartbeat(update.Text);
                         yield return update;
                     }
@@ -99,13 +106,22 @@ internal class AgentActivities
                 response = updates.ToAgentResponse();
             }
 
+            // GAP 4: tag token usage onto the span.
+            span?.SetTag(TemporalAgentTelemetry.InputTokensAttribute, response.Usage?.InputTokenCount);
+            span?.SetTag(TemporalAgentTelemetry.OutputTokensAttribute, response.Usage?.OutputTokenCount);
+            span?.SetTag(TemporalAgentTelemetry.TotalTokensAttribute, response.Usage?.TotalTokenCount);
+
             Logs.LogAgentActivityCompleted(_logger, input.AgentName, sessionId.WorkflowId,
                 response.Usage?.InputTokenCount, response.Usage?.OutputTokenCount, response.Usage?.TotalTokenCount);
 
-            return response;
+            // GAP 6: capture the updated StateBag so the workflow can persist it.
+            var serializedStateBag = session.SerializeStateBag();
+
+            return new ExecuteAgentResult(response, serializedStateBag);
         }
         catch (Exception ex)
         {
+            span?.SetStatus(ActivityStatusCode.Error, ex.Message);
             Logs.LogAgentActivityFailed(_logger, input.AgentName, sessionId.WorkflowId, ex);
             throw;
         }

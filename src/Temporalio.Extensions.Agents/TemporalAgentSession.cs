@@ -1,5 +1,3 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Agents.AI;
@@ -52,6 +50,37 @@ public sealed class TemporalAgentSession : AgentSession
             : new AgentSessionStateBag();
 
         return new TemporalAgentSession(sessionId, stateBag);
+    }
+
+    /// <summary>
+    /// Creates a <see cref="TemporalAgentSession"/> with the given <paramref name="sessionId"/>
+    /// and optionally restores a <see cref="AgentSessionStateBag"/> from a previously
+    /// serialized value (see <see cref="SerializeStateBag"/>).
+    /// </summary>
+    internal static TemporalAgentSession FromStateBag(
+        TemporalAgentSessionId sessionId,
+        JsonElement? serializedStateBag)
+    {
+        if (serializedStateBag is { ValueKind: not JsonValueKind.Undefined and not JsonValueKind.Null } bagEl)
+        {
+            return new TemporalAgentSession(sessionId, AgentSessionStateBag.Deserialize(bagEl));
+        }
+
+        return new TemporalAgentSession(sessionId);
+    }
+
+    /// <summary>
+    /// Serializes the <see cref="AgentSessionStateBag"/> portion of this session,
+    /// returning <see langword="null"/> when the bag is empty.
+    /// </summary>
+    internal JsonElement? SerializeStateBag()
+    {
+        if (this.StateBag.Count == 0)
+        {
+            return null;
+        }
+
+        return this.StateBag.Serialize();
     }
 
     /// <inheritdoc/>

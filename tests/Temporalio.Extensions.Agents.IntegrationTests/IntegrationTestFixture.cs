@@ -1,5 +1,3 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;

@@ -1,5 +1,3 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using Microsoft.Extensions.Logging;
 
 namespace Temporalio.Extensions.Agents;
@@ -101,4 +99,23 @@ internal static partial class Logs
         Message = "[{AgentName}] Dispatching activity from orchestrating workflow (Turn: {TurnCount})")]
     public static partial void LogInWorkflowAgentDispatching(
         this ILogger logger, string agentName, int turnCount);
+
+    // ── Routing logs (GAP 2) ──────────────────────────────────────────────────
+
+    [LoggerMessage(EventId = 17, Level = LogLevel.Debug,
+        Message = "[{AgentName}/{WorkflowId}] Routing selected agent; dispatching")]
+    public static partial void LogClientRouting(
+        this ILogger logger, string agentName, string workflowId);
+
+    // ── HITL logs (GAP 3) ─────────────────────────────────────────────────────
+
+    [LoggerMessage(EventId = 18, Level = LogLevel.Information,
+        Message = "[{AgentName}/{WorkflowId}] Approval requested (RequestId: {RequestId}, Action: {Action})")]
+    public static partial void LogWorkflowApprovalRequested(
+        this ILogger logger, string agentName, string workflowId, string requestId, string action);
+
+    [LoggerMessage(EventId = 19, Level = LogLevel.Information,
+        Message = "[{AgentName}/{WorkflowId}] Approval resolved (RequestId: {RequestId}, Approved: {Approved})")]
+    public static partial void LogWorkflowApprovalResolved(
+        this ILogger logger, string agentName, string workflowId, string requestId, bool approved);
 }

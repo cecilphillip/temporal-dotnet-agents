@@ -1,5 +1,3 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Agents.AI;
@@ -17,7 +15,7 @@ internal sealed class StubAIAgent(string? name, AgentResponse? fixedResponse = n
     public override string? Name { get; } = name;
 
     protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException();
+        new(new TemporalAgentSession(TemporalAgentSessionId.WithRandomKey(Name ?? "stub")));
 
     protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
         AgentSession session,

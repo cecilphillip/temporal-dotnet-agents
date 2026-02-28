@@ -1,9 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
-using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Agents.State;
 using Xunit;
 

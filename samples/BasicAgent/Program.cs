@@ -9,10 +9,8 @@
 // Run:  dotnet run --project samples/BasicAgent/BasicAgent.csproj
 
 using System.ClientModel;
-using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenAI;
@@ -21,7 +19,7 @@ using Temporalio.Extensions.Agents;
 
 // ── Step 1: Build the application host ───────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-builder.Logging.SetMinimumLevel(LogLevel.Warning);   // suppress Temporal SDK noise in the sample
+builder.Logging.SetMinimumLevel(LogLevel.Warning); // suppress Temporal SDK noise in the sample
 
 // ── Step 2: Provide an IChatClient ───────────────────────────────────────────
 // This sample uses a local stub that echoes back every message so you can run it
@@ -29,19 +27,23 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning);   // suppress Temporal SDK no
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
-if (apiBaseUrl is null) throw new ArgumentNullException(nameof(apiBaseUrl));
+if (string.IsNullOrEmpty(apiBaseUrl))
+    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
+
+if (string.IsNullOrEmpty(apiKey))
+    throw new InvalidOperationException("OPENAI_API_KEY is not configured in appsettings.json.");
 
 var endpoint = new Uri(apiBaseUrl);
 var openAiOptions = new OpenAIClientOptions()
 {
     Endpoint = endpoint
 };
-var model = "gpt-5"; // "openai/gpt-5";
+var model = "gpt-4o-mini";
 
-ApiKeyCredential credential = new(apiKey!);
+ApiKeyCredential credential = new(apiKey);
 OpenAIClient openAiClient = new(credential, openAiOptions);
 
- static string GetCurrentWeather() => Random.Shared.NextDouble() > 0.5 ? "It's sunny" : "It's raining";
+static string GetCurrentWeather() => Random.Shared.NextDouble() > 0.5 ? "It's sunny" : "It's raining";
 var weatherTool = AIFunctionFactory.Create(GetCurrentWeather, "get_weather", "Returns the current weather conditions.");
 
 // ── Step 3: Create the agent ──────────────────────────────────────────────────
@@ -64,10 +66,7 @@ var agent = openAiClient
 //   • ITemporalAgentClient — sends messages via Temporal Update (no polling required)
 //   • Keyed AIAgent proxy — the object your code actually calls
 builder.Services.ConfigureTemporalAgents(
-    configure: options =>
-    {
-        options.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1));
-    },
+    configure: options => { options.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1)); },
     taskQueue: "agents",
     targetHost: "localhost:7233",
     @namespace: "default");
@@ -98,5 +97,15 @@ Console.WriteLine($"User : What is its population?");
 Console.WriteLine($"Agent: {r2.Text}\n");
 
 // ── Step 8: Graceful shutdown ─────────────────────────────────────────────────
-await host.StopAsync();
+// TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException when its
+// stoppingToken is cancelled — that exception propagates through BackgroundService and
+// may surface here depending on the .NET hosting version. Swallow it: it is expected.
+try
+{
+    await host.StopAsync();
+}
+catch (OperationCanceledException)
+{
+}
+
 Console.WriteLine("Done.");

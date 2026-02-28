@@ -1,5 +1,3 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using Microsoft.Agents.AI;
 
 namespace Temporalio.Extensions.Agents;

@@ -1,8 +1,5 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
-using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Agents.Tests.Helpers;
 using Xunit;
 

@@ -1,11 +1,7 @@
-// Copyright (c) Microsoft. All rights reserved.
-
-using Microsoft.Agents.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Temporalio.Client;
 using Temporalio.Exceptions;
-using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Agents.IntegrationTests.Helpers;
 using Temporalio.Extensions.Agents.State;
 using Temporalio.Testing;

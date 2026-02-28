@@ -1,5 +1,3 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -44,48 +42,18 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(configure);
         ArgumentException.ThrowIfNullOrWhiteSpace(taskQueue);
 
-        var options = new TemporalAgentsOptions();
-        configure(options);
-
-        var agents = options.GetAgentFactories();
-
-        // The agent factory dictionary is used by AgentActivities to resolve real agents.
-        services.AddSingleton<IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>>>(agents);
-
-        // Options needed by DefaultTemporalAgentClient for TTL lookup.
-        services.AddSingleton(options);
-
-        // Register the client that uses Update (not Signal+poll).
-        services.AddSingleton<ITemporalAgentClient>(sp =>
-            new DefaultTemporalAgentClient(
-                sp.GetRequiredService<ITemporalClient>(),
-                options,
-                taskQueue,
-                sp.GetService<ILogger<DefaultTemporalAgentClient>>()));
-
-        // Register each agent as a keyed proxy singleton for external callers.
-        foreach (var (name, _) in agents)
-        {
-            services.AddKeyedSingleton<AIAgent>(name, (sp, _) =>
-                new TemporalAIAgentProxy(
-                    name,
-                    sp.GetRequiredService<ITemporalAgentClient>(),
-                    sp.GetService<ILogger<TemporalAIAgentProxy>>()));
-        }
-
         // Optionally register an ITemporalClient if connection info was provided.
         if (targetHost is not null)
         {
             services.AddTemporalClient(targetHost, @namespace ?? "default");
         }
 
-        // Register the hosted Temporal worker with AgentWorkflow + AgentActivities.
-        var workerOptionsBuilder = services
+        // Register the hosted Temporal worker with agent infrastructure via the new extension.
+        var workerBuilder_ = services
             .AddHostedTemporalWorker(taskQueue)
-            .AddWorkflow<AgentWorkflow>()
-            .AddSingletonActivities<AgentActivities>();
+            .AddTemporalAgents(configure);
 
-        workerBuilder?.Invoke(workerOptionsBuilder);
+        workerBuilder?.Invoke(workerBuilder_);
 
         return services;
     }

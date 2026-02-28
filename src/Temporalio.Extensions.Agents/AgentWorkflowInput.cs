@@ -1,5 +1,5 @@
-// Copyright (c) Microsoft. All rights reserved.
-
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Temporalio.Extensions.Agents.State;
 
 namespace Temporalio.Extensions.Agents;
@@ -22,6 +22,14 @@ internal sealed class AgentWorkflowInput
     /// Gets conversation history carried forward from a previous run (for continue-as-new scenarios).
     /// </summary>
     public IReadOnlyList<TemporalAgentStateEntry> CarriedHistory { get; init; } = [];
+
+    /// <summary>
+    /// Gets the serialized <see cref="AgentSessionStateBag"/> carried forward from a
+    /// previous run (for continue-as-new scenarios). Allows AIContextProvider state
+    /// (e.g. Mem0 thread IDs) to survive workflow continuation.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? CarriedStateBag { get; init; }
 
     /// <summary>
     /// Gets the <c>StartToCloseTimeout</c> for agent activity invocations.

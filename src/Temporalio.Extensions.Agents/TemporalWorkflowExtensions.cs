@@ -1,6 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using System.ComponentModel;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.Agents;
@@ -31,5 +31,40 @@ public static class TemporalWorkflowExtensions
     {
         ArgumentException.ThrowIfNullOrEmpty(agentName);
         return TemporalAgentSessionId.WithDeterministicKey(agentName, Workflow.NewGuid());
+    }
+
+    /// <summary>
+    /// Dispatches multiple agent calls in parallel and returns all responses in input order.
+    /// Uses <see cref="Workflow.WhenAllAsync{TResult}(IEnumerable{Task{TResult}})"/> internally,
+    /// which is the workflow-safe equivalent of <c>Task.WhenAll</c>.
+    /// </summary>
+    /// <param name="requests">
+    /// Sequence of <c>(Agent, Messages, Session)</c> tuples to run concurrently.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// An <see cref="IReadOnlyList{AgentResponse}"/> in the same order as <paramref name="requests"/>.
+    /// </returns>
+    /// <example>
+    /// <code>
+    /// var results = await ExecuteAgentsInParallelAsync(new[]
+    /// {
+    ///     (GetAgent("Researcher"),  researchMessages,  researchSession),
+    ///     (GetAgent("Summarizer"),  summaryMessages,   summarySession),
+    ///     (GetAgent("Critic"),      criticMessages,    criticSession),
+    /// });
+    /// </code>
+    /// </example>
+    public static async Task<IReadOnlyList<AgentResponse>> ExecuteAgentsInParallelAsync(
+        IEnumerable<(TemporalAIAgent Agent, IList<ChatMessage> Messages, AgentSession Session)> requests,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+
+        var tasks = requests
+            .Select(r => r.Agent.RunAsync(r.Messages, r.Session, null, cancellationToken))
+            .ToList();
+
+        return await Workflow.WhenAllAsync(tasks);
     }
 }

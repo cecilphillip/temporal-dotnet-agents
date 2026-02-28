@@ -1,9 +1,6 @@
-// Copyright (c) Microsoft. All rights reserved.
-
 using System.Linq.Expressions;
 using Microsoft.Extensions.DependencyInjection;
 using Temporalio.Client;
-using Temporalio.Client.Interceptors;
 using Temporalio.Exceptions;
 
 namespace Temporalio.Extensions.Agents;
@@ -91,5 +88,35 @@ public sealed class TemporalAgentContext
         }
 
         return _services.GetService(serviceType);
+    }
+
+    // ── GAP 3: Human-in-the-Loop ────────────────────────────────────────────
+
+    /// <summary>
+    /// Sends an approval request to the backing <see cref="AgentWorkflow"/> and blocks
+    /// until a human submits a decision via <see cref="ITemporalAgentClient.SubmitApprovalAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Call this from inside a tool implementation when the action requires human review:
+    /// <code>
+    /// var ticket = await TemporalAgentContext.Current.RequestApprovalAsync(
+    ///     new ApprovalRequest { Action = "Send email to all users", Details = "..." });
+    /// if (!ticket.Approved) throw new OperationCanceledException("Action rejected by reviewer.");
+    /// </code>
+    /// <para>
+    /// <b>Timeout note:</b> the calling activity blocks for the duration of human review.
+    /// Ensure <c>ActivityStartToCloseTimeout</c> is set to exceed your expected review time
+    /// (e.g. <c>TimeSpan.FromHours(24)</c>) on the agent's <see cref="TemporalAgentsOptions"/>.
+    /// </para>
+    /// </remarks>
+    public async Task<ApprovalTicket> RequestApprovalAsync(
+        ApprovalRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var handle = _client.GetWorkflowHandle<AgentWorkflow>(CurrentSession.SessionId.WorkflowId);
+        return await handle.ExecuteUpdateAsync<AgentWorkflow, ApprovalTicket>(
+            wf => wf.RequestApprovalAsync(request));
     }
 }
