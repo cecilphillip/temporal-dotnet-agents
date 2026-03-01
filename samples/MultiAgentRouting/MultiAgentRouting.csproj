@@ -5,6 +5,7 @@
     <AssemblyName>MultiAgentRouting</AssemblyName>
     <!-- Samples don't need strict warning enforcement -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>

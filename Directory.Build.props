@@ -12,6 +12,7 @@
     <RepositoryUrl>https://github.com/cecilphillip/TemporalAgents</RepositoryUrl>
     <PackageProjectUrl>$(RepositoryUrl)</PackageProjectUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
+     <PackageLicenseExpression>MIT</PackageLicenseExpression>
 
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <IncludeSymbols>true</IncludeSymbols>
