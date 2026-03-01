@@ -12,6 +12,7 @@ on:
         options:
           - GitHub
           - NuGet
+          - None
 
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
