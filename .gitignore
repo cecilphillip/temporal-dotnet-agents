@@ -381,8 +381,6 @@ appsettings.local.json
 appsettings.Development.json
 *.local.json
 
-# dotnet tool manifest
-.config/dotnet-tools.json
 
 # Coverlet coverage results
 coverage*.json
