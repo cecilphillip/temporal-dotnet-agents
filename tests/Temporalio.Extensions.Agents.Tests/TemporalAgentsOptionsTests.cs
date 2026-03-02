@@ -138,4 +138,65 @@ public class TemporalAgentsOptionsTests
         Assert.True(factories.ContainsKey("A"));
         Assert.True(factories.ContainsKey("B"));
     }
+
+    // ─── AddAIAgentFactory null guards ────────────────────────────────────────
+
+    [Fact]
+    public void AddAIAgentFactory_NullName_ThrowsArgumentNullException()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Throws<ArgumentNullException>(() =>
+            options.AddAIAgentFactory(null!, _ => new StubAIAgent("X")));
+    }
+
+    [Fact]
+    public void AddAIAgentFactory_NullFactory_ThrowsArgumentNullException()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Throws<ArgumentNullException>(() =>
+            options.AddAIAgentFactory("Agent", (Func<IServiceProvider, Microsoft.Agents.AI.AIAgent>)null!));
+    }
+
+    [Fact]
+    public void AddAIAgentFactory_AsyncOverload_NullName_ThrowsArgumentNullException()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Throws<ArgumentNullException>(() =>
+            options.AddAIAgentFactory(null!, async sp => { await Task.Delay(0); return new StubAIAgent("X"); }));
+    }
+
+    [Fact]
+    public void AddAIAgentFactory_AsyncOverload_NullFactory_ThrowsArgumentNullException()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Throws<ArgumentNullException>(() =>
+            options.AddAIAgentFactory("Agent", (Func<IServiceProvider, Task<Microsoft.Agents.AI.AIAgent>>)null!));
+    }
+
+    // ─── AddAIAgents null guard ───────────────────────────────────────────────
+
+    [Fact]
+    public void AddAIAgents_NullArray_ThrowsArgumentNullException()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Throws<ArgumentNullException>(() => options.AddAIAgents(null!));
+    }
+
+    // ─── AddAgentDescriptor null guards ───────────────────────────────────────
+
+    [Fact]
+    public void AddAgentDescriptor_NullName_ThrowsArgumentException()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Throws<ArgumentNullException>(() =>
+            options.AddAgentDescriptor(null!, "Some description"));
+    }
+
+    [Fact]
+    public void AddAgentDescriptor_EmptyDescription_ThrowsArgumentException()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Throws<ArgumentException>(() =>
+            options.AddAgentDescriptor("Agent", ""));
+    }
 }

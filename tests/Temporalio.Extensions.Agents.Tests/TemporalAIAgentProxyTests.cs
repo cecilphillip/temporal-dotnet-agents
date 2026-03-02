@@ -1,6 +1,6 @@
+using FakeItEasy;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
-using Moq;
 using Xunit;
 
 namespace Temporalio.Extensions.Agents.Tests;
@@ -51,29 +51,28 @@ public class TemporalAIAgentProxyTests
     [Fact]
     public async Task RunAsync_DelegatesToRunAgentAsync()
     {
-        var mockClient = new Mock<ITemporalAgentClient>();
-        mockClient
-            .Setup(c => c.RunAgentAsync(
-                It.IsAny<TemporalAgentSessionId>(),
-                It.IsAny<RunRequest>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new AgentResponse
+        var fakeClient = A.Fake<ITemporalAgentClient>();
+        A.CallTo(() => fakeClient.RunAgentAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
+            .Returns(Task.FromResult(new AgentResponse
             {
                 Messages = [new ChatMessage(ChatRole.Assistant, "response")],
                 CreatedAt = DateTimeOffset.UtcNow
-            });
+            }));
 
-        var proxy = new TemporalAIAgentProxy("TestAgent", mockClient.Object);
+        var proxy = new TemporalAIAgentProxy("TestAgent", fakeClient);
         var session = (TemporalAgentSession)await proxy.CreateSessionAsync();
 
         var response = await proxy.RunAsync("Hello", session);
 
-        mockClient.Verify(c => c.RunAgentAsync(
-            It.Is<TemporalAgentSessionId>(id =>
-                id.AgentName.Equals("TestAgent", StringComparison.OrdinalIgnoreCase)),
-            It.IsAny<RunRequest>(),
-            It.IsAny<CancellationToken>()),
-            Times.Once);
+        A.CallTo(() => fakeClient.RunAgentAsync(
+                A<TemporalAgentSessionId>.That.Matches(id =>
+                    id.AgentName.Equals("TestAgent", StringComparison.OrdinalIgnoreCase)),
+                A<RunRequest>._,
+                A<CancellationToken>._))
+            .MustHaveHappenedOnceExactly();
 
         Assert.NotNull(response);
     }
@@ -82,17 +81,15 @@ public class TemporalAIAgentProxyTests
     public async Task RunAsync_MessageContent_PassedInRequest()
     {
         RunRequest? capturedRequest = null;
-        var mockClient = new Mock<ITemporalAgentClient>();
-        mockClient
-            .Setup(c => c.RunAgentAsync(
-                It.IsAny<TemporalAgentSessionId>(),
-                It.IsAny<RunRequest>(),
-                It.IsAny<CancellationToken>()))
-            .Callback<TemporalAgentSessionId, RunRequest, CancellationToken>(
-                (_, r, _) => capturedRequest = r)
-            .ReturnsAsync(new AgentResponse());
+        var fakeClient = A.Fake<ITemporalAgentClient>();
+        A.CallTo(() => fakeClient.RunAgentAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
+            .Invokes((TemporalAgentSessionId _, RunRequest r, CancellationToken _) => capturedRequest = r)
+            .Returns(Task.FromResult(new AgentResponse()));
 
-        var proxy = new TemporalAIAgentProxy("TestAgent", mockClient.Object);
+        var proxy = new TemporalAIAgentProxy("TestAgent", fakeClient);
         var session = (TemporalAgentSession)await proxy.CreateSessionAsync();
 
         await proxy.RunAsync("Hello agent!", session);
@@ -107,47 +104,45 @@ public class TemporalAIAgentProxyTests
     [Fact]
     public async Task RunAsync_WithIsFireAndForget_CallsFireAndForgetMethod()
     {
-        var mockClient = new Mock<ITemporalAgentClient>();
-        mockClient
-            .Setup(c => c.RunAgentFireAndForgetAsync(
-                It.IsAny<TemporalAgentSessionId>(),
-                It.IsAny<RunRequest>(),
-                It.IsAny<CancellationToken>()))
+        var fakeClient = A.Fake<ITemporalAgentClient>();
+        A.CallTo(() => fakeClient.RunAgentFireAndForgetAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
             .Returns(Task.CompletedTask);
 
-        var proxy = new TemporalAIAgentProxy("TestAgent", mockClient.Object);
+        var proxy = new TemporalAIAgentProxy("TestAgent", fakeClient);
         var session = (TemporalAgentSession)await proxy.CreateSessionAsync();
 
         var options = new TemporalAgentRunOptions { IsFireAndForget = true };
         await proxy.RunAsync("Fire!", session, options);
 
         // RunAgentAsync should NOT be called
-        mockClient.Verify(c => c.RunAgentAsync(
-            It.IsAny<TemporalAgentSessionId>(),
-            It.IsAny<RunRequest>(),
-            It.IsAny<CancellationToken>()),
-            Times.Never);
+        A.CallTo(() => fakeClient.RunAgentAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
+            .MustNotHaveHappened();
 
         // RunAgentFireAndForgetAsync SHOULD be called
-        mockClient.Verify(c => c.RunAgentFireAndForgetAsync(
-            It.IsAny<TemporalAgentSessionId>(),
-            It.IsAny<RunRequest>(),
-            It.IsAny<CancellationToken>()),
-            Times.Once);
+        A.CallTo(() => fakeClient.RunAgentFireAndForgetAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
+            .MustHaveHappenedOnceExactly();
     }
 
     [Fact]
     public async Task RunAsync_WithIsFireAndForget_ReturnsEmptyResponse()
     {
-        var mockClient = new Mock<ITemporalAgentClient>();
-        mockClient
-            .Setup(c => c.RunAgentFireAndForgetAsync(
-                It.IsAny<TemporalAgentSessionId>(),
-                It.IsAny<RunRequest>(),
-                It.IsAny<CancellationToken>()))
+        var fakeClient = A.Fake<ITemporalAgentClient>();
+        A.CallTo(() => fakeClient.RunAgentFireAndForgetAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
             .Returns(Task.CompletedTask);
 
-        var proxy = new TemporalAIAgentProxy("TestAgent", mockClient.Object);
+        var proxy = new TemporalAIAgentProxy("TestAgent", fakeClient);
         var session = (TemporalAgentSession)await proxy.CreateSessionAsync();
 
         var options = new TemporalAgentRunOptions { IsFireAndForget = true };
@@ -162,14 +157,13 @@ public class TemporalAIAgentProxyTests
 
     private static TemporalAIAgentProxy CreateProxy(string name)
     {
-        var mockClient = new Mock<ITemporalAgentClient>();
-        mockClient
-            .Setup(c => c.RunAgentAsync(
-                It.IsAny<TemporalAgentSessionId>(),
-                It.IsAny<RunRequest>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new AgentResponse());
+        var fakeClient = A.Fake<ITemporalAgentClient>();
+        A.CallTo(() => fakeClient.RunAgentAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
+            .Returns(Task.FromResult(new AgentResponse()));
 
-        return new TemporalAIAgentProxy(name, mockClient.Object);
+        return new TemporalAIAgentProxy(name, fakeClient);
     }
 }

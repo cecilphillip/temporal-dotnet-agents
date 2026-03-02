@@ -1,6 +1,6 @@
+using FakeItEasy;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Moq;
 using Temporalio.Client;
 using Temporalio.Extensions.Agents.Tests.Helpers;
 using Xunit;
@@ -78,7 +78,7 @@ public class RoutingOptionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddSingleton(new Mock<ITemporalClient>().Object);
+        services.AddSingleton(A.Fake<ITemporalClient>());
         var builder = services.AddHostedTemporalWorker("test-queue");
         var routerAgent = new StubAIAgent("__router__");
 
@@ -102,7 +102,7 @@ public class RoutingOptionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddSingleton(new Mock<ITemporalClient>().Object);
+        services.AddSingleton(A.Fake<ITemporalClient>());
         var builder = services.AddHostedTemporalWorker("test-queue");
 
         // Act

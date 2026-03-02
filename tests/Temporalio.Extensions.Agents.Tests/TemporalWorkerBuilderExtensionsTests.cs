@@ -1,7 +1,7 @@
+using FakeItEasy;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using Moq;
 using Temporalio.Client;
 using Temporalio.Extensions.Hosting;
 using Temporalio.Extensions.Agents.Tests.Helpers;
@@ -16,8 +16,8 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var mockClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockClient.Object);
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
         // Act
@@ -34,8 +34,8 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var mockClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockClient.Object);
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
         var agent = new StubAIAgent("my-agent");
 
@@ -55,8 +55,8 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var mockClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockClient.Object);
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
         // Act
@@ -74,8 +74,8 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var mockClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockClient.Object);
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
         // Act
@@ -101,8 +101,8 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var mockClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockClient.Object);
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
         // Act
@@ -122,8 +122,8 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var mockClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockClient.Object);
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
         // Act
@@ -140,8 +140,8 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var mockClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockClient.Object);
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
         // Act & Assert
@@ -155,10 +155,10 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var customClient = new Mock<ITemporalAgentClient>();
-        services.AddSingleton(customClient.Object);
-        var mockTemporalClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockTemporalClient.Object);
+        var customClient = A.Fake<ITemporalAgentClient>();
+        services.AddSingleton(customClient);
+        var fakeTemporalClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeTemporalClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
         // Act
@@ -167,7 +167,7 @@ public class TemporalWorkerBuilderExtensionsTests
         // Assert
         var provider = services.BuildServiceProvider();
         var client = provider.GetRequiredService<ITemporalAgentClient>();
-        Assert.Same(customClient.Object, client); // Should use the pre-registered custom client
+        Assert.Same(customClient, client); // Should use the pre-registered custom client
     }
 
     [Fact]
@@ -175,8 +175,8 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var mockClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockClient.Object);
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
         // Act
@@ -197,8 +197,8 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
-        var mockClient = new Mock<ITemporalClient>();
-        services.AddSingleton(mockClient.Object);
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
         // Act

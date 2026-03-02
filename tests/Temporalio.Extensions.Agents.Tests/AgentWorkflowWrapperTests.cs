@@ -230,6 +230,50 @@ public class AgentWorkflowWrapperTests
         Assert.Empty(capturing.LastOptions.Tools);
     }
 
+    // ─── ChatClientAgentRunOptions passthrough ────────────────────────────────
+
+    [Fact]
+    public async Task GetRunOptions_ChatClientAgentRunOptionsInput_PreservesExistingChatOptions()
+    {
+        var request = new RunRequest(
+            "test",
+            enableToolCalls: true,
+            enableToolNames: ["toolA"]);
+
+        var existingChatOptions = new ChatOptions
+        {
+            Tools = [CreateTool("toolA"), CreateTool("toolB")]
+        };
+        var inputOptions = new ChatClientAgentRunOptions(existingChatOptions);
+
+        var wrapper = CreateWrapper(request, MakeSession());
+        var runOptions = (ChatClientAgentRunOptions)wrapper.GetRunOptions(inputOptions);
+
+        // The returned options should be the same instance (not replaced)
+        Assert.Same(inputOptions, runOptions);
+
+        // The factory should filter tools from the existing ChatOptions
+        var capturing = new CapturingChatClient();
+        var builtClient = runOptions.ChatClientFactory!(capturing);
+        await builtClient.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], new ChatOptions());
+
+        Assert.NotNull(capturing.LastOptions);
+        Assert.NotNull(capturing.LastOptions.Tools);
+        Assert.Single(capturing.LastOptions.Tools);
+        Assert.Equal("toolA", capturing.LastOptions.Tools[0].Name);
+    }
+
+    // ─── Unsupported run options type ────────────────────────────────────────
+
+    [Fact]
+    public void GetRunOptions_UnsupportedSubclass_ThrowsNotSupportedException()
+    {
+        var wrapper = CreateWrapper(new RunRequest("test"), MakeSession());
+        var unsupported = new CustomRunOptions();
+
+        Assert.Throws<NotSupportedException>(() => wrapper.GetRunOptions(unsupported));
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
     private static AgentWorkflowWrapper CreateWrapper(RunRequest request, TemporalAgentSession session) =>
@@ -240,4 +284,7 @@ public class AgentWorkflowWrapperTests
 
     private static AIFunction CreateTool(string name) =>
         AIFunctionFactory.Create(() => $"result from {name}", name);
+
+    /// <summary>A custom AgentRunOptions subclass that is NOT ChatClientAgentRunOptions.</summary>
+    private sealed class CustomRunOptions : AgentRunOptions;
 }
