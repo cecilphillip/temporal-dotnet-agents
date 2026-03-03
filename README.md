@@ -15,19 +15,19 @@ Temporal provides:
 
 ## Feature Overview
 
-| Feature                             | Description                                                                                         |
-|-------------------------------------|-----------------------------------------------------------------------------------------------------|
-| Durable sessions                    | Each agent session maps to a long-lived Temporal workflow; history survives worker restarts         |
-| Multi-turn conversations            | Conversation history is stored in workflow state and replayed automatically                         |
-| LLM-powered routing                 | `IAgentRouter` / `AIModelAgentRouter` classifies messages and dispatches to the best-matching agent |
-| Parallel agent execution            | `ExecuteAgentsInParallelAsync` runs multiple agents concurrently inside a workflow                  |
-| Human-in-the-loop approval          | Tools can pause and request human review; external systems submit decisions                         |
-| Recurring scheduled runs            | `ScheduleAgentAsync` / `AddScheduledAgentRun` create Temporal Schedules that fire agent jobs on an interval or calendar spec |
+| Feature                             | Description                                                                                                                            |
+|-------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| Durable sessions                    | Each agent session maps to a long-lived Temporal workflow; history survives worker restarts                                            |
+| Multi-turn conversations            | Conversation history is stored in workflow state and replayed automatically                                                            |
+| LLM-powered routing                 | `IAgentRouter` / `AIModelAgentRouter` classifies messages and dispatches to the best-matching agent                                    |
+| Parallel agent execution            | `ExecuteAgentsInParallelAsync` runs multiple agents concurrently inside a workflow                                                     |
+| Human-in-the-loop approval          | Tools can pause and request human review; external systems submit decisions                                                            |
+| Recurring scheduled runs            | `ScheduleAgentAsync` / `AddScheduledAgentRun` create Temporal Schedules that fire agent jobs on an interval or calendar spec           |
 | Deferred one-time runs              | `RunAgentDelayedAsync` (external callers) and `ScheduleOneTimeAgentRunAsync` (from workflows) defer agent execution using `StartDelay` |
-| MCP tool integration                | Async agent factory connects to a Model Context Protocol server at startup                          |
-| External memory (AIContextProvider) | `ChatClientAgent.ContextProviders` runs before inference; session state persists across turns       |
-| OpenTelemetry distributed tracing   | Two-layer span hierarchy covering SDK internals and agent turns                                     |
-| Streaming responses                 | `IAgentResponseHandler` receives streaming chunks for SSE or SignalR push                           |
+| MCP tool integration                | Async agent factory connects to a Model Context Protocol server at startup                                                             |
+| External memory (AIContextProvider) | `ChatClientAgent.ContextProviders` runs before inference; session state persists across turns                                          |
+| OpenTelemetry distributed tracing   | Two-layer span hierarchy covering SDK internals and agent turns                                                                        |
+| Streaming responses                 | `IAgentResponseHandler` receives streaming chunks for SSE or SignalR push                                                              |
 
 ## How It Works
 
@@ -116,7 +116,8 @@ public class MyController(
 
 ### 3. Configure API Credentials
 
-Samples and applications that use Azure OpenAI (or other LLM providers) need API credentials. Never commit real API keys to version control.
+Samples and applications that use Azure OpenAI (or other LLM providers) need API credentials. Never commit real API keys
+to version control.
 
 #### Using appsettings.local.json (Recommended for Local Development)
 
@@ -132,7 +133,8 @@ cat > appsettings.local.json <<EOF
 EOF
 ```
 
-The application automatically loads this file (if present) and merges it with `appsettings.json`. This approach keeps API keys out of your repository while allowing different developers or environments to use their own credentials.
+The application automatically loads this file (if present) and merges it with `appsettings.json`. This approach keeps
+API keys out of your repository while allowing different developers or environments to use their own credentials.
 
 #### Using Environment Variables (Recommended for CI/CD and Production)
 
@@ -145,6 +147,7 @@ dotnet run --project samples/BasicAgent
 ```
 
 Configuration sources are resolved in this order:
+
 1. `appsettings.json` (committed)
 2. `appsettings.local.json` (optional, git-ignored)
 3. Environment variables (highest priority)
@@ -391,7 +394,8 @@ public class MyStreamingHandler : IAgentResponseHandler
 - **`TemporalAIAgent`** — For use inside Temporal workflows
 - **`TemporalAIAgentProxy`** — For external callers
 - **`TemporalAgentContext`** — Async-local context for tools
-- **`ITemporalAgentClient`** — Update-based client (no polling); also exposes `ScheduleAgentAsync`, `GetAgentScheduleHandle`, `RunAgentDelayedAsync`
+- **`ITemporalAgentClient`** — Update-based client (no polling); also exposes `ScheduleAgentAsync`,
+  `GetAgentScheduleHandle`, `RunAgentDelayedAsync`
 - **`ScheduleActivities`** — Activity class for scheduling one-time deferred runs from inside orchestrating workflows
 - **`TemporalAgentSessionId`** — Encodes agent name + key
 - **`AddTemporalAgents(...)`** — Fluent worker builder registration (recommended)
@@ -592,12 +596,12 @@ a lightweight, fire-and-forget workflow with no conversation history, no StateBa
 Results are visible in the Temporal Web UI; to capture output, start a regular agent session from
 inside the job using `TemporalAgentContext`.
 
-| Primitive | Context | Recurrence |
-|-----------|---------|------------|
-| `AddScheduledAgentRun` | Config time | Recurring |
-| `ITemporalAgentClient.ScheduleAgentAsync` | Runtime | Recurring |
-| `ScheduleActivities.ScheduleOneTimeAgentRunAsync` | Inside a workflow | One-time |
-| `ITemporalAgentClient.RunAgentDelayedAsync` | External caller | One-time (full session) |
+| Primitive                                         | Context           | Recurrence              |
+|---------------------------------------------------|-------------------|-------------------------|
+| `AddScheduledAgentRun`                            | Config time       | Recurring               |
+| `ITemporalAgentClient.ScheduleAgentAsync`         | Runtime           | Recurring               |
+| `ScheduleActivities.ScheduleOneTimeAgentRunAsync` | Inside a workflow | One-time                |
+| `ITemporalAgentClient.RunAgentDelayedAsync`       | External caller   | One-time (full session) |
 
 ### Recurring Schedules
 
