@@ -40,6 +40,7 @@ var openAiOptions = new OpenAIClientOptions()
     Endpoint = endpoint
 };
 var model = "gpt-4o-mini";
+var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
 ApiKeyCredential credential = new(apiKey);
 OpenAIClient openAiClient = new(credential, openAiOptions);
@@ -69,7 +70,7 @@ var agent = openAiClient
 builder.Services.ConfigureTemporalAgents(
     configure: options => { options.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1)); },
     taskQueue: "agents",
-    targetHost: "localhost:7233",
+    targetHost: temporalAddress,
     @namespace: "default");
 
 // ── Step 5: Start the host (worker runs as IHostedService) ────────────────────

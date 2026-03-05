@@ -45,6 +45,7 @@ if (string.IsNullOrEmpty(apiKey))
 var endpoint = new Uri(apiBaseUrl);
 var openAiOptions = new OpenAIClientOptions() { Endpoint = endpoint };
 var model = "gpt-4o-mini";
+var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
 ApiKeyCredential credential = new(apiKey);
 OpenAIClient openAiClient = new(credential, openAiOptions);
@@ -70,10 +71,10 @@ var agent = openAiClient
 // ── Step 4: Register Temporal Client and Agents using the NEW fluent API ────────────────
 // The fluent AddTemporalAgents() method composes with the worker setup:
 builder.Services
-    .AddTemporalClient("localhost:7233", "default");
+    .AddTemporalClient(temporalAddress, "default");
 
 builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "orchestration")
+    .AddHostedTemporalWorker(temporalAddress, "default", "orchestration")
     .AddTemporalAgents(options =>
     {
         // Register the agent (or factory for DI-resolved agents)
@@ -102,8 +103,15 @@ var handle = await client.StartWorkflowAsync(
 Console.WriteLine($"Orchestration workflow started: {weatherOrchestrationId}\n");
 
 // ── Step 7: Wait for the workflow to complete ────────────────────────────────
-var result = await handle.GetResultAsync();
-Console.WriteLine($"Orchestration workflow result: {result}\n");
+try
+{
+    var result = await handle.GetResultAsync();
+    Console.WriteLine($"Orchestration workflow result: {result}\n");
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Workflow failed: {ex.Message}\n");
+}
 
 // ── Step 8: Graceful shutdown ─────────────────────────────────────────────────
 // TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException on shutdown.

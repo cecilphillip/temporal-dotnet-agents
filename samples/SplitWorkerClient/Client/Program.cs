@@ -11,12 +11,14 @@
 //
 // Run:  dotnet run --project samples/SplitWorkerClient/Client/Client.csproj
 
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Temporalio.Extensions.Agents;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
+var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
 // ── Step 1: Register client-side Temporal infrastructure only ────────────────
 // AddTemporalAgentProxies wires up:
@@ -36,7 +38,7 @@ builder.Services.AddTemporalAgentProxies(
         options.AddAgentProxy("Assistant", timeToLive: TimeSpan.FromHours(1));
     },
     taskQueue: "agents",           // must match the Worker's task queue
-    targetHost: "localhost:7233",
+    targetHost: temporalAddress,
     @namespace: "default");
 
 var host = builder.Build();

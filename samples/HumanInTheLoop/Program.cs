@@ -182,10 +182,10 @@ while (true)
         {
             pending = await client.GetPendingApprovalAsync(sessionId);
         }
-        catch
+        catch (Temporalio.Exceptions.RpcException ex) when (ex.Code == Temporalio.Exceptions.RpcException.StatusCode.NotFound)
         {
             // The workflow may not have started yet on the very first poll.
-            // Swallow and retry on the next tick.
+            // Retry on the next tick.
             continue;
         }
 

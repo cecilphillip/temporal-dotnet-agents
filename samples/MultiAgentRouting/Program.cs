@@ -63,6 +63,7 @@ if (string.IsNullOrEmpty(apiKey))
 var endpoint = new Uri(apiBaseUrl);
 var openAiOptions = new OpenAIClientOptions() { Endpoint = endpoint };
 var model = "gpt-4o-mini";
+var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
 ApiKeyCredential credential = new(apiKey!);
 OpenAIClient openAiClient = new(credential, openAiOptions);
@@ -109,7 +110,7 @@ var routerAgent = openAiClient
 // The TracingInterceptor propagates OTel context across Temporal calls.
 builder.Services.AddTemporalClient(opts =>
 {
-    opts.TargetHost = "localhost:7233";
+    opts.TargetHost = temporalAddress;
     opts.Namespace = "default";
     opts.Interceptors = new[] { new TracingInterceptor() };
 });
@@ -185,7 +186,17 @@ var handle = await client.StartWorkflowAsync(
 
 Console.WriteLine($"Parallel workflow started: {workflowId}");
 
-var parallelResults = await handle.GetResultAsync();
+string[] parallelResults;
+try
+{
+    parallelResults = await handle.GetResultAsync();
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Parallel workflow failed: {ex.Message}\n");
+    try { await host.StopAsync(); } catch (OperationCanceledException) { }
+    return;
+}
 
 Console.WriteLine("\nParallel responses:");
 var agentNames = new[] { "WeatherAgent", "BillingAgent", "TechSupportAgent" };
@@ -197,4 +208,5 @@ for (var i = 0; i < parallelResults.Length; i++)
 // ── Step 11: Graceful shutdown ────────────────────────────────────────────────
 // TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException on shutdown.
 try { await host.StopAsync(); } catch (OperationCanceledException) { }
+tracerProvider?.ForceFlush();
 Console.WriteLine("\nDone.");

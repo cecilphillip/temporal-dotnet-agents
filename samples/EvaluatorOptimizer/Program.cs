@@ -49,6 +49,7 @@ if (string.IsNullOrEmpty(apiKey))
 var endpoint = new Uri(apiBaseUrl);
 var openAiOptions = new OpenAIClientOptions() { Endpoint = endpoint };
 var model = "gpt-4o-mini";
+var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
 ApiKeyCredential credential = new(apiKey!);
 OpenAIClient openAiClient = new(credential, openAiOptions);
@@ -73,7 +74,7 @@ var evaluator = openAiClient
 
 // ── Step 4: Register agents and the orchestrating workflow ────────────────────
 builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "evaluator-optimizer")
+    .AddHostedTemporalWorker(temporalAddress, "default", "evaluator-optimizer")
     .AddTemporalAgents(opts =>
     {
         opts.AddAIAgent(generator);
@@ -104,11 +105,18 @@ Console.WriteLine($"Workflow started: {handle.Id}\n");
 Console.WriteLine($"Task: {task}\n");
 
 // ── Step 7: Wait for the final draft ─────────────────────────────────────────
-var result = await handle.GetResultAsync();
+try
+{
+    var result = await handle.GetResultAsync();
 
-Console.WriteLine("── Final Draft ─────────────────────────────────────────────");
-Console.WriteLine(result);
-Console.WriteLine("────────────────────────────────────────────────────────────\n");
+    Console.WriteLine("── Final Draft ─────────────────────────────────────────────");
+    Console.WriteLine(result);
+    Console.WriteLine("────────────────────────────────────────────────────────────\n");
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Workflow failed: {ex.Message}\n");
+}
 
 // ── Step 8: Graceful shutdown ─────────────────────────────────────────────────
 // TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException on shutdown.
