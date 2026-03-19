@@ -27,7 +27,6 @@ TemporalAgents/
 ├── CLAUDE.md                               # This file
 ├── README.md                               # Umbrella README linking to both libraries
 ├── docs/
-│   ├── todo-meai.md                        # Open design todos for Temporalio.Extensions.AI
 │   ├── architecture/
 │   │   ├── MAF/                            # Internal design docs (Agents library)
 │   │   │   ├── durability-and-determinism.md
@@ -702,13 +701,12 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 
 ### Temporalio.Extensions.AI (MEAI)
 
-- **Usage Guide**: `docs/how-to/MEAI/usage.md` _(stub)_
+- **Usage Guide**: `docs/how-to/MEAI/usage.md`
 - **Tool Functions**: `docs/how-to/MEAI/tool-functions.md` — Model 1 vs Model 2 explained
-- **Testing**: `docs/how-to/MEAI/testing.md` _(stub)_
-- **Observability**: `docs/how-to/MEAI/observability.md` _(stub)_
-- **Human-in-the-Loop**: `docs/how-to/MEAI/hitl-patterns.md` _(stub)_
-- **Durable Chat Pipeline**: `docs/architecture/MEAI/durable-chat-pipeline.md` _(stub)_
-- **Open Design Todos**: `docs/todo-meai.md`
+- **Testing**: `docs/how-to/MEAI/testing.md`
+- **Observability**: `docs/how-to/MEAI/observability.md`
+- **Human-in-the-Loop**: `docs/how-to/MEAI/hitl-patterns.md`
+- **Durable Chat Pipeline**: `docs/architecture/MEAI/durable-chat-pipeline.md`
 
 ---
 
