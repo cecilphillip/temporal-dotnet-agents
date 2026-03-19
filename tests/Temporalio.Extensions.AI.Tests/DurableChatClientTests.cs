@@ -1,0 +1,72 @@
+using FakeItEasy;
+using Microsoft.Extensions.AI;
+using Xunit;
+
+namespace Temporalio.Extensions.AI.Tests;
+
+public class DurableChatClientTests
+{
+    [Fact]
+    public async Task GetResponseAsync_PassesThroughWhenNotInWorkflow()
+    {
+        var expectedResponse = new ChatResponse([new ChatMessage(ChatRole.Assistant, "Hello!")]);
+        var innerClient = A.Fake<IChatClient>();
+        A.CallTo(() => innerClient.GetResponseAsync(
+                A<IEnumerable<ChatMessage>>._, A<ChatOptions?>._, A<CancellationToken>._))
+            .Returns(Task.FromResult(expectedResponse));
+
+        var options = new DurableExecutionOptions { TaskQueue = "test" };
+        var client = new DurableChatClient(innerClient, options);
+
+        var messages = new List<ChatMessage> { new(ChatRole.User, "Hi") };
+        var response = await client.GetResponseAsync(messages);
+
+        Assert.Same(expectedResponse, response);
+        A.CallTo(() => innerClient.GetResponseAsync(
+                A<IEnumerable<ChatMessage>>._, A<ChatOptions?>._, A<CancellationToken>._))
+            .MustHaveHappenedOnceExactly();
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_PassesThroughWhenNotInWorkflow()
+    {
+        // Create a response and convert to updates (avoids read-only Text setter).
+        var response = new ChatResponse([new ChatMessage(ChatRole.Assistant, "Hello World")]);
+        var updates = response.ToChatResponseUpdates().ToList();
+
+        var innerClient = A.Fake<IChatClient>();
+        A.CallTo(() => innerClient.GetStreamingResponseAsync(
+                A<IEnumerable<ChatMessage>>._, A<ChatOptions?>._, A<CancellationToken>._))
+            .Returns(updates.ToAsyncEnumerable());
+
+        var options = new DurableExecutionOptions { TaskQueue = "test" };
+        var client = new DurableChatClient(innerClient, options);
+
+        var messages = new List<ChatMessage> { new(ChatRole.User, "Hi") };
+        var result = new List<ChatResponseUpdate>();
+        await foreach (var update in client.GetStreamingResponseAsync(messages))
+        {
+            result.Add(update);
+        }
+
+        Assert.NotEmpty(result);
+    }
+
+    [Fact]
+    public void Constructor_ThrowsOnNullOptions()
+    {
+        var innerClient = A.Fake<IChatClient>();
+        Assert.Throws<ArgumentNullException>(() => new DurableChatClient(innerClient, null!));
+    }
+
+    [Fact]
+    public void GetService_ReturnsDurableExecutionOptions()
+    {
+        var innerClient = A.Fake<IChatClient>();
+        var options = new DurableExecutionOptions { TaskQueue = "test" };
+        var client = new DurableChatClient(innerClient, options);
+
+        var result = client.GetService<DurableExecutionOptions>();
+        Assert.Same(options, result);
+    }
+}
