@@ -110,9 +110,9 @@ internal static partial class Logs
     // ── HITL logs (GAP 3) ─────────────────────────────────────────────────────
 
     [LoggerMessage(EventId = 18, Level = LogLevel.Information,
-        Message = "[{AgentName}/{WorkflowId}] Approval requested (RequestId: {RequestId}, Action: {Action})")]
+        Message = "[{AgentName}/{WorkflowId}] Approval requested (RequestId: {RequestId}, Description: {Description})")]
     public static partial void LogWorkflowApprovalRequested(
-        this ILogger logger, string agentName, string workflowId, string requestId, string action);
+        this ILogger logger, string agentName, string workflowId, string requestId, string description);
 
     [LoggerMessage(EventId = 19, Level = LogLevel.Information,
         Message = "[{AgentName}/{WorkflowId}] Approval resolved (RequestId: {RequestId}, Approved: {Approved})")]

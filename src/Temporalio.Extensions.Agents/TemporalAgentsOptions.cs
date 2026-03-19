@@ -56,7 +56,7 @@ public sealed class TemporalAgentsOptions
     /// Gets or sets the maximum time the workflow will wait for a human to respond
     /// to an approval request before timing out. Defaults to 7 days.
     /// When the timeout elapses, <see cref="AgentWorkflow.RequestApprovalAsync"/>
-    /// returns a rejected <see cref="ApprovalTicket"/> with a timeout comment.
+    /// returns a rejected <see cref="DurableApprovalDecision"/> with a timeout comment.
     /// </summary>
     public TimeSpan ApprovalTimeout { get; set; } = TimeSpan.FromDays(7);
 

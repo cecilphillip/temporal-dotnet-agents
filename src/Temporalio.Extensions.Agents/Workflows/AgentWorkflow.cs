@@ -3,6 +3,7 @@ using Microsoft.Agents.AI;
 using Temporalio.Common;
 using Temporalio.Extensions.Agents.Session;
 using Temporalio.Extensions.Agents.State;
+using Temporalio.Extensions.AI;
 using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.Agents.Workflows;
@@ -32,8 +33,8 @@ internal class AgentWorkflow
     private JsonElement? _currentStateBag;
 
     // GAP 3: Human-in-the-Loop state.
-    private ApprovalRequest? _pendingApproval;
-    private ApprovalDecision? _approvalDecision;
+    private DurableApprovalRequest? _pendingApproval;
+    private DurableApprovalDecision? _approvalDecision;
 
     [WorkflowRun]
     public async Task RunAsync(AgentWorkflowInput input)
@@ -191,7 +192,7 @@ internal class AgentWorkflow
     /// Validates that a <see cref="RequestApprovalAsync"/> request is well-formed before it enters history.
     /// </summary>
     [WorkflowUpdateValidator(nameof(RequestApprovalAsync))]
-    public void ValidateRequestApproval(ApprovalRequest request)
+    public void ValidateRequestApproval(DurableApprovalRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrEmpty(request.RequestId))
@@ -208,13 +209,13 @@ internal class AgentWorkflow
     /// exceeds your expected review time (e.g. <c>TimeSpan.FromHours(24)</c>).
     /// </remarks>
     [WorkflowUpdate("RequestApproval")]
-    public async Task<ApprovalTicket> RequestApprovalAsync(ApprovalRequest request)
+    public async Task<DurableApprovalDecision> RequestApprovalAsync(DurableApprovalRequest request)
     {
         _pendingApproval = request;
         _approvalDecision = null;
 
         Workflow.Logger.LogWorkflowApprovalRequested(_input?.AgentName ?? "unknown",
-            Workflow.Info.WorkflowId, request.RequestId, request.Action);
+            Workflow.Info.WorkflowId, request.RequestId, request.Description ?? request.RequestId);
 
         var timeout = _input?.ApprovalTimeout ?? TimeSpan.FromDays(7);
         var conditionMet = await Workflow.WaitConditionAsync(
@@ -229,11 +230,11 @@ internal class AgentWorkflow
             _pendingApproval = null;
             _approvalDecision = null;
 
-            return new ApprovalTicket
+            return new DurableApprovalDecision
             {
                 RequestId = request.RequestId,
                 Approved = false,
-                Comment = $"Approval timed out after {timeout.TotalHours:F0} hours with no human response."
+                Reason = $"Approval timed out after {timeout.TotalHours:F0} hours with no human response."
             };
         }
 
@@ -244,19 +245,14 @@ internal class AgentWorkflow
         Workflow.Logger.LogWorkflowApprovalResolved(_input?.AgentName ?? "unknown",
             Workflow.Info.WorkflowId, request.RequestId, decision.Approved);
 
-        return new ApprovalTicket
-        {
-            RequestId = decision.RequestId,
-            Approved = decision.Approved,
-            Comment = decision.Comment
-        };
+        return decision;
     }
 
     /// <summary>
     /// Validates that a <see cref="SubmitApprovalAsync"/> decision is well-formed before it enters history.
     /// </summary>
     [WorkflowUpdateValidator(nameof(SubmitApprovalAsync))]
-    public void ValidateSubmitApproval(ApprovalDecision decision)
+    public void ValidateSubmitApproval(DurableApprovalDecision decision)
     {
         ArgumentNullException.ThrowIfNull(decision);
 
@@ -278,16 +274,10 @@ internal class AgentWorkflow
     /// Unblocks the tool that called <see cref="RequestApprovalAsync"/>.
     /// </summary>
     [WorkflowUpdate("SubmitApproval")]
-    public Task<ApprovalTicket> SubmitApprovalAsync(ApprovalDecision decision)
+    public Task<DurableApprovalDecision> SubmitApprovalAsync(DurableApprovalDecision decision)
     {
         _approvalDecision = decision;
-
-        return Task.FromResult(new ApprovalTicket
-        {
-            RequestId = decision.RequestId,
-            Approved = decision.Approved,
-            Comment = decision.Comment
-        });
+        return Task.FromResult(decision);
     }
 
     /// <summary>
@@ -295,7 +285,7 @@ internal class AgentWorkflow
     /// Use this query to poll for pending approvals from a UI or monitoring tool.
     /// </summary>
     [WorkflowQuery("GetPendingApproval")]
-    public ApprovalRequest? GetPendingApproval() => _pendingApproval;
+    public DurableApprovalRequest? GetPendingApproval() => _pendingApproval;
 
     private async Task ProcessFireAndForgetAsync(RunRequest request)
     {

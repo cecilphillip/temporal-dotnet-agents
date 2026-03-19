@@ -6,7 +6,7 @@ using Temporalio.Api.Enums.V1;
 using Temporalio.Client;
 using Temporalio.Client.Schedules;
 using Temporalio.Extensions.Agents.Session;
-using Temporalio.Extensions.Agents.State;
+using Temporalio.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
@@ -154,25 +154,25 @@ internal class DefaultTemporalAgentClient(
     // ── GAP 3: Human-in-the-Loop ────────────────────────────────────────────
 
     /// <inheritdoc/>
-    public async Task<ApprovalRequest?> GetPendingApprovalAsync(
+    public async Task<DurableApprovalRequest?> GetPendingApprovalAsync(
         TemporalAgentSessionId sessionId,
         CancellationToken cancellationToken = default)
     {
         var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
-        return await handle.QueryAsync<AgentWorkflow, ApprovalRequest?>(
+        return await handle.QueryAsync<AgentWorkflow, DurableApprovalRequest?>(
             wf => wf.GetPendingApproval());
     }
 
     /// <inheritdoc/>
-    public async Task<ApprovalTicket> SubmitApprovalAsync(
+    public async Task<DurableApprovalDecision> SubmitApprovalAsync(
         TemporalAgentSessionId sessionId,
-        ApprovalDecision decision,
+        DurableApprovalDecision decision,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(decision);
 
         var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
-        return await handle.ExecuteUpdateAsync<AgentWorkflow, ApprovalTicket>(
+        return await handle.ExecuteUpdateAsync<AgentWorkflow, DurableApprovalDecision>(
             wf => wf.SubmitApprovalAsync(decision));
     }
 

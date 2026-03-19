@@ -2,7 +2,7 @@ using System.Linq.Expressions;
 using Microsoft.Extensions.DependencyInjection;
 using Temporalio.Client;
 using Temporalio.Exceptions;
-using Temporalio.Extensions.Agents.State;
+using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Agents.Workflows;
 
 namespace Temporalio.Extensions.Agents.Session;
@@ -101,9 +101,9 @@ public sealed class TemporalAgentContext
     /// <remarks>
     /// Call this from inside a tool implementation when the action requires human review:
     /// <code>
-    /// var ticket = await TemporalAgentContext.Current.RequestApprovalAsync(
-    ///     new ApprovalRequest { Action = "Send email to all users", Details = "..." });
-    /// if (!ticket.Approved) throw new OperationCanceledException("Action rejected by reviewer.");
+    /// var decision = await TemporalAgentContext.Current.RequestApprovalAsync(
+    ///     new DurableApprovalRequest { RequestId = Guid.NewGuid().ToString("N"), Description = "Send email to all users" });
+    /// if (!decision.Approved) throw new OperationCanceledException("Action rejected by reviewer.");
     /// </code>
     /// <para>
     /// <b>Timeout note:</b> the calling activity blocks for the duration of human review.
@@ -111,14 +111,14 @@ public sealed class TemporalAgentContext
     /// (e.g. <c>TimeSpan.FromHours(24)</c>) on the agent's <see cref="TemporalAgentsOptions"/>.
     /// </para>
     /// </remarks>
-    public async Task<ApprovalTicket> RequestApprovalAsync(
-        ApprovalRequest request,
+    public async Task<DurableApprovalDecision> RequestApprovalAsync(
+        DurableApprovalRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         var handle = _client.GetWorkflowHandle<AgentWorkflow>(CurrentSession.SessionId.WorkflowId);
-        return await handle.ExecuteUpdateAsync<AgentWorkflow, ApprovalTicket>(
+        return await handle.ExecuteUpdateAsync<AgentWorkflow, DurableApprovalDecision>(
             wf => wf.RequestApprovalAsync(request));
     }
 }

@@ -1,8 +1,8 @@
 using Microsoft.Agents.AI;
 using Temporalio.Client.Schedules;
 using Temporalio.Extensions.Agents.Session;
-using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.Agents.Workflows;
+using Temporalio.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents;
 
@@ -68,21 +68,21 @@ public interface ITemporalAgentClient
     // ── Human-in-the-Loop (GAP 3) ────────────────────────────────────────────
 
     /// <summary>
-    /// Queries the agent workflow for a pending <see cref="ApprovalRequest"/>,
+    /// Queries the agent workflow for a pending <see cref="DurableApprovalRequest"/>,
     /// returning <see langword="null"/> if none exists.
     /// </summary>
-    Task<ApprovalRequest?> GetPendingApprovalAsync(
+    Task<DurableApprovalRequest?> GetPendingApprovalAsync(
         TemporalAgentSessionId sessionId,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Submits a human <see cref="ApprovalDecision"/> to the agent workflow.
-    /// Unblocks the tool that issued the <see cref="ApprovalRequest"/> and returns
-    /// the resolved <see cref="ApprovalTicket"/>.
+    /// Submits a human <see cref="DurableApprovalDecision"/> to the agent workflow.
+    /// Unblocks the tool that issued the <see cref="DurableApprovalRequest"/> and returns
+    /// the resolved decision.
     /// </summary>
-    Task<ApprovalTicket> SubmitApprovalAsync(
+    Task<DurableApprovalDecision> SubmitApprovalAsync(
         TemporalAgentSessionId sessionId,
-        ApprovalDecision decision,
+        DurableApprovalDecision decision,
         CancellationToken cancellationToken = default);
 
     /// <summary>
