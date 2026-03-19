@@ -26,6 +26,7 @@ Use this package when you want Temporal durability on top of a standard MEAI pip
 - Durable embeddings — `IEmbeddingGenerator` wrapped for deterministic workflow execution
 - History reduction — sliding context window for the LLM while preserving full history durably
 - Human-in-the-loop (HITL) — approval gates via `[WorkflowUpdate]` that block until a human responds
+- Plugin composition — inject OTel tracing, encryption, or any Temporal SDK plugin via `.AddWorkerPlugin()` / `.AddClientPlugin()`
 - Per-request overrides — timeout and retry policy set per `ChatOptions` call
 - OpenTelemetry spans — conversation ID and token counts attached as span attributes
 
@@ -296,6 +297,48 @@ Configure the approval timeout in `DurableExecutionOptions`:
     opts.ApprovalTimeout = TimeSpan.FromDays(3);
 });
 ```
+
+## Plugin Support
+
+> **Experimental:** These APIs carry the `TAI001` diagnostic. Suppress with `#pragma warning disable TAI001`.
+
+Use `.AddWorkerPlugin()` and `.AddClientPlugin()` to compose any Temporal SDK plugin (OTel tracing, encryption codecs, custom interceptors) with the hosted worker:
+
+**Worker plugin on a hosted worker:**
+
+```csharp
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "my-queue")
+    .AddDurableAI()
+    .AddWorkerPlugin(new TracingPlugin());   // ITemporalWorkerPlugin
+```
+
+**Client plugin on a hosted worker** (only applies when the worker creates its own client via the 3-arg overload):
+
+```csharp
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "my-queue")
+    .AddDurableAI()
+    .AddClientPlugin(new EncryptionPlugin());   // ITemporalClientPlugin
+```
+
+**Client plugin on a standalone client** (no hosted worker):
+
+```csharp
+builder.Services
+    .AddTemporalClient("localhost:7233", "default")
+    .AddClientPlugin(new EncryptionPlugin());
+```
+
+### DurableAIDataConverter auto-wiring
+
+`AddDurableAI()` automatically applies `DurableAIDataConverter` to the Temporal client for the two most common registration patterns:
+
+| Pattern | How it's applied |
+|---|---|
+| `AddTemporalClient(addr, ns)` | Via `IConfigureOptions<TemporalClientConnectOptions>` |
+| `AddHostedTemporalWorker(addr, ns, queue)` | Via `IPostConfigureOptions<TemporalWorkerServiceOptions>` |
+| Manual `TemporalClient.ConnectAsync` + `AddSingleton` | **Not** auto-wired — set `DataConverter = DurableAIDataConverter.Instance` explicitly |
 
 ## Data Converter
 

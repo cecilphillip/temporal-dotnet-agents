@@ -219,6 +219,36 @@ await sessionClient.SubmitApprovalAsync("conv-123", new DurableApprovalDecision
 });
 ```
 
+### Plugin Support
+
+Plugin APIs are experimental and emit `TAI001`. Suppress with `#pragma warning disable TAI001`.
+
+```csharp
+// Worker plugin — composited with AddDurableAI on the hosted worker builder
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "my-queue")
+    .AddDurableAI()
+    .AddWorkerPlugin(new TracingPlugin());     // ITemporalWorkerPlugin
+
+// Client plugin — only fires when the worker creates its own client (3-arg overload)
+    .AddClientPlugin(new EncryptionPlugin()); // ITemporalClientPlugin
+
+// Client plugin — standalone client via AddTemporalClient
+builder.Services
+    .AddTemporalClient("localhost:7233", "default")
+    .AddClientPlugin(new EncryptionPlugin());
+```
+
+**`DurableAIDataConverter` auto-wiring**: `AddDurableAI()` registers `IConfigureOptions<TemporalClientConnectOptions>` (`DurableAIClientOptionsConfigurator`) and `IPostConfigureOptions<TemporalWorkerServiceOptions>` (`DurableAIWorkerClientConfigurator`) that apply `DurableAIDataConverter.Instance` when the converter is still `DataConverter.Default`.
+
+| Scenario | Auto-wired? |
+|---|---|
+| `AddTemporalClient(addr, ns)` + `AddDurableAI()` | ✅ Yes — via `IConfigureOptions<TemporalClientConnectOptions>` |
+| `AddHostedTemporalWorker(addr, ns, queue)` + `AddDurableAI()` | ✅ Yes — via `IPostConfigureOptions<TemporalWorkerServiceOptions>` |
+| Manual `TemporalClient.ConnectAsync` + `AddSingleton<ITemporalClient>` | ❌ No — set `DataConverter = DurableAIDataConverter.Instance` explicitly |
+
+`TryAddEnumerable` is used so calling `AddDurableAI()` twice does not register the configurators twice.
+
 ### Important Notes
 
 - `DurableChatActivities` is `internal` and registered as `AddSingletonActivities` — do not instantiate directly

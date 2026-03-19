@@ -35,6 +35,8 @@ builder.Services.AddSingleton<ITemporalClient>(temporalClient);
 ```
 
 > **Note:** `DurableAIDataConverter.Instance` is required whenever you use MEAI types in workflow history. MEAI's `AIContent` hierarchy is polymorphic — `TextContent`, `FunctionCallContent`, `FunctionResultContent`, and others all serialize with a `$type` discriminator field that tells the deserializer which concrete type to construct. Temporal's default `DefaultPayloadConverter` uses plain `System.Text.Json` without that discriminator support, so `FunctionCallContent` and `FunctionResultContent` instances round-trip through workflow history as base `AIContent` objects and lose all their data. `DurableAIDataConverter` wraps the payload converter with `AIJsonUtilities.DefaultOptions`, which includes the correct polymorphic type resolvers.
+>
+> **Auto-wiring:** When using `AddTemporalClient(addr, ns)` or the 3-arg `AddHostedTemporalWorker(addr, ns, queue)` overload, `AddDurableAI()` applies `DurableAIDataConverter` automatically — you do not need to set it manually. The explicit `DataConverter = DurableAIDataConverter.Instance` shown above is only required when creating the client via `TemporalClient.ConnectAsync` and registering it with `AddSingleton<ITemporalClient>`.
 
 ---
 
@@ -218,6 +220,46 @@ When the Temporal event history for a session grows large (Temporal's per-workfl
 | `ApprovalTimeout` | `TimeSpan` | 7 days | Maximum time to wait for a human to respond to a HITL tool approval request. |
 | `WorkflowIdPrefix` | `string` | `"chat-"` | Prefix prepended to `conversationId` when constructing the Temporal workflow ID. |
 | `EnableSessionManagement` | `bool` | `false` | When false, middleware wraps individual calls as activities only. When true, session history is managed in the workflow. |
+
+---
+
+## Composing with Temporal SDK Plugins
+
+> **Experimental:** These APIs carry the `TAI001` diagnostic. Suppress with `#pragma warning disable TAI001` at the call site.
+
+`AddDurableAI()` returns the same `ITemporalWorkerServiceOptionsBuilder`, so you can chain `.AddWorkerPlugin()` and `.AddClientPlugin()` to inject any Temporal SDK plugin (OTel tracing, encryption, custom interceptors) into the registration:
+
+**Worker plugin** — e.g., adding distributed tracing via the OpenTelemetry extension:
+
+```csharp
+#pragma warning disable TAI001
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "my-queue")
+    .AddDurableAI()
+    .AddWorkerPlugin(new TracingPlugin());
+#pragma warning restore TAI001
+```
+
+**Client plugin** — only applies when the worker creates its own client (3-arg overload):
+
+```csharp
+#pragma warning disable TAI001
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "my-queue")
+    .AddDurableAI()
+    .AddClientPlugin(new EncryptionPlugin());
+#pragma warning restore TAI001
+```
+
+For client-only registrations that have no hosted worker, use the `OptionsBuilder<TemporalClientConnectOptions>` overload:
+
+```csharp
+#pragma warning disable TAI001
+builder.Services
+    .AddTemporalClient("localhost:7233", "default")
+    .AddClientPlugin(new EncryptionPlugin());
+#pragma warning restore TAI001
+```
 
 ---
 

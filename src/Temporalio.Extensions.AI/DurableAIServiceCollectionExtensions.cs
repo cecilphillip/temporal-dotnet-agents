@@ -2,6 +2,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Temporalio.Client;
 using Temporalio.Extensions.Hosting;
 
@@ -33,6 +34,13 @@ public static class DurableAIServiceCollectionExtensions
     /// <para>
     /// <see cref="DurableChatActivities"/> constructor-injects the <b>unkeyed</b> <see cref="IChatClient"/>.
     /// If using <c>AddKeyedChatClient</c> for multiple clients, also register an unkeyed alias.
+    /// </para>
+    /// <para>
+    /// <see cref="DurableAIDataConverter"/> is automatically applied to the Temporal client when
+    /// using <c>AddTemporalClient(address, ns)</c> or the 3-arg <c>AddHostedTemporalWorker(address, ns, queue)</c>
+    /// overload that creates its own client. When creating the client manually via
+    /// <c>TemporalClient.ConnectAsync</c> and registering it with <c>AddSingleton</c>, you must
+    /// still set <c>DataConverter = DurableAIDataConverter.Instance</c> explicitly.
     /// </para>
     /// </remarks>
     public static ITemporalWorkerServiceOptionsBuilder AddDurableAI(
@@ -76,6 +84,16 @@ public static class DurableAIServiceCollectionExtensions
 
         // Register embedding activities (resolves IEmbeddingGenerator from DI at runtime).
         builder.AddSingletonActivities<DurableEmbeddingActivities>();
+
+        // Auto-wire DurableAIDataConverter for both client registration patterns.
+        // TryAddEnumerable deduplicates if AddDurableAI() is called more than once.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IConfigureOptions<TemporalClientConnectOptions>,
+            DurableAIClientOptionsConfigurator>());
+
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IPostConfigureOptions<TemporalWorkerServiceOptions>,
+            DurableAIWorkerClientConfigurator>());
 
         return builder;
     }

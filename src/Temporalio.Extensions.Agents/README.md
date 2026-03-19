@@ -29,6 +29,7 @@ Key benefits over in-memory agent frameworks:
 - External memory with `AIContextProvider` and `AgentSessionStateBag` persistence
 - Streaming responses via `IAgentResponseHandler`
 - OpenTelemetry distributed tracing (two-layer span hierarchy + search attributes)
+- Plugin composition — `.AddWorkerPlugin()` / `.AddClientPlugin()` available via the `Temporalio.Extensions.AI` dependency (same worker builder, chains after `.AddTemporalAgents()`)
 
 ## How It Works
 
