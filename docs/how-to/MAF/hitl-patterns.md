@@ -47,14 +47,14 @@ Agent Tool                    AgentWorkflow                  External System
     │                              │  GetPendingApproval (query)  │
     │                              │<─────────────────────────────│
     │                              │──────────────────────────────>│
-    │                              │  returns ApprovalRequest     │
+    │                              │  returns DurableApprovalRequest │
     │                              │                              │
     │                              │  SubmitApprovalAsync (update)│
     │                              │<─────────────────────────────│
     │                              │  sets _approvalDecision      │
     │                              │  WaitConditionAsync unblocks │
     │                              │                              │
-    │  ApprovalTicket returned     │                              │
+    │  DurableApprovalDecision returned │                         │
     │<─────────────────────────────│                              │
     │                              │                              │
     │  tool continues or cancels   │                              │
@@ -75,16 +75,16 @@ var sendEmailTool = AIFunctionFactory.Create(
         [Description("Email subject")]   string subject,
         [Description("Email body")]      string body) =>
     {
-        var ticket = await TemporalAgentContext.Current.RequestApprovalAsync(
-            new ApprovalRequest
+        var decision = await TemporalAgentContext.Current.RequestApprovalAsync(
+            new DurableApprovalRequest
             {
-                Action  = $"Send email to {to}",
-                Details = $"Subject: {subject}\n\nBody:\n{body}"
+                RequestId   = Guid.NewGuid().ToString("N"),
+                Description = $"Send email to {to} — Subject: {subject}\n\nBody:\n{body}"
             });
 
-        if (!ticket.Approved)
+        if (!decision.Approved)
         {
-            return $"Email rejected by reviewer: {ticket.Comment ?? "no reason given"}";
+            return $"Email rejected by reviewer: {decision.Reason ?? "no reason given"}";
         }
 
         // Proceed with the actual action
@@ -95,7 +95,7 @@ var sendEmailTool = AIFunctionFactory.Create(
     description: "Sends an email. Requires human approval.");
 ```
 
-**Important:** The tool function is `async` and awaits the approval ticket. The entire `proxy.RunAsync` call that triggered this tool remains suspended until the human responds (or the timeout elapses).
+**Important:** The tool function is `async` and awaits the approval decision. The entire `proxy.RunAsync` call that triggered this tool remains suspended until the human responds (or the timeout elapses).
 
 ---
 
@@ -112,12 +112,11 @@ ITemporalAgentClient client = // resolved from DI
 var sessionId = new TemporalAgentSessionId("EmailAssistant", userId);
 
 // Poll until an approval appears
-ApprovalRequest? pending = await client.GetPendingApprovalAsync(sessionId);
+DurableApprovalRequest? pending = await client.GetPendingApprovalAsync(sessionId);
 
 if (pending is not null)
 {
-    Console.WriteLine($"Action: {pending.Action}");
-    Console.WriteLine($"Details: {pending.Details}");
+    Console.WriteLine($"Description: {pending.Description}");
     Console.WriteLine($"Request ID: {pending.RequestId}");
 }
 ```
@@ -127,16 +126,16 @@ if (pending is not null)
 `SubmitApprovalAsync` is a `[WorkflowUpdate]` — it validates the `RequestId`, sets the decision, and unblocks the tool:
 
 ```csharp
-ApprovalTicket ticket = await client.SubmitApprovalAsync(
+DurableApprovalDecision decision = await client.SubmitApprovalAsync(
     sessionId,
-    new ApprovalDecision
+    new DurableApprovalDecision
     {
         RequestId = pending.RequestId,
         Approved  = true,
-        Comment   = "Reviewed and approved by operations team."
+        Reason    = "Reviewed and approved by operations team."
     });
 
-Console.WriteLine($"Decision submitted. Approved={ticket.Approved}");
+Console.WriteLine($"Decision submitted. Approved={decision.Approved}");
 ```
 
 ### Validation Guards
@@ -160,7 +159,7 @@ while (!agentTask.IsCompleted)
 {
     await Task.Delay(TimeSpan.FromSeconds(1));
 
-    ApprovalRequest? pending = null;
+    DurableApprovalRequest? pending = null;
     try
     {
         pending = await client.GetPendingApprovalAsync(sessionId);
@@ -175,11 +174,11 @@ while (!agentTask.IsCompleted)
     // Display the request and collect human input
     var approved = PromptForDecision(pending);
 
-    await client.SubmitApprovalAsync(sessionId, new ApprovalDecision
+    await client.SubmitApprovalAsync(sessionId, new DurableApprovalDecision
     {
         RequestId = pending.RequestId,
         Approved  = approved,
-        Comment   = approved ? null : "Rejected by reviewer."
+        Reason    = approved ? null : "Rejected by reviewer."
     });
 }
 
@@ -204,14 +203,14 @@ builder.Services
     });
 ```
 
-When the timeout elapses, `RequestApprovalAsync` returns a rejected ticket:
+When the timeout elapses, `RequestApprovalAsync` returns a rejected decision:
 
 ```csharp
-new ApprovalTicket
+new DurableApprovalDecision
 {
     RequestId = request.RequestId,
-    Approved = false,
-    Comment = "Approval timed out after 4 hours with no human response."
+    Approved  = false,
+    Reason    = "Approval timed out after 4 hours with no human response."
 }
 ```
 
@@ -241,26 +240,26 @@ A single tool can request multiple approvals sequentially:
 var deleteTool = AIFunctionFactory.Create(async (string userId) =>
 {
     // First gate: data deletion
-    var ticket1 = await TemporalAgentContext.Current.RequestApprovalAsync(
-        new ApprovalRequest
+    var decision1 = await TemporalAgentContext.Current.RequestApprovalAsync(
+        new DurableApprovalRequest
         {
-            Action  = $"Delete user data for {userId}",
-            Details = "This will remove all records. Irreversible."
+            RequestId   = Guid.NewGuid().ToString("N"),
+            Description = $"Delete user data for {userId} — This will remove all records. Irreversible."
         });
 
-    if (!ticket1.Approved)
-        return $"Data deletion rejected: {ticket1.Comment}";
+    if (!decision1.Approved)
+        return $"Data deletion rejected: {decision1.Reason}";
 
     // Second gate: account deactivation
-    var ticket2 = await TemporalAgentContext.Current.RequestApprovalAsync(
-        new ApprovalRequest
+    var decision2 = await TemporalAgentContext.Current.RequestApprovalAsync(
+        new DurableApprovalRequest
         {
-            Action  = $"Deactivate account for {userId}",
-            Details = "User will lose access immediately."
+            RequestId   = Guid.NewGuid().ToString("N"),
+            Description = $"Deactivate account for {userId} — User will lose access immediately."
         });
 
-    if (!ticket2.Approved)
-        return $"Account deactivation rejected: {ticket2.Comment}. Data was still deleted.";
+    if (!decision2.Approved)
+        return $"Account deactivation rejected: {decision2.Reason}. Data was still deleted.";
 
     await DeleteAndDeactivateAsync(userId);
     return $"User {userId} data deleted and account deactivated.";
@@ -280,15 +279,15 @@ Each `RequestApprovalAsync` call is a separate `[WorkflowUpdate]` round-trip. Th
 ### Handling Rejection in Tools
 
 ```csharp
-var ticket = await TemporalAgentContext.Current.RequestApprovalAsync(request);
+var decision = await TemporalAgentContext.Current.RequestApprovalAsync(request);
 
-if (!ticket.Approved)
+if (!decision.Approved)
 {
     // Option 1: Return a message — agent incorporates it into its response
-    return $"Action rejected: {ticket.Comment ?? "no reason given"}";
+    return $"Action rejected: {decision.Reason ?? "no reason given"}";
 
     // Option 2: Throw — the tool fails and the agent reports an error
-    throw new OperationCanceledException($"Rejected: {ticket.Comment}");
+    throw new OperationCanceledException($"Rejected: {decision.Reason}");
 }
 ```
 
@@ -299,15 +298,15 @@ Returning a message is generally preferred — it lets the agent explain the rej
 Timeout produces the same rejected ticket, so the tool handles it identically:
 
 ```csharp
-if (!ticket.Approved)
+if (!decision.Approved)
 {
     // Could be a human rejection or a timeout
-    var reason = ticket.Comment ?? "unknown reason";
+    var reason = decision.Reason ?? "unknown reason";
     return $"Action not approved: {reason}";
 }
 ```
 
-The `Comment` field distinguishes the two cases — timeouts include "timed out" in the message.
+The `Reason` field distinguishes the two cases — timeouts include "timed out" in the message.
 
 ### Handling Submission Errors
 
@@ -339,7 +338,7 @@ The test suite covers both the timeout path and the happy path:
 
 ```csharp
 [Fact]
-public async Task RequestApproval_TimesOut_ReturnsRejectedTicket()
+public async Task RequestApproval_TimesOut_ReturnsRejectedDecision()
 {
     // Build a custom host with a short approval timeout
     var host = BuildHostWithApprovalTimeout(TimeSpan.FromSeconds(2));
@@ -347,39 +346,39 @@ public async Task RequestApproval_TimesOut_ReturnsRejectedTicket()
 
     // Start workflow and send the approval request
     var handle = env.Client.GetWorkflowHandle<AgentWorkflow>(workflowId);
-    var ticket = await handle.ExecuteUpdateAsync<AgentWorkflow, ApprovalTicket>(
-        wf => wf.RequestApprovalAsync(new ApprovalRequest
+    var decision = await handle.ExecuteUpdateAsync<AgentWorkflow, DurableApprovalDecision>(
+        wf => wf.RequestApprovalAsync(new DurableApprovalRequest
         {
-            Action = "Test action",
-            Details = "Test details"
+            RequestId   = Guid.NewGuid().ToString("N"),
+            Description = "Test action — Test details"
         }));
 
-    Assert.False(ticket.Approved);
-    Assert.Contains("timed out", ticket.Comment);
+    Assert.False(decision.Approved);
+    Assert.Contains("timed out", decision.Reason);
 }
 
 [Fact]
-public async Task SubmitApproval_BeforeTimeout_ReturnsApprovedTicket()
+public async Task SubmitApproval_BeforeTimeout_ReturnsApprovedDecision()
 {
     // Use a longer timeout so we can submit before it elapses
     var host = BuildHostWithApprovalTimeout(TimeSpan.FromMinutes(5));
     await host.StartAsync();
 
     // Request approval in background
-    var approvalTask = handle.ExecuteUpdateAsync<AgentWorkflow, ApprovalTicket>(
+    var approvalTask = handle.ExecuteUpdateAsync<AgentWorkflow, DurableApprovalDecision>(
         wf => wf.RequestApprovalAsync(request));
 
     // Wait for the request to be pending, then submit
     await Task.Delay(500);
-    await handle.ExecuteUpdateAsync<AgentWorkflow, ApprovalTicket>(
-        wf => wf.SubmitApprovalAsync(new ApprovalDecision
+    await handle.ExecuteUpdateAsync<AgentWorkflow, DurableApprovalDecision>(
+        wf => wf.SubmitApprovalAsync(new DurableApprovalDecision
         {
             RequestId = request.RequestId,
-            Approved = true
+            Approved  = true
         }));
 
-    var ticket = await approvalTask;
-    Assert.True(ticket.Approved);
+    var decision = await approvalTask;
+    Assert.True(decision.Approved);
 }
 ```
 
@@ -389,36 +388,29 @@ See [Testing Agents](./testing-agents.md) for the full integration test fixture 
 
 ## Types Reference
 
-### ApprovalRequest
+### DurableApprovalRequest
 
 ```csharp
-public sealed record ApprovalRequest
+// Namespace: Temporalio.Extensions.AI
+public sealed record DurableApprovalRequest
 {
-    public string RequestId { get; init; } = Guid.NewGuid().ToString("N"); // auto-generated
-    public string Action { get; init; } = string.Empty;        // short description
-    public string? Details { get; init; }                       // context for reviewer
+    public required string RequestId { get; init; }            // must be set explicitly, e.g. Guid.NewGuid().ToString("N")
+    public string? FunctionName { get; init; }                 // optional: name of the tool requesting approval
+    public string? CallId { get; init; }                       // optional: tool call correlation ID
+    public string? Description { get; init; }                  // human-readable description for the reviewer
 }
 ```
 
-### ApprovalDecision
+### DurableApprovalDecision
 
 ```csharp
-public sealed record ApprovalDecision
+// Namespace: Temporalio.Extensions.AI
+// Used for both the submitted decision and the returned outcome
+public sealed record DurableApprovalDecision
 {
     public string RequestId { get; init; } = string.Empty;     // must match pending request
     public bool Approved { get; init; }
-    public string? Comment { get; init; }                      // optional reviewer note
-}
-```
-
-### ApprovalTicket
-
-```csharp
-public sealed record ApprovalTicket
-{
-    public string RequestId { get; init; } = string.Empty;
-    public bool Approved { get; init; }
-    public string? Comment { get; init; }                      // reviewer comment or timeout message
+    public string? Reason { get; init; }                       // reviewer note or timeout message
 }
 ```
 
@@ -434,15 +426,15 @@ The `samples/HumanInTheLoop/` sample implements a full email assistant with HITL
 var sendEmailTool = AIFunctionFactory.Create(
     async (string to, string subject, string body) =>
     {
-        var ticket = await TemporalAgentContext.Current.RequestApprovalAsync(
-            new ApprovalRequest
+        var decision = await TemporalAgentContext.Current.RequestApprovalAsync(
+            new DurableApprovalRequest
             {
-                Action  = $"Send email to {to}",
-                Details = $"Subject: {subject}\n\nBody:\n{body}"
+                RequestId   = Guid.NewGuid().ToString("N"),
+                Description = $"Send email to {to} — Subject: {subject}\n\nBody:\n{body}"
             });
 
-        if (!ticket.Approved)
-            return $"Email to {to} was rejected ({ticket.Comment ?? "no reason"}).";
+        if (!decision.Approved)
+            return $"Email to {to} was rejected ({decision.Reason ?? "no reason"}).";
 
         // Send the email
         return $"Email sent to {to}.";
@@ -477,11 +469,11 @@ while (!agentTask.IsCompleted)
 
     // Display approval request and prompt for decision
     var approved = choice == "approve";
-    await client.SubmitApprovalAsync(sessionId, new ApprovalDecision
+    await client.SubmitApprovalAsync(sessionId, new DurableApprovalDecision
     {
         RequestId = pending.RequestId,
         Approved  = approved,
-        Comment   = approved ? null : reason
+        Reason    = approved ? null : reason
     });
 }
 
@@ -498,9 +490,8 @@ dotnet run --project samples/HumanInTheLoop
 
 ## References
 
-- `src/Temporalio.Extensions.Agents/ApprovalRequest.cs` — request type
-- `src/Temporalio.Extensions.Agents/ApprovalDecision.cs` — decision type
-- `src/Temporalio.Extensions.Agents/ApprovalTicket.cs` — resolved outcome type
+- `src/Temporalio.Extensions.AI/DurableApprovalRequest.cs` — request type
+- `src/Temporalio.Extensions.AI/DurableApprovalDecision.cs` — decision and outcome type
 - `src/Temporalio.Extensions.Agents/AgentWorkflow.cs` — HITL update/query handlers
 - `src/Temporalio.Extensions.Agents/TemporalAgentContext.cs` — `RequestApprovalAsync` for tools
 - `samples/HumanInTheLoop/` — complete working example

@@ -88,9 +88,7 @@ TemporalAgents/
 │       ├── IAgentRouter.cs                 # Routing abstraction
 │       ├── AIModelAgentRouter.cs               # LLM-backed router implementation
 │       ├── AgentDescriptor.cs              # Name+description for routing
-│       ├── ApprovalRequest.cs              # HITL: request type
-│       ├── ApprovalDecision.cs             # HITL: decision from human
-│       ├── ApprovalTicket.cs               # HITL: ticket returned to requester
+│       │   # HITL types: DurableApprovalRequest / DurableApprovalDecision (from Temporalio.Extensions.AI)
 │       ├── ExecuteAgentResult.cs           # Internal: wraps AgentResponse + StateBag
 │       ├── State/                          # Conversation history serialization
 │       └── ...
@@ -305,16 +303,16 @@ var results = await TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync(new[
 
 From inside an **agent tool** (running inside an activity):
 ```csharp
-var ticket = await TemporalAgentContext.Current.RequestApprovalAsync(
-    new ApprovalRequest { Action = "Delete records", Details = "Irreversible." });
-if (!ticket.Approved) throw new OperationCanceledException("Rejected.");
+var decision = await TemporalAgentContext.Current.RequestApprovalAsync(
+    new DurableApprovalRequest { RequestId = Guid.NewGuid().ToString("N"), Description = "Delete records — Irreversible." });
+if (!decision.Approved) throw new OperationCanceledException("Rejected.");
 ```
 
 From an **external system** (e.g., an admin dashboard):
 ```csharp
 var pending = await client.GetPendingApprovalAsync(sessionId);
-var ticket  = await client.SubmitApprovalAsync(sessionId,
-    new ApprovalDecision { RequestId = pending!.RequestId, Approved = true });
+var decision = await client.SubmitApprovalAsync(sessionId,
+    new DurableApprovalDecision { RequestId = pending!.RequestId, Approved = true });
 ```
 
 The workflow blocks on `WaitConditionAsync` during approval — the activity timeout on `RequestApprovalAsync` must be long enough to accommodate human review time.
@@ -377,6 +375,8 @@ When a worker crashes:
 - **OTel extension**: `Temporalio.Extensions.OpenTelemetry 1.11.1` — matches SDK version
 
 ### Microsoft Agent Framework
+- `Temporalio.Extensions.Agents` **depends on** `Temporalio.Extensions.AI` — no extra NuGet packages added since `Microsoft.Agents.AI` already pulls in `Microsoft.Extensions.AI` transitively
+- HITL types are now the canonical MEAI types: `DurableApprovalRequest` / `DurableApprovalDecision` (from `Temporalio.Extensions.AI`)
 - `AgentResponse`, `AIAgent`, `DelegatingAIAgent`, `AgentRunOptions` → `Microsoft.Agents.AI`
 - `ChatClientAgentRunOptions` → `Microsoft.Agents.AI` (not the Hosting package)
 - `AgentSessionStateBag.Count` — available, used to detect empty bag without serializing
@@ -415,8 +415,9 @@ When a worker crashes:
 - `TestChatClient` — `IChatClient` stub for AI tests returning `"Response: {lastMessage}"` with token counts
 
 ### Integration Tests (58 total — 51 Agents + 7 AI)
-- Agents tests require real Temporal server (`temporal server start-dev`)
-- AI tests use `WorkflowEnvironment.StartLocalAsync()` (embedded server — no external process needed)
+- Both test suites use `WorkflowEnvironment.StartLocalAsync()` (embedded server — no external process needed)
+- Agents tests use `TestEnvironmentHelper.StartLocalAsync()`, a thin wrapper that passes `--search-attribute` CLI args to pre-register the three custom search attributes (`AgentName`, `SessionCreatedAt`, `TurnCount`) required by `AgentWorkflow.UpsertTypedSearchAttributes`. Without pre-registration, the workflow fails with an opaque "unexpected workflow task failure" at runtime.
+- AI tests use a bare `WorkflowEnvironment.StartLocalAsync()` — `DurableChatWorkflow` uses no custom search attributes.
 - Location: `tests/Temporalio.Extensions.Agents.IntegrationTests/` and `tests/Temporalio.Extensions.AI.IntegrationTests/`
 
 ### InternalsVisibleTo
@@ -472,8 +473,8 @@ var results = await TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync(new[
 
 ### Pattern 4: HITL Approval (inside a tool)
 ```csharp
-var ticket = await TemporalAgentContext.Current.RequestApprovalAsync(
-    new ApprovalRequest { Action = "Deploy to production" });
+var decision = await TemporalAgentContext.Current.RequestApprovalAsync(
+    new DurableApprovalRequest { RequestId = Guid.NewGuid().ToString("N"), Description = "Deploy to production" });
 ```
 
 ### Pattern 5: Workflow Sub-Agent
@@ -518,7 +519,7 @@ just info         # Show solution, version, config, artifacts path
 just test-unit          # Agents unit tests (214) — no server required
 just test-unit-ai       # AI unit tests (78) — no server required
 just test-unit-all      # All unit tests (292) — no server required
-just test-integration   # Agents integration tests (51) — requires: temporal server start-dev
+just test-integration   # Agents integration tests (51) — uses embedded server via TestEnvironmentHelper
 just test-integration-ai # AI integration tests (7) — uses embedded server (no external process)
 just test               # All suites
 
@@ -526,10 +527,8 @@ just test-coverage      # Unit tests with XPlat Code Coverage (output: artifacts
 just test-filter "FullyQualifiedName~Router"  # Run tests matching a filter expression
 ```
 
-> Integration tests require a running Temporal server:
-> ```bash
-> temporal server start-dev --namespace default
-> ```
+> Both integration test suites use the embedded Temporal server and require no external process.
+> Agents tests use `TestEnvironmentHelper.StartLocalAsync()` to pre-register custom search attributes.
 
 ### Packaging
 

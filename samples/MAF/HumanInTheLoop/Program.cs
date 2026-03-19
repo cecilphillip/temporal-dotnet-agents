@@ -15,13 +15,13 @@
 //   2. Agent decides to call the send_email tool
 //   3. send_email tool calls TemporalAgentContext.RequestApprovalAsync(...)
 //      └─ sends a [WorkflowUpdate] to AgentWorkflow.RequestApprovalAsync
-//         └─ workflow stores the ApprovalRequest and blocks on WaitConditionAsync
+//         └─ workflow stores the DurableApprovalRequest and blocks on WaitConditionAsync
 //            (the activity — and therefore proxy.RunAsync — stays suspended here)
 //   4. This console polls GetPendingApprovalAsync() every second ([WorkflowQuery])
 //   5. When a request appears, the human types "approve" or "reject"
 //   6. SubmitApprovalAsync sends a [WorkflowUpdate] that sets _approvalDecision
 //      └─ WaitConditionAsync unblocks
-//      └─ RequestApprovalAsync returns an ApprovalTicket to the tool
+//      └─ RequestApprovalAsync returns a DurableApprovalDecision to the tool
 //   7. Tool either completes the action or returns a cancellation message
 //   8. Agent generates a final response — proxy.RunAsync finally returns
 //
@@ -39,7 +39,7 @@ using OpenAI;
 using OpenAI.Chat;
 using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Agents.Session;
-using Temporalio.Extensions.Agents.State;
+using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Hosting;
 
 // OpenAI.Chat also defines ChatMessage and ChatRole; pin to the MEAI versions
@@ -65,7 +65,7 @@ OpenAIClient openAiClient = new(new ApiKeyCredential(apiKey), openAiOptions);
 
 // ── send_email tool — the heart of this sample ────────────────────────────────
 // Before sending, the tool suspends the activity by sending a structured
-// ApprovalRequest to the workflow. Execution resumes only when a human
+// DurableApprovalRequest to the workflow. Execution resumes only when a human
 // submits a decision via ITemporalAgentClient.SubmitApprovalAsync.
 var sendEmailTool = AIFunctionFactory.Create(
     async (
@@ -77,15 +77,15 @@ var sendEmailTool = AIFunctionFactory.Create(
 
         // This call sends a [WorkflowUpdate] and blocks until SubmitApprovalAsync
         // is called from the approval console below.
-        var ticket = await ctx.RequestApprovalAsync(new ApprovalRequest
+        var decision = await ctx.RequestApprovalAsync(new DurableApprovalRequest
         {
-            Action  = $"Send email to {to}",
-            Details = $"Subject: {subject}\n\nBody:\n{body}"
+            RequestId   = Guid.NewGuid().ToString("N"),
+            Description = $"Send email to {to}\nSubject: {subject}\n\nBody:\n{body}"
         });
 
-        if (!ticket.Approved)
+        if (!decision.Approved)
         {
-            var reason = ticket.Comment ?? "no reason given";
+            var reason = decision.Reason ?? "no reason given";
             return $"Email to {to} was rejected by reviewer ({reason}). Not sent.";
         }
 
@@ -179,7 +179,7 @@ while (true)
 
         if (agentTask.IsCompleted) break;
 
-        ApprovalRequest? pending = null;
+        DurableApprovalRequest? pending = null;
         try
         {
             pending = await client.GetPendingApprovalAsync(sessionId);
@@ -200,11 +200,9 @@ while (true)
         Console.WriteLine("  ╔══════════════════════════════════════════════╗");
         Console.WriteLine("  ║            ⚠  APPROVAL REQUIRED             ║");
         Console.WriteLine("  ╠══════════════════════════════════════════════╣");
-        Console.WriteLine($"  ║  Action: {pending.Action,-37}║");
-        if (pending.Details is { } details)
+        if (pending.Description is { } desc)
         {
-            Console.WriteLine("  ╠══════════════════════════════════════════════╣");
-            foreach (var line in details.Split('\n'))
+            foreach (var line in desc.Split('\n'))
                 Console.WriteLine($"  ║  {line,-44}║");
         }
         Console.WriteLine("  ╚══════════════════════════════════════════════╝");
@@ -227,11 +225,11 @@ while (true)
 
         // SubmitApprovalAsync is a [WorkflowUpdate] — strongly consistent,
         // validates the RequestId, and unblocks WaitConditionAsync in the workflow.
-        await client.SubmitApprovalAsync(sessionId, new ApprovalDecision
+        await client.SubmitApprovalAsync(sessionId, new DurableApprovalDecision
         {
             RequestId = pending.RequestId,
             Approved  = choice == "approve",
-            Comment   = comment
+            Reason    = comment
         });
 
         Console.WriteLine(choice == "approve"

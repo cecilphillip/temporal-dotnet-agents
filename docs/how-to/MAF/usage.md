@@ -462,16 +462,16 @@ public class DataDeletionTool
     [Description("Deletes all records for the specified user")]
     public static async Task<string> DeleteUserDataAsync(string userId)
     {
-        var ticket = await TemporalAgentContext.Current.RequestApprovalAsync(
-            new ApprovalRequest
+        var decision = await TemporalAgentContext.Current.RequestApprovalAsync(
+            new DurableApprovalRequest
             {
-                Action  = "Delete all data for user",
-                Details = $"userId={userId}. This action is irreversible."
+                RequestId   = Guid.NewGuid().ToString("N"),
+                Description = $"Delete all data for user — userId={userId}. This action is irreversible."
             });
 
-        if (!ticket.Approved)
+        if (!decision.Approved)
         {
-            return $"Action rejected by reviewer: {ticket.Comment}";
+            return $"Action rejected by reviewer: {decision.Reason}";
         }
 
         // Proceed with deletion...
@@ -497,12 +497,11 @@ Poll the workflow from a UI, monitoring tool, or approval service:
 ITemporalAgentClient client = // resolved from DI
 var sessionId = new TemporalAgentSessionId("MyAgent", userId);
 
-ApprovalRequest? pending = await client.GetPendingApprovalAsync(sessionId);
+DurableApprovalRequest? pending = await client.GetPendingApprovalAsync(sessionId);
 
 if (pending is not null)
 {
-    Console.WriteLine($"Pending approval: {pending.Action}");
-    Console.WriteLine($"Details: {pending.Details}");
+    Console.WriteLine($"Pending approval: {pending.Description}");
     Console.WriteLine($"RequestId: {pending.RequestId}");
 }
 ```
@@ -510,20 +509,20 @@ if (pending is not null)
 ### Submitting a Decision (External System)
 
 ```csharp
-ApprovalTicket ticket = await client.SubmitApprovalAsync(
+DurableApprovalDecision decision = await client.SubmitApprovalAsync(
     sessionId,
-    new ApprovalDecision
+    new DurableApprovalDecision
     {
         RequestId = pending.RequestId,
         Approved  = true,
-        Comment   = "Reviewed and approved by operations team."
+        Reason    = "Reviewed and approved by operations team."
     });
 
-Console.WriteLine($"Decision submitted. Approved={ticket.Approved}");
+Console.WriteLine($"Decision submitted. Approved={decision.Approved}");
 ```
 
 `SubmitApprovalAsync` unblocks the tool in the workflow, and `RequestApprovalAsync` in the tool returns the same
-`ApprovalTicket`.
+`DurableApprovalDecision`.
 
 ---
 

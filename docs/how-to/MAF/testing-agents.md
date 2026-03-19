@@ -347,40 +347,40 @@ Integration tests cover both the timeout path and the happy path:
 
 ```csharp
 [Fact]
-public async Task RequestApproval_TimesOut_ReturnsRejectedTicket()
+public async Task RequestApproval_TimesOut_ReturnsRejectedDecision()
 {
     // Configure a 2-second approval timeout
     // ... (custom host with short ApprovalTimeout)
 
     // Send update that triggers approval request
     var handle = env.Client.GetWorkflowHandle<AgentWorkflow>(workflowId);
-    var ticket = await handle.ExecuteUpdateAsync<AgentWorkflow, ApprovalTicket>(
-        wf => wf.RequestApprovalAsync(new ApprovalRequest
+    var decision = await handle.ExecuteUpdateAsync<AgentWorkflow, DurableApprovalDecision>(
+        wf => wf.RequestApprovalAsync(new DurableApprovalRequest
         {
-            Action = "Test action",
-            Details = "Test details"
+            RequestId   = Guid.NewGuid().ToString("N"),
+            Description = "Test action — Test details"
         }));
 
-    Assert.False(ticket.Approved); // Timed out → rejected
+    Assert.False(decision.Approved); // Timed out → rejected
 }
 
 [Fact]
-public async Task SubmitApproval_BeforeTimeout_ReturnsApprovedTicket()
+public async Task SubmitApproval_BeforeTimeout_ReturnsApprovedDecision()
 {
     // Configure a 5-minute approval timeout
     // Start approval in background, then submit decision
 
-    var decision = new ApprovalDecision
+    var approvalDecision = new DurableApprovalDecision
     {
         RequestId = pending.RequestId,
-        Approved = true,
-        Comment = "Looks good"
+        Approved  = true,
+        Reason    = "Looks good"
     };
 
-    var ticket = await handle.ExecuteUpdateAsync<AgentWorkflow, ApprovalTicket>(
-        wf => wf.SubmitApprovalAsync(decision));
+    var decision = await handle.ExecuteUpdateAsync<AgentWorkflow, DurableApprovalDecision>(
+        wf => wf.SubmitApprovalAsync(approvalDecision));
 
-    Assert.True(ticket.Approved);
+    Assert.True(decision.Approved);
 }
 ```
 
