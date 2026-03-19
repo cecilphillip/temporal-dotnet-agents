@@ -1,22 +1,32 @@
 <Solution>
-  <Folder Name="/samples/BasicClientWorker/">
-    <Project Path="samples/SplitWorkerClient/Client/Client.csproj" />
-    <Project Path="samples/SplitWorkerClient/Worker/Worker.csproj" />
-  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Temporalio.Extensions.Agents/Temporalio.Extensions.Agents.csproj" />
+    <Project Path="src/Temporalio.Extensions.AI/Temporalio.Extensions.AI.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Temporalio.Extensions.Agents.Tests/Temporalio.Extensions.Agents.Tests.csproj" />
     <Project Path="tests/Temporalio.Extensions.Agents.IntegrationTests/Temporalio.Extensions.Agents.IntegrationTests.csproj" />
+    <Project Path="tests/Temporalio.Extensions.AI.Tests/Temporalio.Extensions.AI.Tests.csproj" />
+    <Project Path="tests/Temporalio.Extensions.AI.IntegrationTests/Temporalio.Extensions.AI.IntegrationTests.csproj" />
   </Folder>
-  <Folder Name="/samples/">
-    <Project Path="samples/BasicAgent/BasicAgent.csproj" />
-    <Project Path="samples/WorkflowOrchestration/WorkflowOrchestration.csproj" />
-    <Project Path="samples/EvaluatorOptimizer/EvaluatorOptimizer.csproj" />
-    <Project Path="samples/MultiAgentRouting/MultiAgentRouting.csproj" />
-    <Project Path="samples/HumanInTheLoop/HumanInTheLoop.csproj" />
-    <Project Path="samples/AmbientAgent/AmbientAgent.csproj" />
-    <Project Path="samples/WorkflowRouting/WorkflowRouting.csproj" />
+  <Folder Name="/samples/MEAI/">
+    <Project Path="samples/MEAI/DurableChat/DurableChat.csproj" />
+    <Project Path="samples/MEAI/DurableTools/DurableTools.csproj" />
+    <Project Path="samples/MEAI/OpenTelemetry/DurableOpenTelemetry.csproj" />
+    <Project Path="samples/MEAI/HumanInTheLoop/HumanInTheLoop.csproj" />
+    <Project Path="samples/MEAI/DurableEmbeddings/DurableEmbeddings.csproj" />
+  </Folder>
+  <Folder Name="/samples/MAF/">
+    <Project Path="samples/MAF/BasicAgent/BasicAgent.csproj" />
+    <Project Path="samples/MAF/WorkflowOrchestration/WorkflowOrchestration.csproj" />
+    <Project Path="samples/MAF/EvaluatorOptimizer/EvaluatorOptimizer.csproj" />
+    <Project Path="samples/MAF/MultiAgentRouting/MultiAgentRouting.csproj" />
+    <Project Path="samples/MAF/HumanInTheLoop/HumanInTheLoop.csproj" />
+    <Project Path="samples/MAF/AmbientAgent/AmbientAgent.csproj" />
+    <Project Path="samples/MAF/WorkflowRouting/WorkflowRouting.csproj" />
+  </Folder>
+  <Folder Name="/samples/MAF/SplitWorkerClient/">
+    <Project Path="samples/MAF/SplitWorkerClient/Client/Client.csproj" />
+    <Project Path="samples/MAF/SplitWorkerClient/Worker/Worker.csproj" />
   </Folder>
 </Solution>

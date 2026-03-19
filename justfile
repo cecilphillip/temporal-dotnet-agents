@@ -6,6 +6,8 @@ artifacts_dir := "artifacts/packages"
 coverage_dir := "artifacts/coverage"
 unit_tests_dir := "tests/Temporalio.Extensions.Agents.Tests"
 integration_tests_dir := "tests/Temporalio.Extensions.Agents.IntegrationTests"
+unit_tests_ai_dir := "tests/Temporalio.Extensions.AI.Tests"
+integration_tests_ai_dir := "tests/Temporalio.Extensions.AI.IntegrationTests"
 
 version := `dotnet tool run minver --default-pre-release-identifiers preview`
 
@@ -32,6 +34,8 @@ clean-source:
 clean-tests:
     dotnet clean {{unit_tests_dir}} --configuration {{configuration}} --nologo -v q
     dotnet clean {{integration_tests_dir}} --configuration {{configuration}} --nologo -v q
+    dotnet clean {{unit_tests_ai_dir}} --configuration {{configuration}} --nologo -v q
+    dotnet clean {{integration_tests_ai_dir}} --configuration {{configuration}} --nologo -v q
 
 # Restore NuGet packages
 restore:
@@ -45,14 +49,24 @@ build: restore
 build-debug: restore
     dotnet build {{solution}} --configuration Debug --no-restore
 
-# Run unit tests only (no Temporal server required)
+# Run unit tests only — Agents library (no Temporal server required)
 test-unit: build
     dotnet test {{unit_tests_dir}} \
         --configuration {{configuration}} \
         --no-build \
         --logger "console;verbosity=normal"
 
-# Run integration tests only (requires: temporal server start-dev)
+# Run unit tests only — AI library (no Temporal server required)
+test-unit-ai: build
+    dotnet test {{unit_tests_ai_dir}} \
+        --configuration {{configuration}} \
+        --no-build \
+        --logger "console;verbosity=normal"
+
+# Run all unit tests (Agents + AI)
+test-unit-all: test-unit test-unit-ai
+
+# Run integration tests only — Agents library (requires: temporal server start-dev)
 test-integration: build
     @echo "NOTE: Integration tests require a running Temporal server."
     @echo "      Start one with: temporal server start-dev --namespace default"
@@ -61,8 +75,15 @@ test-integration: build
         --no-build \
         --logger "console;verbosity=normal"
 
-# Run both unit and integration tests
-test: test-unit test-integration
+# Run integration tests only — AI library (uses in-process test server)
+test-integration-ai: build
+    dotnet test {{integration_tests_ai_dir}} \
+        --configuration {{configuration}} \
+        --no-build \
+        --logger "console;verbosity=normal"
+
+# Run both unit and integration tests (all libraries)
+test: test-unit-all test-integration test-integration-ai
 
 # Run unit tests with code coverage
 test-coverage: build
@@ -119,11 +140,11 @@ publish-github: pack
 # Alias: build
 compile: build
 
-# Alias: test-unit
+# Alias: test-unit (Agents only, for backward compatibility)
 verify: test-unit
 
-# Build + unit test (no server required)
-validate: build test-unit
+# Build + all unit tests (no server required)
+validate: build test-unit-all
 
-# Full local CI pipeline: clean → build → test-unit → pack
-ci: clean build test-unit pack
+# Full local CI pipeline: clean → build → test-unit-all → pack
+ci: clean build test-unit-all pack

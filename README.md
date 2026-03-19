@@ -1,163 +1,129 @@
-# Temporalio.Extensions.Agents
+# TemporalAgents
 
-A [Temporal](https://temporal.io/) integration for
-the [Microsoft Agent Framework](https://github.com/microsoft/agents) (`Microsoft.Agents.AI`). This library provides
-durable, stateful AI agent sessions backed by Temporal workflows.
+Temporal .NET SDK integrations for building durable AI applications. Two packages, two levels of abstraction:
+
+| Package | Description |
+|---------|-------------|
+| [`Temporalio.Extensions.AI`](src/Temporalio.Extensions.AI/README.md) | Make any `IChatClient` durable — no Agent Framework required |
+| [`Temporalio.Extensions.Agents`](src/Temporalio.Extensions.Agents/README.md) | Durable agent sessions built on Microsoft Agent Framework (`Microsoft.Agents.AI`) |
+
+Both packages give AI workloads **durability by default** — conversation history, LLM calls, and tool invocations are persisted in Temporal's event history and replayed deterministically after crashes or restarts.
 
 ## Overview
 
-Temporal gives AI agents **durability by default** — every agent session maps to a long-lived workflow whose state
-survives process crashes and restarts. Conversation history, tool calls, and even human-in-the-loop approval gates are
-all persisted in Temporal's event history and replayed deterministically.
+### `Temporalio.Extensions.AI`
 
-Key benefits over in-memory agent frameworks:
+A lightweight middleware layer for [Microsoft.Extensions.AI (MEAI)](https://learn.microsoft.com/en-us/dotnet/ai/ai-extensions). Wraps any `IChatClient` with Temporal durability via a `DelegatingChatClient` middleware. No agent framework, no heavy abstractions — just MEAI pipelines made crash-resilient.
 
-- **Request/Response via `[WorkflowUpdate]`** — direct response, no polling
-- **Long sessions** — continue-as-new transfers history to fresh runs automatically
-- **Observability** — full Temporal Web UI, event history, and distributed tracing
-- **Multi-agent orchestration** — first-class workflow fan-out and routing
+**Start here if:** you are already using MEAI's `IChatClient` directly and want Temporal durability without adopting the full Agent Framework.
 
-## Feature Highlights
-
-- Durable multi-turn conversations with automatic history management
-- LLM-powered routing (`IAgentRouter` / `AIModelAgentRouter`)
-- Parallel agent execution inside workflows (`ExecuteAgentsInParallelAsync`)
-- Human-in-the-loop approval gates via `[WorkflowUpdate]`
-- Typed structured output with `RunAsync<T>` (markdown fence stripping + retry)
-- Recurring and one-time scheduled agent runs
-- MCP tool integration via async agent factory
-- External memory with `AIContextProvider` and `AgentSessionStateBag` persistence
-- Streaming responses via `IAgentResponseHandler`
-- OpenTelemetry distributed tracing (two-layer span hierarchy + search attributes)
-
-## How It Works
-
-```
-External Caller
-    │
-    │  ExecuteUpdateAsync (RunRequest)
-    ▼
-AgentWorkflow (long-lived workflow)
-    │
-    │  ExecuteActivityAsync
-    ▼
-AgentActivities.ExecuteAgentAsync
-    │
-    └─► Real AIAgent (e.g., ChatClientAgent backed by Azure OpenAI)
+```bash
+dotnet add package Temporalio.Extensions.AI
 ```
 
-Each agent session maps to a long-lived Temporal **workflow** (`AgentWorkflow`). When an external caller sends a
-message, it uses a Temporal **Update** — a durable, acknowledged request/response primitive — to deliver the message and
-receive the agent's response in a single call. All AI inference runs inside Temporal **activities**, preserving
-determinism.
+[Full documentation →](src/Temporalio.Extensions.AI/README.md)
 
-## Prerequisites
+### `Temporalio.Extensions.Agents`
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download) or later
-- A running [Temporal server](https://docs.temporal.io/cli#start-dev) (`temporal server start-dev`)
-- An LLM provider (e.g., Azure OpenAI, OpenAI)
+A Temporal integration for [Microsoft Agent Framework](https://github.com/microsoft/agents) (`Microsoft.Agents.AI`). Each `AIAgent` session maps to a long-lived Temporal workflow with full session management: history, `StateBag` persistence, HITL approval gates, LLM-powered routing, and parallel agent fan-out.
 
-Install the NuGet package:
+**Start here if:** you are building with the Microsoft Agent Framework and want durable, stateful, multi-agent sessions.
 
 ```bash
 dotnet add package Temporalio.Extensions.Agents
 ```
 
-## Getting Started
+[Full documentation →](src/Temporalio.Extensions.Agents/README.md)
 
-### 1. Register an Agent
+## How It Works
 
-```csharp
-using Microsoft.Agents.AI;
-using Temporalio.Extensions.Agents;
-using Temporalio.Extensions.Hosting;
+Both packages share the same core pattern: LLM calls run inside Temporal **activities** (never directly in workflows), and conversation turns are delivered via Temporal **Updates** — a durable, acknowledged request/response primitive that eliminates polling.
 
-var builder = WebApplication.CreateBuilder(args);
-
-var chatAgent = new ChatClientAgent(chatClient, "MyAgent")
-{
-    Instructions = "You are a helpful assistant."
-};
-
-builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .AddTemporalAgents(opts =>
-    {
-        opts.AddAIAgent(chatAgent, timeToLive: TimeSpan.FromHours(24));
-    });
+```
+External Caller
+    │
+    │  WorkflowUpdate (chat turn / agent message)
+    ▼
+Temporal Workflow  ←── persists history, serializes turns, handles ContinueAsNew
+    │
+    │  ExecuteActivityAsync
+    ▼
+Activity  ←── calls real IChatClient / AIAgent — retried automatically on failure
 ```
 
-### 2. Send a Message
+## Prerequisites
 
-```csharp
-// Resolve the agent proxy from DI
-AIAgent proxy = services.GetTemporalAgentProxy("MyAgent");
-
-// Create a session and send a message
-var session = await proxy.CreateSessionAsync();
-var response = await proxy.RunAsync("Hello, agent!", session);
-
-Console.WriteLine(response.Messages[0].Text);
-```
-
-### 3. Run a Sample
-
-```bash
-# Start Temporal (in a separate terminal)
-temporal server start-dev --namespace default
-
-# Run a sample
-dotnet run --project samples/BasicAgent
-```
+- [.NET 10 SDK](https://dotnet.microsoft.com/download) or later
+- A running [Temporal server](https://docs.temporal.io/cli#start-dev): `temporal server start-dev`
+- An LLM provider (e.g., Azure OpenAI, OpenAI, Ollama)
 
 ## Samples
 
-| Sample | Description |
-|--------|-------------|
-| [BasicAgent](samples/BasicAgent) | External caller pattern — send messages to an agent from a console app |
-| [SplitWorkerClient](samples/SplitWorkerClient) | Worker and client in separate processes |
-| [WorkflowOrchestration](samples/WorkflowOrchestration) | Sub-agent orchestration inside a Temporal workflow |
-| [EvaluatorOptimizer](samples/EvaluatorOptimizer) | Generator + evaluator loop pattern |
-| [MultiAgentRouting](samples/MultiAgentRouting) | LLM-powered routing, parallel execution, and OpenTelemetry |
-| [HumanInTheLoop](samples/HumanInTheLoop) | HITL approval gates via `[WorkflowUpdate]` |
+| Sample | Package | Description |
+|--------|---------|-------------|
+| [DurableChat](samples/MEAI/DurableChat) | `Extensions.AI` | Multi-turn durable chat with `DurableChatSessionClient` and tool functions |
+| [DurableTools](samples/MEAI/DurableTools) | `Extensions.AI` | Per-tool activity dispatch with `AsDurable()` and `AddDurableTools` |
+| [OpenTelemetry](samples/MEAI/OpenTelemetry) | `Extensions.AI` | OTel tracing — span hierarchy, ActivitySource names, and token attributes |
+| [HumanInTheLoop](samples/MEAI/HumanInTheLoop) | `Extensions.AI` | HITL approval gates via `RequestApprovalAsync` and `SubmitApprovalAsync` |
+| [DurableEmbeddings](samples/MEAI/DurableEmbeddings) | `Extensions.AI` | `IEmbeddingGenerator` wrapped for durable per-chunk activity dispatch |
+| [BasicAgent](samples/MAF/BasicAgent) | `Extensions.Agents` | External caller pattern — send messages to an agent from a console app |
+| [SplitWorkerClient](samples/MAF/SplitWorkerClient) | `Extensions.Agents` | Worker and client in separate processes |
+| [WorkflowOrchestration](samples/MAF/WorkflowOrchestration) | `Extensions.Agents` | Sub-agent orchestration inside a Temporal workflow |
+| [EvaluatorOptimizer](samples/MAF/EvaluatorOptimizer) | `Extensions.Agents` | Generator + evaluator loop pattern |
+| [MultiAgentRouting](samples/MAF/MultiAgentRouting) | `Extensions.Agents` | LLM-powered routing, parallel execution, and OpenTelemetry |
+| [HumanInTheLoop](samples/MAF/HumanInTheLoop) | `Extensions.Agents` | HITL approval gates via `[WorkflowUpdate]` |
 
-## Core Components
+```bash
+# Start Temporal (separate terminal)
+temporal server start-dev --namespace default
 
-- **`AgentWorkflow`** — Long-lived workflow with `[WorkflowUpdate]` for request/response
-- **`AgentJobWorkflow`** — Fire-and-forget workflow for scheduled and deferred runs
-- **`TemporalAIAgent`** — For use inside Temporal workflows (via `GetAgent`)
-- **`TemporalAIAgentProxy`** — For external callers (via `GetTemporalAgentProxy`)
-- **`ITemporalAgentClient`** — Update-based client with routing, scheduling, and HITL support
-- **`TemporalAgentContext`** — Async-local context for agent tools running inside activities
-- **`StructuredOutputExtensions`** — `RunAsync<T>` with markdown fence stripping and retry
+# Run a sample
+dotnet run --project samples/MEAI/DurableChat
+dotnet run --project samples/MAF/BasicAgent
+```
 
-## Documentation
+## Repository Structure
 
-### How-To Guides
+```
+TemporalAgents/
+├── src/
+│   ├── Temporalio.Extensions.AI/       # MEAI IChatClient middleware
+│   └── Temporalio.Extensions.Agents/   # Microsoft Agent Framework integration
+├── tests/
+│   ├── Temporalio.Extensions.AI.Tests/
+│   ├── Temporalio.Extensions.AI.IntegrationTests/
+│   ├── Temporalio.Extensions.Agents.Tests/
+│   └── Temporalio.Extensions.Agents.IntegrationTests/
+├── samples/
+│   ├── MEAI/                           # Microsoft.Extensions.AI samples
+│   │   ├── DurableChat/
+│   │   ├── DurableTools/
+│   │   ├── OpenTelemetry/
+│   │   ├── HumanInTheLoop/
+│   │   └── DurableEmbeddings/
+│   └── MAF/                            # Microsoft Agent Framework samples
+│       ├── BasicAgent/
+│       ├── SplitWorkerClient/
+│       ├── WorkflowOrchestration/
+│       ├── EvaluatorOptimizer/
+│       ├── MultiAgentRouting/
+│       ├── HumanInTheLoop/
+│       ├── WorkflowRouting/
+│       └── AmbientAgent/
+└── docs/
+    ├── how-to/                         # Practical guides (Agents library)
+    └── architecture/                   # Design and internals (Agents library)
+```
 
-- [Usage Guide](docs/how-to/usage.md) — structured output, orchestration, HITL, scheduling, OTel, and more
-- [Routing Patterns](docs/how-to/routing.md) — LLM-powered, static, and dynamic routing
-- [Testing Agents](docs/how-to/testing-agents.md) — unit and integration testing patterns
-- [Observability](docs/how-to/observability.md) — OpenTelemetry spans, search attributes, and operational queries
-- [Scheduling](docs/how-to/scheduling.md) — recurring and one-time agent runs, lifecycle management
-- [Structured Output](docs/how-to/structured-output.md) — typed responses with `RunAsync<T>`, fence stripping, and retry
-- [Human-in-the-Loop](docs/how-to/hitl-patterns.md) — approval gates, dashboards, timeouts, and testing
-- [History & Token Optimization](docs/how-to/prompt-caching.md) — managing conversation history and reducing costs
-- [Do's and Don'ts](docs/how-to/dos-and-donts.md) — common mistakes and best practices
+## Building
 
-### Architecture
-
-- [Durability & Determinism](docs/architecture/durability-and-determinism.md) — how replay preserves completed agent calls
-- [Agent Sessions & Workflow Loop](docs/architecture/agent-sessions-and-workflow-loop.md) — session lifecycle, message flow, crash recovery
-- [Session StateBag & Context Providers](docs/architecture/session-statebag-and-context-providers.md) — AIContextProvider integration and StateBag persistence
-- [Pub/Sub & Event-Driven Patterns](docs/architecture/pub-sub-and-event-driven.md) — Temporal equivalents of pub/sub fan-out
-- [Agent-to-Agent Communication](docs/architecture/agent-to-agent-communication.md) — sub-agent calls, parallel fan-out, and cross-workflow signaling
-
-### External References
-
-- [Temporal Documentation](https://docs.temporal.io/)
-- [Temporal .NET SDK](https://github.com/temporalio/sdk-dotnet)
-- [Microsoft Agent Framework](https://github.com/microsoft/agents)
+```bash
+just build        # Restore + Release build
+just test-unit    # Unit tests (no server required)
+just test         # Unit + integration tests (requires temporal server start-dev)
+just pack         # Build NuGet packages → artifacts/packages/
+just ci           # Full pipeline: clean → build → test-unit → pack
+```
 
 ## License
 

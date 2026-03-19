@@ -1,6 +1,8 @@
 # TemporalAgents Project Guide
 
-**A Temporal .NET SDK integration with Microsoft Agent Framework for durable AI agent orchestration.**
+**Two Temporal .NET SDK integrations for durable AI applications:**
+- `Temporalio.Extensions.Agents` — durable agent sessions built on Microsoft Agent Framework (`Microsoft.Agents.AI`)
+- `Temporalio.Extensions.AI` — makes any plain `IChatClient` (MEAI) durable, no Agent Framework required
 
 This document provides essential context for working with the TemporalAgents codebase. It covers project structure, architecture, key patterns, and important behavioral guarantees.
 
@@ -10,8 +12,10 @@ This document provides essential context for working with the TemporalAgents cod
 
 - **Language**: C# (.NET 10.0)
 - **Solution File**: `TemporalAgents.slnx` (.slnx format, not .sln)
-- **Status**: Complete — 139 unit tests + 51 integration tests (190 total, all pass)
-- **Purpose**: Port of `Microsoft.Agents.AI.DurableTask` pattern to Temporal workflows instead of DurableTask entities
+- **Status**: Complete — 292 unit tests + 58 integration tests (350 total, all pass)
+  - Agents: 214 unit + 51 integration
+  - AI: 78 unit + 7 integration
+- **Purpose**: Two complementary libraries — `Extensions.Agents` ports `Microsoft.Agents.AI.DurableTask` to Temporal; `Extensions.AI` adds MEAI-level durability without the Agent Framework
 - **Key Pattern**: `[WorkflowUpdate]` replaces Signal+Query+polling for request/response
 
 ---
@@ -21,19 +25,43 @@ This document provides essential context for working with the TemporalAgents cod
 ```
 TemporalAgents/
 ├── CLAUDE.md                               # This file
+├── README.md                               # Umbrella README linking to both libraries
 ├── docs/
-│   ├── architecture/                       # Internal design, guarantees, patterns
+│   ├── architecture/                       # Internal design, guarantees, patterns (Agents library)
 │   │   ├── durability-and-determinism.md
 │   │   ├── agent-sessions-and-workflow-loop.md
 │   │   ├── session-statebag-and-context-providers.md
 │   │   └── pub-sub-and-event-driven.md
-│   └── how-to/                             # Practical usage guides with code examples
+│   └── how-to/                             # Practical usage guides with code examples (Agents library)
 │       ├── usage.md
 │       └── routing.md
 ├── TemporalAgents.slnx                     # Solution file (use this, not .sln)
 │
 ├── src/
-│   └── Temporalio.Extensions.Agents/       # Main library
+│   ├── Temporalio.Extensions.Agents/       # Agent Framework integration library
+│   │   └── README.md                       # Library-specific docs
+│   └── Temporalio.Extensions.AI/           # MEAI IChatClient middleware library
+│       ├── README.md                       # Library-specific docs
+│       ├── DurableChatClient.cs            # DelegatingChatClient middleware
+│       ├── DurableChatWorkflow.cs          # [Workflow] managing session history + HITL
+│       ├── DurableChatActivities.cs        # [Activity] wrapping IChatClient.GetResponseAsync
+│       ├── DurableChatSessionClient.cs     # External entry point: ChatAsync, GetHistoryAsync, HITL
+│       ├── DurableExecutionOptions.cs      # TaskQueue, ActivityTimeout, RetryPolicy, etc.
+│       ├── DurableAIPayloadConverter.cs    # DurableAIDataConverter.Instance (AIJsonUtilities.DefaultOptions)
+│       ├── DurableAIFunction.cs            # DelegatingAIFunction wrapping tool calls as activities
+│       ├── DurableFunctionActivities.cs    # [Activity] resolving + invoking AIFunction from DI registry
+│       ├── DurableEmbeddingGenerator.cs    # DelegatingEmbeddingGenerator for IEmbeddingGenerator
+│       ├── DurableEmbeddingActivities.cs   # [Activity] wrapping IEmbeddingGenerator.GenerateAsync
+│       ├── DurableChatReducer.cs           # IChatReducer preserving full history in workflow state
+│       ├── DurableApprovalRequest.cs       # HITL request type (RequestId, FunctionName, Description)
+│       ├── DurableApprovalDecision.cs      # HITL decision type (RequestId, Approved, Reason)
+│       ├── DurableChatTelemetry.cs         # ActivitySource "Temporalio.Extensions.AI" + span constants
+│       ├── ChatClientBuilderExtensions.cs  # UseDurableExecution(), UseDurableReduction()
+│       ├── EmbeddingGeneratorBuilderExtensions.cs # UseDurableExecution() for embeddings
+│       ├── DurableAIServiceCollectionExtensions.cs # AddDurableAI(), AddDurableTools()
+│       ├── AIFunctionExtensions.cs         # AsDurable() extension on AIFunction
+│       └── TemporalChatOptionsExtensions.cs # WithActivityTimeout(), WithMaxRetryAttempts(), etc.
+
 │       ├── ServiceCollectionExtensions.cs  # GetTemporalAgentProxy, AddTemporalAgentProxies
 │       ├── TemporalWorkerBuilderExtensions.cs # [NEW API] .AddTemporalAgents() fluent builder
 │       ├── TemporalAgentsOptions.cs        # Configuration (internal ctor)
@@ -58,7 +86,7 @@ TemporalAgents/
 │       └── ...
 │
 ├── tests/
-│   ├── Temporalio.Extensions.Agents.Tests/       # 139 unit tests
+│   ├── Temporalio.Extensions.Agents.Tests/       # 214 unit tests
 │   │   ├── TemporalWorkerBuilderExtensionsTests.cs
 │   │   ├── AIModelAgentRouterTests.cs
 │   │   ├── RoutingOptionsTests.cs
@@ -71,21 +99,130 @@ TemporalAgents/
 │   │   │   └── CapturingChatClient.cs      # Test double: records ChatOptions
 │   │   └── ...
 │   │
-│   └── Temporalio.Extensions.Agents.IntegrationTests/ # 51 integration tests
-│       └── (use real Temporal server)
+│   ├── Temporalio.Extensions.Agents.IntegrationTests/ # 51 integration tests (real Temporal server)
+│   │
+│   ├── Temporalio.Extensions.AI.Tests/           # 78 unit tests
+│   │   ├── DurableExecutionOptionsTests.cs
+│   │   ├── DurableChatClientTests.cs
+│   │   ├── SerializationTests.cs
+│   │   ├── DurableAIDataConverterTests.cs
+│   │   ├── TemporalChatOptionsExtensionsTests.cs
+│   │   ├── DurableChatReducerTests.cs
+│   │   ├── DurableEmbeddingGeneratorTests.cs
+│   │   ├── DurableApprovalTests.cs
+│   │   └── ...
+│   │
+│   └── Temporalio.Extensions.AI.IntegrationTests/ # 7 integration tests (real Temporal server)
+│       └── Helpers/
+│           ├── TestChatClient.cs           # IChatClient stub returning canned responses
+│           └── IntegrationTestFixture.cs   # WorkflowEnvironment.StartLocalAsync() + hosted worker
 │
 └── samples/
-    ├── BasicAgent/                         # External caller pattern (legacy API)
-    ├── SplitWorkerClient/                  # Worker + Client in separate processes
-    ├── WorkflowOrchestration/              # Workflow sub-agent pattern (new API)
-    ├── EvaluatorOptimizer/                 # Generator+Evaluator loop pattern
-    ├── MultiAgentRouting/                  # Routing + parallel execution + OTel
-    └── HumanInTheLoop/                     # HITL approval gates via WorkflowUpdate
+    ├── MEAI/                               # Microsoft.Extensions.AI samples
+    │   ├── DurableChat/                    # Extensions.AI: multi-turn chat
+    │   ├── DurableTools/                   # Extensions.AI: per-tool activity dispatch via AsDurable()
+    │   ├── OpenTelemetry/                  # Extensions.AI: OTel tracing configuration
+    │   ├── HumanInTheLoop/                 # Extensions.AI: HITL approval gates
+    │   └── DurableEmbeddings/              # Extensions.AI: IEmbeddingGenerator in workflow context
+    └── MAF/                                # Microsoft Agent Framework samples
+        ├── BasicAgent/                     # Extensions.Agents: external caller pattern
+        ├── SplitWorkerClient/              # Extensions.Agents: worker + client in separate processes
+        ├── WorkflowOrchestration/          # Extensions.Agents: workflow sub-agent pattern
+        ├── EvaluatorOptimizer/             # Extensions.Agents: generator+evaluator loop
+        ├── MultiAgentRouting/              # Extensions.Agents: routing + parallel execution + OTel
+        ├── HumanInTheLoop/                 # Extensions.Agents: HITL approval gates via WorkflowUpdate
+        ├── WorkflowRouting/                # Extensions.Agents: routing inside a workflow
+        └── AmbientAgent/                   # Extensions.Agents: ambient agent pattern
 ```
 
 ---
 
-## Key Concepts
+## Temporalio.Extensions.AI — Key Concepts
+
+### Registration
+
+```csharp
+// 1. Connect Temporal client with MEAI-aware data converter (required for AIContent polymorphism)
+var client = await TemporalClient.ConnectAsync(new("localhost:7233")
+{
+    DataConverter = DurableAIDataConverter.Instance,
+    Namespace = "default"
+});
+builder.Services.AddSingleton<ITemporalClient>(client);
+
+// 2. Register IChatClient in DI — DurableChatActivities injects this on the worker side
+builder.Services.AddSingleton<IChatClient>(sp =>
+    openAiClient.GetChatClient("gpt-4o-mini")
+        .AsBuilder()
+        .UseFunctionInvocation()
+        .Build());
+
+// 3. Register durable AI on the worker (workflow + activities + DurableChatSessionClient)
+builder.Services
+    .AddHostedTemporalWorker("my-queue")
+    .AddDurableAI(opts =>
+    {
+        opts.ActivityTimeout = TimeSpan.FromMinutes(5);
+        opts.SessionTimeToLive = TimeSpan.FromHours(24);
+    });
+```
+
+### External Usage
+
+```csharp
+var sessionClient = host.Services.GetRequiredService<DurableChatSessionClient>();
+var response = await sessionClient.ChatAsync("conv-123",
+    [new ChatMessage(ChatRole.User, "Hello!")]);
+```
+
+### DurableAIDataConverter
+
+**Must** set `DurableAIDataConverter.Instance` on the Temporal client when using MEAI types. Without it, `FunctionCallContent`, `FunctionResultContent`, and other `AIContent` subtypes lose their `$type` discriminator and deserialize as base `AIContent` after round-tripping through workflow history.
+
+### Per-request Overrides
+
+```csharp
+var opts = new ChatOptions()
+    .WithActivityTimeout(TimeSpan.FromMinutes(10))
+    .WithMaxRetryAttempts(5)
+    .WithHeartbeatTimeout(TimeSpan.FromMinutes(3));
+```
+
+Keys live in `TemporalChatOptionsExtensions` as `public const string` constants.
+
+### Durable Tool Functions
+
+- `AddDurableTools(workerBuilder, params aiFunction[])` — registers one or more tools in `DurableFunctionRegistry` (resolved by name in `DurableFunctionActivities`); chains on `ITemporalWorkerServiceOptionsBuilder` after `AddDurableAI()`
+- `aiFunction.AsDurable()` — wraps as `DurableAIFunction`; passes through when not in workflow context (`Workflow.InWorkflow == false`)
+
+### Context Detection
+
+All middleware (`DurableChatClient`, `DurableAIFunction`, `DurableEmbeddingGenerator`, `DurableChatReducer`) uses `Workflow.InWorkflow` as the dispatch guard. `false` = pass through to inner; `true` = dispatch as Temporal activity.
+
+### HITL
+
+```csharp
+// From external system
+var pending = await sessionClient.GetPendingApprovalAsync("conv-123");
+await sessionClient.SubmitApprovalAsync("conv-123", new DurableApprovalDecision
+{
+    RequestId = pending!.RequestId,
+    Approved = true
+});
+```
+
+### Important Notes
+
+- `DurableChatActivities` is `internal` and registered as `AddSingletonActivities` — do not instantiate directly
+- `DurableFunctionRegistry` is `internal Dictionary<string, AIFunction>` (case-insensitive) populated at startup
+- Integration tests use `WorkflowEnvironment.StartLocalAsync()` (embedded Temporal CLI binary), not a separate server
+- `IChatClient` must be registered in DI **before** `AddDurableAI` — the activities constructor-inject it
+- Use `AddChatClient(innerClient).UseFunctionInvocation().Build()` (idiomatic MEAI DI pattern) instead of `AddSingleton<IChatClient>`; `UseDurableExecution()` chains onto the same builder
+- `DurableChatActivities` injects the **unkeyed** `IChatClient` — if using `AddKeyedChatClient`, also register an unkeyed alias or the activities will fail to resolve at startup
+
+---
+
+## Temporalio.Extensions.Agents — Key Concepts
 
 ### 1. Registration API
 
@@ -260,15 +397,17 @@ When a worker crashes:
 
 ## Testing Patterns
 
-### Unit Tests (139 total)
+### Unit Tests (292 total — 214 Agents + 78 AI)
 - **Framework**: xunit with `[Fact]` attributes
 - **Assertions**: `Assert.*` — `Assert.Throws<T>` requires **exact** type, not subtype (use `Assert.Throws<ArgumentNullException>` for null, not `ArgumentException`)
 - **Mocking**: Hand-written fakes/stubs preferred over Moq
 - `StubAIAgent` — implements `CreateSessionCoreAsync` returning `new TemporalAgentSession(TemporalAgentSessionId.WithRandomKey(Name ?? "stub"))`
+- `TestChatClient` — `IChatClient` stub for AI tests returning `"Response: {lastMessage}"` with token counts
 
-### Integration Tests (51 total)
-- Require real Temporal server (`temporal server start-dev`)
-- Location: `tests/Temporalio.Extensions.Agents.IntegrationTests/`
+### Integration Tests (58 total — 51 Agents + 7 AI)
+- Agents tests require real Temporal server (`temporal server start-dev`)
+- AI tests use `WorkflowEnvironment.StartLocalAsync()` (embedded server — no external process needed)
+- Location: `tests/Temporalio.Extensions.Agents.IntegrationTests/` and `tests/Temporalio.Extensions.AI.IntegrationTests/`
 
 ### InternalsVisibleTo
 - Via MSBuild: `<InternalsVisibleTo Include="TestProject" />` in `.csproj`
@@ -366,9 +505,12 @@ just info         # Show solution, version, config, artifacts path
 ### Testing
 
 ```bash
-just test-unit          # 139 unit tests — no server required
-just test-integration   # 51 integration tests — requires: temporal server start-dev
-just test               # Both suites (unit + integration)
+just test-unit          # Agents unit tests (214) — no server required
+just test-unit-ai       # AI unit tests (78) — no server required
+just test-unit-all      # All unit tests (292) — no server required
+just test-integration   # Agents integration tests (51) — requires: temporal server start-dev
+just test-integration-ai # AI integration tests (7) — uses embedded server (no external process)
+just test               # All suites
 
 just test-coverage      # Unit tests with XPlat Code Coverage (output: artifacts/packages/coverage/)
 just test-filter "FullyQualifiedName~Router"  # Run tests matching a filter expression
@@ -452,15 +594,19 @@ Pipeline defined in `.github/workflows/build.yml`. Three jobs:
 ```bash
 # All samples require: temporal server start-dev + OPENAI_API_KEY in appsettings.json
 
-dotnet run --project samples/BasicAgent/BasicAgent.csproj
-dotnet run --project samples/WorkflowOrchestration/WorkflowOrchestration.csproj
-dotnet run --project samples/EvaluatorOptimizer/EvaluatorOptimizer.csproj
-dotnet run --project samples/MultiAgentRouting/MultiAgentRouting.csproj
-dotnet run --project samples/HumanInTheLoop/HumanInTheLoop.csproj
+# Temporalio.Extensions.AI sample
+dotnet run --project samples/MEAI/DurableChat/DurableChat.csproj
+
+# Temporalio.Extensions.Agents samples
+dotnet run --project samples/MAF/BasicAgent/BasicAgent.csproj
+dotnet run --project samples/MAF/WorkflowOrchestration/WorkflowOrchestration.csproj
+dotnet run --project samples/MAF/EvaluatorOptimizer/EvaluatorOptimizer.csproj
+dotnet run --project samples/MAF/MultiAgentRouting/MultiAgentRouting.csproj
+dotnet run --project samples/MAF/HumanInTheLoop/HumanInTheLoop.csproj
 
 # SplitWorkerClient — run Worker first, then Client in a separate terminal
-dotnet run --project samples/SplitWorkerClient/Worker/Worker.csproj
-dotnet run --project samples/SplitWorkerClient/Client/Client.csproj
+dotnet run --project samples/MAF/SplitWorkerClient/Worker/Worker.csproj
+dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 ```
 
 ---
@@ -543,4 +689,4 @@ dotnet run --project samples/SplitWorkerClient/Client/Client.csproj
 
 ---
 
-**Last Updated**: 2026-03-13
+**Last Updated**: 2026-03-18
