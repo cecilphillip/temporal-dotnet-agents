@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.AI;
 using Temporalio.Extensions.AI;
 using Xunit;
 
@@ -29,8 +30,8 @@ public class HITLTypesTests
             Description = "Send email to alice@example.com"
         };
 
-        var json = JsonSerializer.Serialize(original);
-        var deserialized = JsonSerializer.Deserialize<DurableApprovalRequest>(json);
+        var json = JsonSerializer.Serialize(original, AIJsonUtilities.DefaultOptions);
+        var deserialized = JsonSerializer.Deserialize<DurableApprovalRequest>(json, AIJsonUtilities.DefaultOptions);
 
         Assert.NotNull(deserialized);
         Assert.Equal("req-123", deserialized.RequestId);
@@ -49,8 +50,8 @@ public class HITLTypesTests
             Reason = "Looks good."
         };
 
-        var json = JsonSerializer.Serialize(decision);
-        var deserialized = JsonSerializer.Deserialize<DurableApprovalDecision>(json);
+        var json = JsonSerializer.Serialize(decision, AIJsonUtilities.DefaultOptions);
+        var deserialized = JsonSerializer.Deserialize<DurableApprovalDecision>(json, AIJsonUtilities.DefaultOptions);
 
         Assert.NotNull(deserialized);
         Assert.Equal("req-123", deserialized.RequestId);
@@ -62,8 +63,8 @@ public class HITLTypesTests
     public void DurableApprovalDecision_NullOptionalFields_SerializeCorrectly()
     {
         var decision = new DurableApprovalDecision { RequestId = "req-789", Approved = false };
-        var json = JsonSerializer.Serialize(decision);
-        var deserialized = JsonSerializer.Deserialize<DurableApprovalDecision>(json);
+        var json = JsonSerializer.Serialize(decision, AIJsonUtilities.DefaultOptions);
+        var deserialized = JsonSerializer.Deserialize<DurableApprovalDecision>(json, AIJsonUtilities.DefaultOptions);
 
         Assert.Null(deserialized?.Reason);
     }
@@ -72,8 +73,8 @@ public class HITLTypesTests
     public void DurableApprovalRequest_NullOptionalFields_SerializeCorrectly()
     {
         var request = new DurableApprovalRequest { RequestId = "req-456" };
-        var json = JsonSerializer.Serialize(request);
-        var deserialized = JsonSerializer.Deserialize<DurableApprovalRequest>(json);
+        var json = JsonSerializer.Serialize(request, AIJsonUtilities.DefaultOptions);
+        var deserialized = JsonSerializer.Deserialize<DurableApprovalRequest>(json, AIJsonUtilities.DefaultOptions);
 
         Assert.NotNull(deserialized);
         Assert.Null(deserialized.FunctionName);
