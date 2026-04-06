@@ -110,6 +110,14 @@ public sealed class TemporalAgentContext
     /// Ensure <c>ActivityStartToCloseTimeout</c> is set to exceed your expected review time
     /// (e.g. <c>TimeSpan.FromHours(24)</c>) on the agent's <see cref="TemporalAgentsOptions"/>.
     /// </para>
+    /// <para>
+    /// <b>Cancellation risk:</b> if the activity is cancelled or times out while the workflow is
+    /// waiting for a human response, <c>_pendingApproval</c> remains set in the workflow state.
+    /// The workflow will then reject any new <c>RunAgentAsync</c> updates until the stale approval
+    /// is resolved. To recover, submit an explicit denial externally using
+    /// <see cref="ITemporalAgentClient.SubmitApprovalAsync"/> with a <see cref="DurableApprovalDecision"/>
+    /// whose <c>Approved</c> is <see langword="false"/>.
+    /// </para>
     /// </remarks>
     public async Task<DurableApprovalDecision> RequestApprovalAsync(
         DurableApprovalRequest request,

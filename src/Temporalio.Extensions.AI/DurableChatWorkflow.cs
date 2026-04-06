@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.AI;
@@ -13,14 +14,11 @@ namespace Temporalio.Extensions.AI;
 internal sealed class DurableChatWorkflow
 {
     private readonly List<ChatMessage> _history = [];
+    private readonly DurableApprovalMixin _approval = new();
     private bool _isProcessing;
     private bool _shutdownRequested;
     private DurableChatWorkflowInput? _input;
     private int _turnCount;
-
-    // ── HITL approval state ──────────────────────────────────────────────
-    private DurableApprovalRequest? _pendingApproval;
-    private DurableApprovalDecision? _approvalDecision;
 
     [WorkflowRun]
     public async Task RunAsync(DurableChatWorkflowInput input)
@@ -147,84 +145,43 @@ internal sealed class DurableChatWorkflow
     /// Validates a tool approval request before it enters workflow history.
     /// </summary>
     [WorkflowUpdateValidator(nameof(RequestApprovalAsync))]
-    public void ValidateRequestApproval(DurableApprovalRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (string.IsNullOrEmpty(request.RequestId))
-            throw new ArgumentException("RequestId must not be null or empty.");
-    }
+    public void ValidateRequestApproval(DurableApprovalRequest request) =>
+        _approval.ValidateRequestApproval(request);
 
     /// <summary>
     /// Blocks the workflow until a human submits a decision via <see cref="SubmitApprovalAsync"/>.
     /// Returns the decision as a <see cref="DurableApprovalDecision"/>.
     /// </summary>
     [WorkflowUpdate("RequestApproval")]
-    public async Task<DurableApprovalDecision> RequestApprovalAsync(DurableApprovalRequest request)
-    {
-        _pendingApproval = request;
-        _approvalDecision = null;
-
-        var timeout = _input?.ApprovalTimeout ?? TimeSpan.FromDays(7);
-        var conditionMet = await Workflow.WaitConditionAsync(
-            () => _approvalDecision is not null && _approvalDecision.RequestId == request.RequestId,
-            timeout: timeout);
-
-        if (!conditionMet)
-        {
-            // Timed out without human response.
-            _pendingApproval = null;
-            _approvalDecision = null;
-
-            return new DurableApprovalDecision
-            {
-                RequestId = request.RequestId,
-                Approved = false,
-                Reason = $"Approval timed out after {timeout.TotalHours:F0} hours with no human response.",
-            };
-        }
-
-        var decision = _approvalDecision!;
-        _pendingApproval = null;
-        _approvalDecision = null;
-
-        return decision;
-    }
+    public Task<DurableApprovalDecision> RequestApprovalAsync(DurableApprovalRequest request) =>
+        _approval.RequestApprovalAsync(
+            request,
+            approvalTimeout: _input?.ApprovalTimeout ?? TimeSpan.FromDays(7),
+            onRequested: req => Workflow.Logger.LogInformation(
+                "[{ConversationId}] Approval requested (RequestId: {RequestId}, Description: {Description})",
+                Workflow.Info.WorkflowId, req.RequestId, req.Description ?? req.RequestId),
+            onResolved: d => Workflow.Logger.LogInformation(
+                "[{ConversationId}] Approval resolved (RequestId: {RequestId}, Approved: {Approved})",
+                Workflow.Info.WorkflowId, d.RequestId, d.Approved));
 
     /// <summary>
     /// Validates a submitted approval decision.
     /// </summary>
     [WorkflowUpdateValidator(nameof(SubmitApprovalAsync))]
-    public void ValidateSubmitApproval(DurableApprovalDecision decision)
-    {
-        ArgumentNullException.ThrowIfNull(decision);
-
-        if (_pendingApproval is null)
-        {
-            throw new InvalidOperationException(
-                "No approval request is pending. Ensure RequestApprovalAsync was called first.");
-        }
-
-        if (_pendingApproval.RequestId != decision.RequestId)
-        {
-            throw new InvalidOperationException(
-                $"Decision RequestId '{decision.RequestId}' does not match pending request '{_pendingApproval.RequestId}'.");
-        }
-    }
+    public void ValidateSubmitApproval(DurableApprovalDecision decision) =>
+        _approval.ValidateSubmitApproval(decision);
 
     /// <summary>
     /// Submits the human decision for the pending approval request.
     /// Unblocks <see cref="RequestApprovalAsync"/>.
     /// </summary>
     [WorkflowUpdate("SubmitApproval")]
-    public Task<DurableApprovalDecision> SubmitApprovalAsync(DurableApprovalDecision decision)
-    {
-        _approvalDecision = decision;
-        return Task.FromResult(decision);
-    }
+    public Task<DurableApprovalDecision> SubmitApprovalAsync(DurableApprovalDecision decision) =>
+        Task.FromResult(_approval.SubmitApprovalAsync(decision));
 
     /// <summary>
     /// Returns the currently pending approval request, or null if none.
     /// </summary>
     [WorkflowQuery("GetPendingApproval")]
-    public DurableApprovalRequest? GetPendingApproval() => _pendingApproval;
+    public DurableApprovalRequest? GetPendingApproval() => _approval.GetPendingApproval();
 }
