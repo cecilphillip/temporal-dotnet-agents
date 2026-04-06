@@ -22,6 +22,7 @@ The rule of thumb: if your code just *calls* `ChatAsync` or `GetHistoryAsync`, u
 The right move is to write your application code against `IDurableChatSessionClient` and inject a stub in tests:
 
 ```csharp
+// Client
 // Production service
 public class ConversationService(IDurableChatSessionClient client)
 {
@@ -37,6 +38,7 @@ public class ConversationService(IDurableChatSessionClient client)
 ```
 
 ```csharp
+// Test
 // Stub for unit tests
 public class StubChatSessionClient : IDurableChatSessionClient
 {
@@ -82,6 +84,7 @@ public async Task AskAsync_Returns_AssistantText()
 Register the stub in DI with the interface type:
 
 ```csharp
+// Test
 services.AddSingleton<IDurableChatSessionClient, StubChatSessionClient>();
 ```
 
@@ -104,6 +107,7 @@ Integration tests use `WorkflowEnvironment.StartLocalAsync()`, which starts an e
 Share the `WorkflowEnvironment` and the hosted worker across all tests in a class via `IClassFixture<T>`. Starting a local server takes a couple of seconds — sharing it amortizes that cost.
 
 ```csharp
+// Test
 public sealed class IntegrationTestFixture : IAsyncLifetime
 {
     private IHost? _host;
@@ -149,6 +153,7 @@ public sealed class IntegrationTestFixture : IAsyncLifetime
 Register a deterministic `IChatClient` stub so tests are not coupled to a live LLM. The pattern used in this library's own integration tests:
 
 ```csharp
+// Test
 public sealed class TestChatClient : IChatClient
 {
     private int _callCount;
@@ -199,6 +204,7 @@ public sealed class TestChatClient : IChatClient
 ### Writing integration tests
 
 ```csharp
+// Test
 public class DurableChatSessionTests(IntegrationTestFixture fixture)
     : IClassFixture<IntegrationTestFixture>
 {
@@ -277,4 +283,4 @@ just test-integration-ai
 just test
 ```
 
-The AI integration tests use `WorkflowEnvironment.StartLocalAsync()`, which downloads and runs an embedded Temporal CLI binary. No separate `temporal server start-dev` process is needed for the AI integration tests. The Agents integration tests (in `Temporalio.Extensions.Agents.IntegrationTests`) **do** require an external server — see `just test-integration`.
+Both test suites use an embedded Temporal server — no separate `temporal server start-dev` process is needed for either. The AI integration tests use `WorkflowEnvironment.StartLocalAsync()` directly; the Agents integration tests use `TestEnvironmentHelper.StartLocalAsync()`, a thin wrapper that pre-registers the custom search attributes required by `AgentWorkflow`.
