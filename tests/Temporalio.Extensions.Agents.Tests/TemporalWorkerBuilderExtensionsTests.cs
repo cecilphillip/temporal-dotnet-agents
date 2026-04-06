@@ -198,6 +198,7 @@ public class TemporalWorkerBuilderExtensionsTests
     {
         // Arrange
         var services = new ServiceCollection();
+        services.AddLogging(); // required: DurableAIClientOptionsConfigurator/DurableAIWorkerClientConfigurator inject ILogger
         var fakeClient = A.Fake<ITemporalClient>();
         services.AddSingleton(fakeClient);
         var builder = services.AddHostedTemporalWorker("test-task-queue");

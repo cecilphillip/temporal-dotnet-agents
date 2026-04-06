@@ -2,8 +2,10 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Temporalio.Client;
 using Temporalio.Extensions.Agents.Workflows;
+using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Hosting;
 
 namespace Temporalio.Extensions.Agents;
@@ -107,6 +109,19 @@ public static class TemporalWorkerBuilderExtensions
                     agentsOptions,
                     sp.GetService<ILogger<ScheduleRegistrationService>>()));
         }
+
+        // Auto-wire DurableAIDataConverter — mirrors what AddDurableAI() does so that callers
+        // using AddTemporalAgents() without an explicit AddDurableAI() call still get the
+        // correct data converter applied. TryAddEnumerable is idempotent on
+        // (ServiceType, ImplementationType), so calling both AddDurableAI() and
+        // AddTemporalAgents() in the same app will not double-register these configurators.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IConfigureOptions<TemporalClientConnectOptions>,
+            DurableAIClientOptionsConfigurator>());
+
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IPostConfigureOptions<TemporalWorkerServiceOptions>,
+            DurableAIWorkerClientConfigurator>());
 
         return builder;
     }
