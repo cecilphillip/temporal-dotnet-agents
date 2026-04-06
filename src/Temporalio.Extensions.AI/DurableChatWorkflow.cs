@@ -1,5 +1,4 @@
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Logging;
 using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.AI;
@@ -11,63 +10,10 @@ namespace Temporalio.Extensions.AI;
 /// Includes HITL approval support via <c>[WorkflowUpdate]</c> for tool approval gates.
 /// </summary>
 [Workflow("Temporalio.Extensions.AI.DurableChatWorkflow")]
-internal sealed class DurableChatWorkflow
+internal sealed class DurableChatWorkflow : DurableChatWorkflowBase<DurableChatOutput>
 {
-    private readonly List<ChatMessage> _history = [];
-    private readonly DurableApprovalMixin _approval = new();
-    private bool _isProcessing;
-    private bool _shutdownRequested;
-    private DurableChatWorkflowInput? _input;
-    private int _turnCount;
-
     [WorkflowRun]
-    public async Task RunAsync(DurableChatWorkflowInput input)
-    {
-        _input = input;
-
-        // Restore history from continue-as-new.
-        if (input.CarriedHistory is { Count: > 0 })
-        {
-            _history.AddRange(input.CarriedHistory);
-        }
-
-        // Opt-in: upsert search attributes only when explicitly requested.
-        // Guards against failure on servers where the attributes are not pre-registered.
-        if (input.SearchAttributes is not null)
-        {
-            Workflow.UpsertTypedSearchAttributes(
-                DurableSessionAttributes.SessionCreatedAt.ValueSet(Workflow.UtcNow),
-                DurableSessionAttributes.TurnCount.ValueSet(_turnCount));
-        }
-
-        var ttl = input.TimeToLive;
-
-        // Wait until shutdown or history grows large enough for continue-as-new.
-        bool conditionMet = await Workflow.WaitConditionAsync(
-            () => _shutdownRequested || (!_isProcessing && Workflow.ContinueAsNewSuggested),
-            timeout: ttl);
-
-        if (!conditionMet)
-        {
-            // TTL elapsed — session complete.
-            return;
-        }
-
-        if (Workflow.ContinueAsNewSuggested && !_shutdownRequested)
-        {
-            var carriedHistory = _history.ToList();
-            throw Workflow.CreateContinueAsNewException(
-                (DurableChatWorkflow wf) => wf.RunAsync(new DurableChatWorkflowInput
-                {
-                    TimeToLive = input.TimeToLive,
-                    CarriedHistory = carriedHistory,
-                    ActivityTimeout = input.ActivityTimeout,
-                    HeartbeatTimeout = input.HeartbeatTimeout,
-                    ApprovalTimeout = input.ApprovalTimeout,
-                    SearchAttributes = input.SearchAttributes,
-                }));
-        }
-    }
+    public new Task RunAsync(DurableChatWorkflowInput input) => base.RunAsync(input);
 
     /// <summary>
     /// Validates a chat request before it enters workflow history.
@@ -75,7 +21,7 @@ internal sealed class DurableChatWorkflow
     [WorkflowUpdateValidator(nameof(ChatAsync))]
     public void ValidateChat(DurableChatInput input)
     {
-        if (_shutdownRequested)
+        if (IsShutdownRequested)
             throw new InvalidOperationException("Session has been shut down.");
         if (input?.Messages is null || input.Messages.Count == 0)
             throw new ArgumentException("At least one message is required.");
@@ -86,119 +32,21 @@ internal sealed class DurableChatWorkflow
     /// appends response, and returns the result.
     /// </summary>
     [WorkflowUpdate("Chat")]
-    public async Task<DurableChatOutput> ChatAsync(DurableChatInput input)
-    {
-        // Serialize: wait for any in-progress turn to finish.
-        await Workflow.WaitConditionAsync(() => !_isProcessing);
-        _isProcessing = true;
+    public Task<DurableChatOutput> ChatAsync(DurableChatInput input) =>
+        RunTurnAsync(input.Messages, input.Options, input.ConversationId);
 
-        try
-        {
-            // Append user messages to history.
-            foreach (var msg in input.Messages)
-            {
-                _history.Add(msg);
-            }
+    protected override IEnumerable<ChatMessage> GetHistoryMessages(DurableChatOutput output) =>
+        output.Response.Messages;
 
-            _turnCount++;
+    protected override Task<DurableChatOutput> ExecuteTurnAsync(
+        ActivityOptions activityOptions,
+        DurableChatInput activityInput) =>
+        Workflow.ExecuteActivityAsync(
+            (DurableChatActivities a) => a.GetResponseAsync(activityInput),
+            activityOptions);
 
-            // Build activity input with full conversation history.
-            var activityInput = new DurableChatInput
-            {
-                Messages = [.. _history],
-                Options = input.Options,
-                ConversationId = input.ConversationId ?? Workflow.Info.WorkflowId,
-                TurnNumber = _turnCount,
-            };
-
-            var output = await Workflow.ExecuteActivityAsync(
-                (DurableChatActivities a) => a.GetResponseAsync(activityInput),
-                new ActivityOptions
-                {
-                    StartToCloseTimeout = _input!.ActivityTimeout,
-                    HeartbeatTimeout = _input!.HeartbeatTimeout,
-                });
-
-            // Append response messages to history.
-            foreach (var msg in output.Response.Messages)
-            {
-                _history.Add(msg);
-            }
-
-            // Update turn count search attribute if opt-in was requested.
-            if (_input!.SearchAttributes is not null)
-            {
-                Workflow.UpsertTypedSearchAttributes(
-                    DurableSessionAttributes.TurnCount.ValueSet(_turnCount));
-            }
-
-            return output;
-        }
-        finally
-        {
-            _isProcessing = false;
-        }
-    }
-
-    /// <summary>
-    /// Returns the current conversation history.
-    /// </summary>
-    [WorkflowQuery("GetHistory")]
-    public IReadOnlyList<ChatMessage> GetHistory() => _history;
-
-    /// <summary>
-    /// Requests graceful shutdown of this session.
-    /// </summary>
-    [WorkflowSignal("Shutdown")]
-    public Task RequestShutdownAsync()
-    {
-        _shutdownRequested = true;
-        return Task.CompletedTask;
-    }
-
-    // ── HITL: Tool Approval ──────────────────────────────────────────────
-
-    /// <summary>
-    /// Validates a tool approval request before it enters workflow history.
-    /// </summary>
-    [WorkflowUpdateValidator(nameof(RequestApprovalAsync))]
-    public void ValidateRequestApproval(DurableApprovalRequest request) =>
-        _approval.ValidateRequestApproval(request);
-
-    /// <summary>
-    /// Blocks the workflow until a human submits a decision via <see cref="SubmitApprovalAsync"/>.
-    /// Returns the decision as a <see cref="DurableApprovalDecision"/>.
-    /// </summary>
-    [WorkflowUpdate("RequestApproval")]
-    public Task<DurableApprovalDecision> RequestApprovalAsync(DurableApprovalRequest request) =>
-        _approval.RequestApprovalAsync(
-            request,
-            approvalTimeout: _input?.ApprovalTimeout ?? TimeSpan.FromDays(7),
-            onRequested: req => Workflow.Logger.LogInformation(
-                "[{ConversationId}] Approval requested (RequestId: {RequestId}, Description: {Description})",
-                Workflow.Info.WorkflowId, req.RequestId, req.Description ?? req.RequestId),
-            onResolved: d => Workflow.Logger.LogInformation(
-                "[{ConversationId}] Approval resolved (RequestId: {RequestId}, Approved: {Approved})",
-                Workflow.Info.WorkflowId, d.RequestId, d.Approved));
-
-    /// <summary>
-    /// Validates a submitted approval decision.
-    /// </summary>
-    [WorkflowUpdateValidator(nameof(SubmitApprovalAsync))]
-    public void ValidateSubmitApproval(DurableApprovalDecision decision) =>
-        _approval.ValidateSubmitApproval(decision);
-
-    /// <summary>
-    /// Submits the human decision for the pending approval request.
-    /// Unblocks <see cref="RequestApprovalAsync"/>.
-    /// </summary>
-    [WorkflowUpdate("SubmitApproval")]
-    public Task<DurableApprovalDecision> SubmitApprovalAsync(DurableApprovalDecision decision) =>
-        Task.FromResult(_approval.SubmitApprovalAsync(decision));
-
-    /// <summary>
-    /// Returns the currently pending approval request, or null if none.
-    /// </summary>
-    [WorkflowQuery("GetPendingApproval")]
-    public DurableApprovalRequest? GetPendingApproval() => _approval.GetPendingApproval();
+    protected override ContinueAsNewException CreateContinueAsNewException(
+        DurableChatWorkflowInput input) =>
+        Workflow.CreateContinueAsNewException(
+            (DurableChatWorkflow wf) => wf.RunAsync(input));
 }
