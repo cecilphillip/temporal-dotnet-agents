@@ -17,17 +17,16 @@ A [Temporal](https://temporal.io/) integration for [Microsoft.Extensions.AI (MEA
 
 Use this package when you want Temporal durability on top of a standard MEAI pipeline without adopting the full Agent Framework.
 
+> **Using both libraries together?** `Temporalio.Extensions.Agents` takes a package dependency on `Temporalio.Extensions.AI`, so you only need to reference `Temporalio.Extensions.Agents` in your project. The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) defined here are also used by Extensions.Agents, and `DurableAIDataConverter` is auto-wired by both `AddDurableAI()` and `AddTemporalAgents()` for the standard registration patterns.
+
 ## Feature Highlights
 
 - Durable multi-turn conversations — full history persisted in workflow state across turns and restarts
-- `[WorkflowUpdate]` for synchronous request/response — send a message, get a reply, no polling
-- Automatic continue-as-new — long sessions carry history forward to fresh workflow runs
 - Durable tool functions — `AIFunction` invocations dispatched as individual Temporal activities
 - Durable embeddings — `IEmbeddingGenerator` wrapped for deterministic workflow execution
 - History reduction — sliding context window for the LLM while preserving full history durably
 - Human-in-the-loop (HITL) — approval gates via `[WorkflowUpdate]` that block until a human responds
 - Plugin composition — inject OTel tracing, encryption, or any Temporal SDK plugin via `.AddWorkerPlugin()` / `.AddClientPlugin()`
-- Per-request overrides — timeout and retry policy set per `ChatOptions` call
 - OpenTelemetry spans — conversation ID and token counts attached as span attributes
 
 ## How It Works
@@ -48,6 +47,8 @@ DurableChatActivities.GetResponseAsync
     └─► IChatClient (e.g., OpenAI, Azure OpenAI, Ollama)
 ```
 
+The **worker process** hosts `DurableChatWorkflow` and `DurableChatActivities` and executes LLM calls. Any process that holds an `ITemporalClient` — including the worker itself or a completely separate service — can act as the external caller via `DurableChatSessionClient`.
+
 `DurableChatSessionClient` is the external entry point. It starts the workflow if it is not already running (using `UseExisting` conflict policy) and then sends each chat turn as a Temporal Update. The workflow accumulates history and dispatches each LLM call as an activity. When workflow history grows large, continue-as-new transparently transfers history to a new run.
 
 `DurableChatClient` is the middleware that makes this work inside any MEAI pipeline — it detects whether it is running inside a workflow and either dispatches the call as an activity or passes through to the inner client directly.
@@ -66,11 +67,16 @@ dotnet add package Temporalio.Extensions.AI
 
 ## Getting Started
 
+> **Deployment note:** Steps 1–3 show a single-process setup (worker and caller in the same host) — the pattern used by all included samples. In production you can split them: the **worker process** needs Steps 1 and 2; a separate **client process** needs only Step 1 (the `ITemporalClient` connection with `DurableAIDataConverter`) and Step 3 (`DurableChatSessionClient.ChatAsync`). `DurableChatSessionClient` requires only an `ITemporalClient` — it does not require a hosted worker.
+
 ### Step 1: Connect the Temporal Client
 
 Use `DurableAIDataConverter.Instance` so that MEAI's polymorphic `AIContent` types round-trip correctly through Temporal's payload converter.
 
+This step applies to **both** the worker process and any external caller process.
+
 ```csharp
+// Both: required in the worker process and in any external caller process
 var temporalClient = await TemporalClient.ConnectAsync(new("localhost:7233")
 {
     DataConverter = DurableAIDataConverter.Instance,
@@ -84,7 +90,10 @@ builder.Services.AddSingleton<ITemporalClient>(temporalClient);
 
 Use `AddChatClient` — the idiomatic MEAI extension that returns a `ChatClientBuilder` for chaining middleware, then registers the built pipeline as `IChatClient` in DI:
 
+This step runs in the **worker process** only. External callers do not register `IChatClient`, `AddHostedTemporalWorker`, or `AddDurableAI`.
+
 ```csharp
+// Worker
 IChatClient innerClient = (IChatClient)new OpenAIClient(apiKey).GetChatClient("gpt-4o-mini");
 
 // AddChatClient registers IChatClient and opens a pipeline builder.
@@ -110,6 +119,7 @@ builder.Services
 You can also chain `UseDurableExecution()` directly onto `AddChatClient` if you want the client to dispatch as Temporal activities when used *outside* `DurableChatSessionClient` (e.g., from custom workflow code):
 
 ```csharp
+// Worker (optional): use when calling IChatClient directly from custom workflow code
 builder.Services
     .AddChatClient(innerClient)
     .UseFunctionInvocation()
@@ -121,7 +131,10 @@ builder.Services
 
 When a single host needs more than one `IChatClient` (e.g., different models for chat vs. routing), use `AddKeyedChatClient`:
 
+This pattern applies to the **worker process** only.
+
 ```csharp
+// Worker
 IChatClient fastClient = (IChatClient)openAiClient.GetChatClient("gpt-4o-mini");
 IChatClient powerfulClient = (IChatClient)openAiClient.GetChatClient("gpt-4o");
 
@@ -138,12 +151,14 @@ builder.Services
 Inject by key with `[FromKeyedServices]`:
 
 ```csharp
+// Worker
 public class MyService([FromKeyedServices("chat")] IChatClient chatClient) { }
 ```
 
 **Note:** `DurableChatActivities` injects the **unkeyed** `IChatClient`. If you register only keyed clients, the activities will fail to resolve the client. Either keep one unkeyed registration for the activities, or register an additional unkeyed alias:
 
 ```csharp
+// Worker
 // Register keyed clients for your own services...
 builder.Services.AddKeyedChatClient("chat", fastClient).UseFunctionInvocation().Build();
 
@@ -153,7 +168,22 @@ builder.Services.AddChatClient(fastClient).UseFunctionInvocation().Build();
 
 ### Step 3: Send a Message
 
+This step runs in the **client process** (or in the same process as the worker if co-located). A separate client process needs only `ITemporalClient` and `DurableChatSessionClient` — no hosted worker registration.
+
+In a split deployment, register `DurableChatSessionClient` manually in the client process — `AddDurableAI` is not called there:
+
 ```csharp
+// Client: in a split deployment, register DurableChatSessionClient manually —
+// AddDurableAI() is not called in the client process.
+builder.Services.AddSingleton(sp =>
+    new DurableChatSessionClient(
+        sp.GetRequiredService<ITemporalClient>(),
+        new DurableExecutionOptions { TaskQueue = "my-task-queue" },
+        sp.GetService<ILogger<DurableChatSessionClient>>()));
+```
+
+```csharp
+// Client
 var sessionClient = services.GetRequiredService<DurableChatSessionClient>();
 
 var response = await sessionClient.ChatAsync(
@@ -169,7 +199,10 @@ Each call to `ChatAsync` appends the user messages to the persistent conversatio
 
 Override the activity timeout and retry policy on a per-call basis using `ChatOptions` extension methods:
 
+These overrides are passed by the **caller** on each request.
+
 ```csharp
+// Client
 var options = new ChatOptions()
     .WithActivityTimeout(TimeSpan.FromMinutes(10))
     .WithMaxRetryAttempts(5);
@@ -180,6 +213,7 @@ var response = await sessionClient.ChatAsync("conversation-123", messages, optio
 You can also override the heartbeat timeout:
 
 ```csharp
+// Client
 var options = new ChatOptions()
     .WithHeartbeatTimeout(TimeSpan.FromMinutes(3));
 ```
@@ -193,6 +227,7 @@ Wrap any `AIFunction` so that its invocation is dispatched as a Temporal activit
 **Option A — Register globally with `AddDurableTools`:**
 
 ```csharp
+// Worker: register tools globally — the worker dispatches each invocation as an activity
 var getWeather = AIFunctionFactory.Create(
     (string city) => $"Sunny, 22°C in {city}",
     name: "GetWeather");
@@ -206,6 +241,7 @@ builder.Services
 **Option B — Wrap inline with `AsDurable()`:**
 
 ```csharp
+// Client: wrap tools inline per-request; AsDurable() is a no-op outside a workflow
 var tools = new[]
 {
     getWeather.AsDurable(),
@@ -222,7 +258,10 @@ var response = await sessionClient.ChatAsync("conversation-123", messages, optio
 
 Wrap an `IEmbeddingGenerator` for workflow-safe execution using `UseDurableExecution`:
 
+This registration belongs in the **worker process**.
+
 ```csharp
+// Worker
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
     new OpenAIEmbeddingGenerator(openAiClient, "text-embedding-3-small")
         .AsBuilder()
@@ -239,7 +278,10 @@ When `GenerateAsync` is called inside a Temporal workflow, the call is dispatche
 
 Use `UseDurableReduction` to apply a sliding context window while preserving the full conversation history in workflow state. This lets you control token costs without losing history durability.
 
+This pipeline registration belongs in the **worker process**.
+
 ```csharp
+// Worker
 builder.Services.AddSingleton<IChatClient>(sp =>
     openAiClient.GetChatClient("gpt-4o-mini")
         .AsBuilder()
@@ -256,7 +298,11 @@ The workflow supports blocking approval gates. From inside a tool, send an appro
 
 **Request approval from a tool:**
 
+From inside a tool (running as a Temporal activity on the worker), construct a `DurableApprovalRequest` and send it to the workflow — execution blocks until a human responds or the approval timeout elapses:
+
 ```csharp
+// Worker (activity context): this code runs inside a Temporal activity on the worker
+
 // Inside an AIFunction registered as a tool
 var request = new DurableApprovalRequest
 {
@@ -265,13 +311,24 @@ var request = new DurableApprovalRequest
     Description = "Permanently delete 42 customer records. This cannot be undone.",
 };
 
-// Resolved from DurableChatSessionClient via DI or passed through tool context
-var decision = await sessionClient.SubmitApprovalAsync(conversationId, /* ... */);
+// Send the approval request to the workflow and block until a human responds.
+// The workflow's RequestApprovalAsync update handler pauses execution until
+// SubmitApprovalAsync is called externally with a matching RequestId.
+var handle = temporalClient.GetWorkflowHandle(conversationId);
+var decision = await handle.ExecuteUpdateAsync<DurableApprovalDecision>(
+    "RequestApproval",
+    new object[] { request });
+
+if (!decision.Approved)
+    throw new InvalidOperationException($"Action rejected: {decision.Reason}");
 ```
 
 **From an external system (e.g., an admin dashboard):**
 
+The polling and submission calls are made by an **external client** (or any process with access to an `ITemporalClient`).
+
 ```csharp
+// Client
 // Poll for a pending request
 var pending = await sessionClient.GetPendingApprovalAsync("conversation-123");
 if (pending is not null)
@@ -292,6 +349,7 @@ The workflow's `RequestApprovalAsync` update blocks on `WaitConditionAsync` unti
 Configure the approval timeout in `DurableExecutionOptions`:
 
 ```csharp
+// Worker: configure via AddDurableAI on the worker builder
 .AddDurableAI(opts =>
 {
     opts.ApprovalTimeout = TimeSpan.FromDays(3);
@@ -304,9 +362,12 @@ Configure the approval timeout in `DurableExecutionOptions`:
 
 Use `.AddWorkerPlugin()` and `.AddClientPlugin()` to compose any Temporal SDK plugin (OTel tracing, encryption codecs, custom interceptors) with the hosted worker:
 
+Worker plugins apply to the **worker process**; client plugins apply to the Temporal client, which may live in the worker or in a separate caller process.
+
 **Worker plugin on a hosted worker:**
 
 ```csharp
+// Worker
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "my-queue")
     .AddDurableAI()
@@ -316,6 +377,7 @@ builder.Services
 **Client plugin on a hosted worker** (only applies when the worker creates its own client via the 3-arg overload):
 
 ```csharp
+// Worker
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "my-queue")
     .AddDurableAI()
@@ -325,6 +387,7 @@ builder.Services
 **Client plugin on a standalone client** (no hosted worker):
 
 ```csharp
+// Client: use this when the caller runs in a separate process with no hosted worker
 builder.Services
     .AddTemporalClient("localhost:7233", "default")
     .AddClientPlugin(new EncryptionPlugin());
@@ -347,6 +410,7 @@ builder.Services
 Register it on the `TemporalClient` (and ensure the same converter is used by any hosted workers):
 
 ```csharp
+// Both: required on any process that communicates with Temporal
 var client = await TemporalClient.ConnectAsync(new("localhost:7233")
 {
     DataConverter = DurableAIDataConverter.Instance
@@ -356,6 +420,7 @@ var client = await TemporalClient.ConnectAsync(new("localhost:7233")
 Or on a hosted worker directly:
 
 ```csharp
+// Worker: alternatively, apply on the hosted worker options directly
 services.AddHostedTemporalWorker(opts =>
 {
     opts.DataConverter = DurableAIDataConverter.Instance;

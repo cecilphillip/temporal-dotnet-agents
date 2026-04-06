@@ -132,27 +132,35 @@ dotnet run --project samples/BasicAgent
 - **`TemporalAgentContext`** — Async-local context for agent tools running inside activities
 - **`StructuredOutputExtensions`** — `RunAsync<T>` with markdown fence stripping and retry
 
+### Dependency on Temporalio.Extensions.AI
+
+This library depends on `Temporalio.Extensions.AI`. Installing `Temporalio.Extensions.Agents` pulls in `Temporalio.Extensions.AI` automatically — no separate package reference is needed.
+
+The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) are defined in `Temporalio.Extensions.AI` and used here as the shared wire protocol for approval flows. An external approval system built against these types works against both `AgentWorkflow` and `DurableChatWorkflow` without modification.
+
+`DurableAIDataConverter` is auto-wired by `AddTemporalAgents()` for the standard registration patterns (3-arg `AddHostedTemporalWorker` and `AddTemporalClient`). Manual setup is only required when creating the client via `TemporalClient.ConnectAsync` and registering it with `AddSingleton<ITemporalClient>`.
+
 ## Documentation
 
 ### How-To Guides
 
-- [Usage Guide](../../docs/how-to/usage.md) — structured output, orchestration, HITL, scheduling, OTel, and more
-- [Routing Patterns](../../docs/how-to/routing.md) — LLM-powered, static, and dynamic routing
-- [Testing Agents](../../docs/how-to/testing-agents.md) — unit and integration testing patterns
-- [Observability](../../docs/how-to/observability.md) — OpenTelemetry spans, search attributes, and operational queries
-- [Scheduling](../../docs/how-to/scheduling.md) — recurring and one-time agent runs, lifecycle management
-- [Structured Output](../../docs/how-to/structured-output.md) — typed responses with `RunAsync<T>`, fence stripping, and retry
-- [Human-in-the-Loop](../../docs/how-to/hitl-patterns.md) — approval gates, dashboards, timeouts, and testing
-- [History & Token Optimization](../../docs/how-to/prompt-caching.md) — managing conversation history and reducing costs
-- [Do's and Don'ts](../../docs/how-to/dos-and-donts.md) — common mistakes and best practices
+- [Usage Guide](../../docs/how-to/MAF/usage.md) — structured output, orchestration, HITL, scheduling, OTel, and more
+- [Routing Patterns](../../docs/how-to/MAF/routing.md) — LLM-powered, static, and dynamic routing
+- [Testing Agents](../../docs/how-to/MAF/testing-agents.md) — unit and integration testing patterns
+- [Observability](../../docs/how-to/MAF/observability.md) — OpenTelemetry spans, search attributes, and operational queries
+- [Scheduling](../../docs/how-to/MAF/scheduling.md) — recurring and one-time agent runs, lifecycle management
+- [Structured Output](../../docs/how-to/MAF/structured-output.md) — typed responses with `RunAsync<T>`, fence stripping, and retry
+- [Human-in-the-Loop](../../docs/how-to/MAF/hitl-patterns.md) — approval gates, dashboards, timeouts, and testing
+- [History & Token Optimization](../../docs/how-to/MAF/prompt-caching.md) — managing conversation history and reducing costs
+- [Do's and Don'ts](../../docs/how-to/MAF/dos-and-donts.md) — common mistakes and best practices
 
 ### Architecture
 
-- [Durability & Determinism](../../docs/architecture/durability-and-determinism.md) — how replay preserves completed agent calls
-- [Agent Sessions & Workflow Loop](../../docs/architecture/agent-sessions-and-workflow-loop.md) — session lifecycle, message flow, crash recovery
-- [Session StateBag & Context Providers](../../docs/architecture/session-statebag-and-context-providers.md) — AIContextProvider integration and StateBag persistence
-- [Pub/Sub & Event-Driven Patterns](../../docs/architecture/pub-sub-and-event-driven.md) — Temporal equivalents of pub/sub fan-out
-- [Agent-to-Agent Communication](../../docs/architecture/agent-to-agent-communication.md) — sub-agent calls, parallel fan-out, and cross-workflow signaling
+- [Durability & Determinism](../../docs/architecture/MAF/durability-and-determinism.md) — how replay preserves completed agent calls
+- [Agent Sessions & Workflow Loop](../../docs/architecture/MAF/agent-sessions-and-workflow-loop.md) — session lifecycle, message flow, crash recovery
+- [Session StateBag & Context Providers](../../docs/architecture/MAF/session-statebag-and-context-providers.md) — AIContextProvider integration and StateBag persistence
+- [Pub/Sub & Event-Driven Patterns](../../docs/architecture/MAF/pub-sub-and-event-driven.md) — Temporal equivalents of pub/sub fan-out
+- [Agent-to-Agent Communication](../../docs/architecture/MAF/agent-to-agent-communication.md) — sub-agent calls, parallel fan-out, and cross-workflow signaling
 
 ### External References
 

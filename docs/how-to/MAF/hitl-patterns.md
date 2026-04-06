@@ -401,6 +401,8 @@ public sealed record DurableApprovalRequest
 }
 ```
 
+> **Note:** In MAF HITL flows, `FunctionName` and `CallId` are always `null`. These fields are populated by `DurableAIFunction` in MEAI tool-call flows (`Temporalio.Extensions.AI`), which are not part of the MAF pipeline. When building a shared approval UI that handles requests from both libraries, check these fields for null before displaying them. Tool authors should always populate `RequestId` and `Description` — these are the fields a human reviewer will see.
+
 ### DurableApprovalDecision
 
 ```csharp

@@ -105,6 +105,7 @@ Token count attributes on `durable_chat.send` are set after the update returns, 
 ### Register the TracerProvider
 
 ```csharp
+// Both: set up in any process you want traced — worker and external caller alike
 builder.Services
     .AddOpenTelemetry()
     .WithTracing(tracing => tracing
@@ -118,6 +119,7 @@ builder.Services
 ### Connect the Temporal client
 
 ```csharp
+// Both
 var client = await TemporalClient.ConnectAsync(new TemporalClientConnectOptions("localhost:7233")
 {
     DataConverter = DurableAIDataConverter.Instance,
@@ -132,6 +134,7 @@ builder.Services.AddSingleton<ITemporalClient>(client);
 ### Register the worker
 
 ```csharp
+// Worker
 builder.Services
     .AddHostedTemporalWorker(temporalAddress, "default", "my-task-queue")
     .AddDurableAI(opts =>
@@ -150,6 +153,7 @@ builder.Services
 The console exporter prints each completed span to stdout. This is useful for verifying the span hierarchy locally without running a collector.
 
 ```csharp
+// Both
 builder.Services
     .AddOpenTelemetry()
     .WithTracing(tracing => tracing
@@ -163,6 +167,7 @@ builder.Services
 ### OTLP exporter (production — Jaeger, Grafana Tempo, Honeycomb, etc.)
 
 ```csharp
+// Both
 builder.Services
     .AddOpenTelemetry()
     .WithTracing(tracing => tracing
@@ -179,6 +184,7 @@ builder.Services
 For HTTP/Protobuf instead of gRPC:
 
 ```csharp
+// Both
 otlp.Endpoint = new Uri("http://localhost:4318/v1/traces");
 otlp.Protocol = OtlpExportProtocol.HttpProtobuf;
 ```
@@ -186,6 +192,7 @@ otlp.Protocol = OtlpExportProtocol.HttpProtobuf;
 You can register both exporters simultaneously during a migration or for local verification alongside production export:
 
 ```csharp
+// Both
 .AddConsoleExporter()
 .AddOtlpExporter()
 ```

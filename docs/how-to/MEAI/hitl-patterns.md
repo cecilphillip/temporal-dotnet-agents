@@ -42,6 +42,7 @@ User message → ChatAsync → DurableChatWorkflow → DurableChatActivities
 HITL requires no special configuration beyond the standard `AddDurableAI` registration. Set `ApprovalTimeout` and `ActivityTimeout` long enough to accommodate human review time.
 
 ```csharp
+// Worker
 builder.Services
     .AddHostedTemporalWorker(temporalAddress, "default", taskQueue)
     .AddDurableAI(opts =>
@@ -63,6 +64,7 @@ builder.Services
 A tool requests approval by sending a `RequestApproval` workflow update directly to the running `DurableChatWorkflow`. The workflow's update handler blocks until a human submits a decision.
 
 ```csharp
+// Activity / Tool
 var deleteTool = AIFunctionFactory.Create(
     async (
         [Description("Age threshold in days; records older than this are deleted")]
@@ -99,6 +101,7 @@ var deleteTool = AIFunctionFactory.Create(
 Then pass the tool to `ChatAsync` via `ChatOptions`:
 
 ```csharp
+// Client
 var response = await sessionClient.ChatAsync(
     conversationId,
     [systemMessage, new ChatMessage(ChatRole.User, userRequest)],
@@ -114,6 +117,7 @@ var response = await sessionClient.ChatAsync(
 From your external system (API server, background job, etc.) poll `GetPendingApprovalAsync` — a `[WorkflowQuery]` that returns instantly without blocking the workflow:
 
 ```csharp
+// Client
 DurableApprovalRequest? pending = null;
 
 while (pending is null)
@@ -145,6 +149,7 @@ Console.WriteLine($"Approval needed: {pending.FunctionName} — {pending.Descrip
 Once the reviewer has made a decision, call `SubmitApprovalAsync`. The `RequestId` must match the one in `DurableApprovalRequest`:
 
 ```csharp
+// Client
 var decision = new DurableApprovalDecision
 {
     RequestId = pending.RequestId,

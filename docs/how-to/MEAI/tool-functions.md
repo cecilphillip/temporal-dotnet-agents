@@ -31,6 +31,7 @@ Register `UseFunctionInvocation()` on the `IChatClient` pipeline, then pass tool
 call via `ChatOptions`:
 
 ```csharp
+// Worker
 // Host registration
 builder.Services
     .AddChatClient(innerClient)
@@ -43,6 +44,7 @@ builder.Services
 ```
 
 ```csharp
+// Client
 // Per call
 var getWeather = AIFunctionFactory.Create(
     (string city) => $"Sunny, 22°C in {city}",
@@ -94,6 +96,7 @@ Register the real function with `AddDurableTools` so `DurableFunctionActivities`
 resolve it by name at runtime:
 
 ```csharp
+// Worker
 // Host registration
 builder.Services
     .AddHostedTemporalWorker("my-task-queue")
@@ -104,6 +107,7 @@ builder.Services
 Inside the workflow, wrap with `AsDurable()` and call `InvokeAsync`:
 
 ```csharp
+// Workflow
 [Workflow]
 public class MyWorkflow
 {
@@ -143,6 +147,7 @@ via `AddDurableTools` — `DurableFunctionActivities` resolves by name (case-ins
 Pass `ActivityOptions` to `AsDurable()` to override options per function:
 
 ```csharp
+// Workflow
 var durablePayment = paymentTool.AsDurable(new ActivityOptions
 {
     StartToCloseTimeout = TimeSpan.FromSeconds(30),

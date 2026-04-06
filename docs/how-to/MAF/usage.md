@@ -4,6 +4,14 @@ Detailed usage patterns and configuration for Temporalio.Extensions.Agents. For 
 
 ---
 
+## Library Dependencies
+
+`Temporalio.Extensions.Agents` depends on `Temporalio.Extensions.AI`. Installing the Agents NuGet package pulls in the AI package automatically — no separate `<PackageReference>` for `Temporalio.Extensions.AI` is needed.
+
+The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) are defined in `Temporalio.Extensions.AI` and used by both libraries as the shared wire protocol for approval flows. They are available in your project as soon as you reference `Temporalio.Extensions.Agents`.
+
+---
+
 ## Table of Contents
 
 1. [Sending Messages](#sending-messages)

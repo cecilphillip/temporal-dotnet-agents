@@ -24,6 +24,7 @@ dotnet add package Temporalio.Extensions.AI
 ## Step 1 — Connect the Temporal Client
 
 ```csharp
+// Both: required in the worker process and in any external caller process
 var temporalClient = await TemporalClient.ConnectAsync(
     new TemporalClientConnectOptions("localhost:7233")
     {
@@ -45,6 +46,7 @@ builder.Services.AddSingleton<ITemporalClient>(temporalClient);
 Use the idiomatic MEAI DI pattern — `AddChatClient` returns a `ChatClientBuilder` for chaining middleware, and `Build()` registers the final `IChatClient` singleton:
 
 ```csharp
+// Worker
 builder.Services
     .AddChatClient(innerClient)
     .UseFunctionInvocation()   // handles tool call loops inside the activity
@@ -56,6 +58,7 @@ builder.Services
 > **Note:** If you use `AddKeyedChatClient` to manage multiple LLM clients in one application, also register an unkeyed alias so `DurableChatActivities` can resolve it:
 >
 > ```csharp
+> // Worker
 > builder.Services
 >     .AddKeyedChatClient("gpt", gptClient)
 >     .UseFunctionInvocation()
@@ -75,6 +78,7 @@ builder.Services
 Chain `AddDurableAI` onto the hosted worker builder:
 
 ```csharp
+// Worker
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "durable-chat")
     .AddDurableAI(opts =>
@@ -103,6 +107,7 @@ Nothing else needs to be wired up manually. The `TaskQueue` is automatically rea
 Resolve `DurableChatSessionClient` from DI and call `ChatAsync`:
 
 ```csharp
+// Client
 var sessionClient = host.Services.GetRequiredService<DurableChatSessionClient>();
 
 var conversationId = "user-42-session-1";   // any stable string you control
@@ -121,6 +126,7 @@ Console.WriteLine(response.Text);   // "Paris."
 Pass the same `conversationId` on every turn. The workflow accumulates history internally across calls:
 
 ```csharp
+// Client
 var conversationId = "user-42-session-1";
 
 var r1 = await sessionClient.ChatAsync(conversationId,
@@ -140,6 +146,7 @@ Each `ChatAsync` call only needs to send the new message — the workflow mainta
 `GetHistoryAsync` sends a Temporal Query to the running workflow and returns every message accumulated so far — user messages, assistant responses, tool calls, and tool results:
 
 ```csharp
+// Client
 var history = await sessionClient.GetHistoryAsync(conversationId);
 
 foreach (var msg in history)
@@ -156,6 +163,7 @@ foreach (var msg in history)
 The extension methods on `ChatOptions` let you override the global `DurableExecutionOptions` for a single turn without changing the worker configuration:
 
 ```csharp
+// Client
 var options = new ChatOptions()
     .WithActivityTimeout(TimeSpan.FromMinutes(10))
     .WithMaxRetryAttempts(5)
@@ -173,6 +181,7 @@ These values are stored in `ChatOptions.AdditionalProperties` under well-known s
 For long-running sessions the full conversation history can grow large enough to make LLM calls expensive. `UseDurableReduction` chains a sliding context window into the MEAI pipeline while keeping the complete history safe in workflow state:
 
 ```csharp
+// Worker
 builder.Services
     .AddChatClient(innerClient)
     .UseFunctionInvocation()
@@ -232,6 +241,7 @@ When the Temporal event history for a session grows large (Temporal's per-workfl
 **Worker plugin** — e.g., adding distributed tracing via the OpenTelemetry extension:
 
 ```csharp
+// Worker
 #pragma warning disable TAI001
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "my-queue")
@@ -243,6 +253,7 @@ builder.Services
 **Client plugin** — only applies when the worker creates its own client (3-arg overload):
 
 ```csharp
+// Worker
 #pragma warning disable TAI001
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "my-queue")
@@ -254,12 +265,65 @@ builder.Services
 For client-only registrations that have no hosted worker, use the `OptionsBuilder<TemporalClientConnectOptions>` overload:
 
 ```csharp
+// Client
 #pragma warning disable TAI001
 builder.Services
     .AddTemporalClient("localhost:7233", "default")
     .AddClientPlugin(new EncryptionPlugin());
 #pragma warning restore TAI001
 ```
+
+---
+
+## DurableChatSessionClient
+
+`DurableChatSessionClient` is the external entry point for all session interactions. Every method maps to a specific Temporal mechanism on the `DurableChatWorkflow`.
+
+| Method | Temporal mechanism | Purpose |
+|--------|--------------------|---------|
+| `ChatAsync` | `[WorkflowUpdate]` | Send messages; starts the session workflow if not already running |
+| `GetHistoryAsync` | `[WorkflowQuery]` | Retrieve the full conversation history accumulated across all turns |
+| `GetPendingApprovalAsync` | `[WorkflowQuery]` | Poll for a blocked HITL approval request; returns `null` if none is pending |
+| `SubmitApprovalAsync` | `[WorkflowUpdate]` | Submit a human decision to unblock a pending approval gate |
+
+### ChatAsync
+
+Starts the session workflow on first call using `WorkflowIdConflictPolicy.UseExisting` — subsequent calls with the same `conversationId` reuse the running workflow. Each call delivers messages as a `[WorkflowUpdate]` and blocks until the LLM responds.
+
+```csharp
+// Client
+var response = await sessionClient.ChatAsync(
+    "conv-123",
+    [new ChatMessage(ChatRole.User, "Hello")]);
+```
+
+### GetHistoryAsync
+
+Returns all `ChatMessage` entries accumulated across every turn in workflow state order. Useful for displaying conversation history or auditing.
+
+```csharp
+// Client
+var history = await sessionClient.GetHistoryAsync("conv-123");
+```
+
+### GetPendingApprovalAsync and SubmitApprovalAsync
+
+Used together to implement human-in-the-loop approval gates. Poll `GetPendingApprovalAsync` until a request appears, then call `SubmitApprovalAsync` with a matching `RequestId` to unblock the workflow.
+
+```csharp
+// Client
+var pending = await sessionClient.GetPendingApprovalAsync("conv-123");
+if (pending is not null)
+{
+    await sessionClient.SubmitApprovalAsync("conv-123", new DurableApprovalDecision
+    {
+        RequestId = pending.RequestId,
+        Approved  = true,
+    });
+}
+```
+
+See [Human-in-the-Loop patterns](hitl-patterns.md) for the full approval flow.
 
 ---
 
@@ -281,3 +345,20 @@ Credentials go in `samples/MEAI/DurableChat/appsettings.local.json` (gitignored)
   "OPENAI_MODEL": "gpt-4o-mini"
 }
 ```
+
+---
+
+## When to Use Extensions.Agents Instead
+
+`Temporalio.Extensions.AI` is the right choice when you need durable `IChatClient` execution without taking a dependency on the Microsoft Agent Framework. It works with any MEAI-compatible provider and adds Temporal durability to a standard chat pipeline with minimal overhead.
+
+Reach for `Temporalio.Extensions.Agents` when your use case calls for any of the following:
+
+- **LLM-powered routing** — automatically dispatching user messages to a specialist agent based on intent
+- **Multi-agent orchestration** — running sub-agents from inside a workflow with `GetAgent` and parallel fan-out with `ExecuteAgentsInParallelAsync`
+- **The Microsoft Agent Framework model** — building with `AIAgent`, `ChatClientAgent`, `AgentSessionStateBag`, and `AIContextProvider`
+- **Scheduled agent runs** — recurring or deferred agent invocations managed by Temporal Schedules
+
+Both libraries share the same HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) and use the same approval protocol, so an external approval system works against either workflow type.
+
+See [Temporalio.Extensions.Agents Usage Guide](../MAF/usage.md) for the full feature set.
