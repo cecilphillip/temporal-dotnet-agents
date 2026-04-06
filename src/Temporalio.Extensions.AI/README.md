@@ -28,6 +28,7 @@ Use this package when you want Temporal durability on top of a standard MEAI pip
 - Human-in-the-loop (HITL) — approval gates via `[WorkflowUpdate]` that block until a human responds
 - Plugin composition — inject OTel tracing, encryption, or any Temporal SDK plugin via `.AddWorkerPlugin()` / `.AddClientPlugin()`
 - OpenTelemetry spans — conversation ID and token counts attached as span attributes
+- Extensible workflow base class — subclass `DurableChatWorkflowBase<TOutput>` to return domain-specific data from Update handlers while inheriting the full session loop
 
 ## How It Works
 
@@ -434,6 +435,7 @@ services.AddHostedTemporalWorker(opts =>
 | `DurableChatClient` | `DelegatingChatClient` middleware — dispatches `GetResponseAsync` as a Temporal activity when inside a workflow |
 | `DurableChatSessionClient` | External entry point — starts or reuses a session workflow and sends chat turns as `[WorkflowUpdate]` |
 | `DurableChatWorkflow` | Long-lived workflow — persists conversation history, serializes turns, handles continue-as-new and HITL |
+| `DurableChatWorkflowBase<TOutput>` | Abstract base class for custom durable chat workflows with typed Update output |
 | `DurableChatActivities` | Activity host — executes `IChatClient.GetResponseAsync` on the worker |
 | `DurableExecutionOptions` | Configuration — task queue, activity timeout, retry policy, session TTL, approval timeout |
 | `DurableAIDataConverter` | Data converter — wraps `AIJsonUtilities.DefaultOptions` for correct MEAI type round-trips |

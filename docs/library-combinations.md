@@ -66,6 +66,7 @@ var response = await sessionClient.ChatAsync(
 - Durable embedding generation via `DurableEmbeddingGenerator`.
 - HITL approval gates via `DurableApprovalRequest` / `DurableApprovalDecision`.
 - `DurableAIDataConverter` auto-wired when using the managed registration overloads (`AddTemporalClient` + `AddDurableAI`, or the 3-arg `AddHostedTemporalWorker` overload). Manual `TemporalClient.ConnectAsync` callers must set `DataConverter = DurableAIDataConverter.Instance` explicitly.
+- Custom workflow output — subclass `DurableChatWorkflowBase<TOutput>` to return domain-specific types from workflow Update handlers. The session loop, history, HITL, and continue-as-new are all inherited. See [custom-workflow-output.md](how-to/MEAI/custom-workflow-output.md).
 
 ### Limitations
 
