@@ -14,7 +14,7 @@ namespace Temporalio.Extensions.AI;
 /// <typeparam name="TOutput">The type returned from each completed chat turn.</typeparam>
 public abstract class DurableChatWorkflowBase<TOutput>
 {
-    private readonly List<ChatMessage> _history = [];
+    private List<ChatMessage> _history = new(16);
     private readonly DurableApprovalMixin _approval = new();
     private bool _isProcessing;
     private bool _shutdownRequested;
@@ -69,6 +69,8 @@ public abstract class DurableChatWorkflowBase<TOutput>
         // Restore history carried forward from a previous run (continue-as-new).
         if (input.CarriedHistory is { Count: > 0 })
         {
+            if (_history.Capacity < input.CarriedHistory.Count)
+                _history.Capacity = input.CarriedHistory.Count;
             _history.AddRange(input.CarriedHistory);
         }
 
