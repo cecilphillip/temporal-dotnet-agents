@@ -62,9 +62,11 @@ public static class TemporalWorkflowExtensions
     {
         ArgumentNullException.ThrowIfNull(requests);
 
-        var tasks = requests
-            .Select(r => r.Agent.RunAsync(r.Messages, r.Session, null, cancellationToken))
-            .ToList();
+        var requestList = requests as IList<(TemporalAIAgent Agent, IList<ChatMessage> Messages, AgentSession Session)>
+            ?? requests.ToList();
+        var tasks = new List<Task<AgentResponse>>(requestList.Count);
+        foreach (var r in requestList)
+            tasks.Add(r.Agent.RunAsync(r.Messages, r.Session, null, cancellationToken));
 
         return await Workflow.WhenAllAsync(tasks);
     }
