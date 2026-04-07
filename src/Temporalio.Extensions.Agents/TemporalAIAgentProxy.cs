@@ -127,7 +127,7 @@ internal class TemporalAIAgentProxy(
     /// The delay is only applied when starting a <em>new</em> session. If a workflow with the
     /// same session ID is already running, it is reused immediately regardless of the delay.
     /// </remarks>
-    internal async Task RunDelayedAsync(
+    internal Task RunDelayedAsync(
         IEnumerable<ChatMessage> messages,
         TemporalAgentSession session,
         TimeSpan delay,
@@ -139,6 +139,6 @@ internal class TemporalAIAgentProxy(
         var sessionId = session.SessionId;
 
         _logger.LogProxyDispatchingDelayedRequest(sessionId.AgentName, sessionId.WorkflowId, delay);
-        await _agentClient.RunAgentDelayedAsync(sessionId, request, delay, cancellationToken);
+        return _agentClient.RunAgentDelayedAsync(sessionId, request, delay, cancellationToken);
     }
 }
