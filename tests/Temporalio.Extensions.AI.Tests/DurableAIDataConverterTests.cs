@@ -33,7 +33,7 @@ public class DurableAIDataConverterTests
         var payload = converter.ToPayload(message);
         Assert.NotNull(payload);
 
-        var deserialized = (ChatMessage)converter.ToValue(payload, typeof(ChatMessage));
+        var deserialized = (ChatMessage)converter.ToValue(payload, typeof(ChatMessage))!;
         Assert.NotNull(deserialized);
         Assert.Equal(ChatRole.User, deserialized.Role);
         Assert.Equal("Hello!", deserialized.Text);
@@ -49,7 +49,7 @@ public class DurableAIDataConverterTests
         var message = new ChatMessage(ChatRole.Assistant, [functionCall]);
 
         var payload = converter.ToPayload(message);
-        var deserialized = (ChatMessage)converter.ToValue(payload, typeof(ChatMessage));
+        var deserialized = (ChatMessage)converter.ToValue(payload, typeof(ChatMessage))!;
 
         Assert.NotNull(deserialized);
         Assert.Single(deserialized.Contents);
@@ -72,7 +72,7 @@ public class DurableAIDataConverterTests
         };
 
         var payload = converter.ToPayload(response);
-        var deserialized = (ChatResponse)converter.ToValue(payload, typeof(ChatResponse));
+        var deserialized = (ChatResponse)converter.ToValue(payload, typeof(ChatResponse))!;
 
         Assert.NotNull(deserialized);
         Assert.Equal("test-model", deserialized.ModelId);

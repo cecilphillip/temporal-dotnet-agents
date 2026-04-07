@@ -41,7 +41,7 @@ public static class ServiceCollectionExtensions
         Action<TemporalAgentsOptions> configure,
         string taskQueue,
         string? targetHost = null,
-        string? @namespace = null)
+        string @namespace = "default")
     {
         ArgumentNullException.ThrowIfNull(configure);
         ArgumentException.ThrowIfNullOrWhiteSpace(taskQueue);
