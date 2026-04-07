@@ -89,31 +89,29 @@ builder.Services
 ## Code Example — Fire-and-Forget Fan-Out (No Response Needed)
 
 When the publisher does not need to wait for each subscriber, use
-`RunAgentFireAndForgetAsync` in a loop:
+`ITemporalAgentClient.RunAgentFireAndForgetAsync` in a loop. This is the correct
+**external** path (e.g., from an API endpoint or console app):
 
 ```csharp
-[WorkflowRun]
-public async Task RunAsync(string eventPayload)
-{
-    // Publish to three independent agent "subscribers" and return immediately.
-    // Each agent runs in its own workflow and processes the event asynchronously.
-    var subscriberNames = new[] { "AuditAgent", "NotificationAgent", "AnalyticsAgent" };
+// External caller — outside any workflow
+var subscriberNames = new[] { "AuditAgent", "NotificationAgent", "AnalyticsAgent" };
 
-    foreach (var name in subscriberNames)
-    {
-        var sessionId = NewAgentSessionId(name);
-        // Equivalent to publishing to a topic: fire-and-forget, no reply needed.
-        _ = Workflow.ExecuteActivityAsync(
-            (AgentActivities a) => a.ExecuteAgentAsync(
-                new ExecuteAgentInput(name, new RunRequest(eventPayload), [])),
-            new ActivityOptions { StartToCloseTimeout = TimeSpan.FromMinutes(5) });
-    }
+foreach (var name in subscriberNames)
+{
+    var sessionId = TemporalAgentSessionId.WithRandomKey(name);
+    // Equivalent to publishing to a topic: fire-and-forget, no reply needed.
+    // StartWorkflowAsync + SignalAsync under the hood — returns as soon as the
+    // signal is accepted; the agent session workflow processes the event asynchronously.
+    await agentClient.RunAgentFireAndForgetAsync(sessionId, new RunRequest(eventPayload));
 }
 ```
 
-> **Simpler option:** If calling from outside a workflow (e.g., from an API endpoint),
-> use `ITemporalAgentClient.RunAgentFireAndForgetAsync` in a loop — the call returns
-> immediately, and each agent session workflow processes the event independently.
+> **Workflow-internal path:** If you are inside an orchestrating `[Workflow]` and need to
+> kick off sub-agents without waiting for their results, use `TemporalAIAgent.RunAsync`
+> inside `Workflow.ExecuteActivityAsync` (via `GetAgent`) — or use
+> `ExecuteAgentsInParallelAsync` if you do want to collect results later.
+> `AgentActivities` and `ExecuteAgentInput` are `internal` and cannot be referenced
+> from consumer code.
 
 ---
 

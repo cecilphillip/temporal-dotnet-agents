@@ -125,39 +125,72 @@ Event 8: WorkflowExecutionCompleted
 
 ## Under the Hood: How Agent Calls Become Activities
 
-### The Flow
+There are two distinct paths through which agent work gets dispatched, depending on whether the call originates from outside a workflow or from inside one.
+
+### Path A — External Caller → AgentWorkflow (via `DefaultTemporalAgentClient`)
+
+An external caller (API server, console app, `TemporalAIAgentProxy`) goes through `DefaultTemporalAgentClient`, which owns the Temporal client and starts/reuses the session workflow directly:
 
 ```
-WeatherOrchestrationWorkflow
+External Caller (e.g. TemporalAIAgentProxy)
     ↓
-    await agent.RunAsync(question, session)
+    ITemporalAgentClient.RunAgentAsync(sessionId, request)
     ↓
-    TemporalAIAgent.RunCoreAsync()
-    ↓
-    Workflow.ExecuteActivityAsync(
-        (AgentActivities a) => a.ExecuteAgentAsync(input),
-        activityOptions)
-    ↓
-    [Activity Layer]
     DefaultTemporalAgentClient.RunAgentAsync()
     ↓
-    StartWorkflowAsync(AgentWorkflow)  ← Separate sibling workflow
+    client.StartWorkflowAsync(AgentWorkflow, IdConflictPolicy = UseExisting)
+        ← Creates or no-ops; establishes the durable session workflow
     ↓
-    ExecuteUpdateAsync(RunRequest)     ← Sends message to agent workflow
+    handle.ExecuteUpdateAsync(wf => wf.RunAgentAsync(request))
+        ← Blocks until the update handler returns
     ↓
-    [Returns AgentResponse to activity]
+    AgentWorkflow [WorkflowUpdate("Run")]
+        ← Serializes via _isProcessing, records request in _history
     ↓
-    [Activity result recorded in orchestration workflow history]
+    Workflow.ExecuteActivityAsync(AgentActivities.ExecuteAgentAsync)
+        ← AI inference runs inside an activity
     ↓
-    [Result returned to workflow]
+    AgentActivities.ExecuteAgentAsync [Activity]
+        ← Resolves AIAgent from factory cache, rebuilds history, calls LLM
+    ↓
+    AgentResponse returned to AgentWorkflow → recorded in _history
+    ↓
+    Update response returned to DefaultTemporalAgentClient → returned to caller
+```
+
+### Path B — Orchestrating Workflow → Sub-Agent (via `TemporalAIAgent`)
+
+Inside an orchestrating `[Workflow]`, `GetAgent()` returns a `TemporalAIAgent` that dispatches inference by calling `Workflow.ExecuteActivityAsync` directly — without starting a separate session workflow:
+
+```
+Orchestrating [Workflow] (e.g. ResearchWorkflow)
+    ↓
+    var agent = GetAgent("ResearcherAgent");
+    var session = await agent.CreateSessionAsync();
+    await agent.RunAsync(messages, session)
+    ↓
+    TemporalAIAgent.RunCoreAsync()
+        ← Appends request to TemporalAIAgent._history (workflow state)
+    ↓
+    Workflow.ExecuteActivityAsync(
+        (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
+        activityOptions)
+        ← Activity result is recorded in the orchestrating workflow's event history
+    ↓
+    AgentActivities.ExecuteAgentAsync [Activity]
+        ← Resolves AIAgent from factory cache, rebuilds history, calls LLM
+    ↓
+    AgentResponse returned to TemporalAIAgent → appended to _history as response entry
+    ↓
+    AgentResponse returned to orchestrating workflow code
 ```
 
 ### Why This Ensures Durability
 
-1. **Activity Results are History**: The `AgentResponse` is recorded as an activity completion event
+1. **Activity Results are History**: The `AgentResponse` is recorded as an activity completion event in whichever workflow scheduled it
 2. **History is Immutable**: Once recorded, the event cannot be changed
-3. **Replay is Deterministic**: Future replays of the workflow retrieve the cached result
-4. **Agent Workflow is Separate**: The actual `AgentWorkflow` maintains its own separate history and state
+3. **Replay is Deterministic**: Future replays of the workflow retrieve the cached result without re-executing
+4. **Agent Workflow is Separate (Path A only)**: When called externally, `AgentWorkflow` maintains its own independent history and state; the orchestrating workflow records only the activity result
 
 ---
 
@@ -192,12 +225,23 @@ The `AgentWorkflow` uses `Workflow.CreateContinueAsNewException()` to continue a
 
 ```csharp
 // In AgentWorkflow.RunAsync()
-if (ContinueAsNewSuggested && !shutdownRequested)
+else if (Workflow.ContinueAsNewSuggested && !_shutdownRequested)
 {
-    // Carry forward the conversation history
-    var history = _history.ToList();
+    // Carry forward conversation history and StateBag to the new run.
+    var carriedHistory = _history.ToList();
+    var carriedStateBag = _currentStateBag;
     throw Workflow.CreateContinueAsNewException(
-        (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput { CarriedHistory = history }));
+        (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput
+        {
+            AgentName = input.AgentName,
+            TaskQueue = input.TaskQueue,
+            TimeToLive = input.TimeToLive,
+            CarriedHistory = carriedHistory,
+            CarriedStateBag = carriedStateBag,
+            ActivityStartToCloseTimeout = input.ActivityStartToCloseTimeout,
+            ActivityHeartbeatTimeout = input.ActivityHeartbeatTimeout,
+            ApprovalTimeout = input.ApprovalTimeout
+        }));
 }
 ```
 

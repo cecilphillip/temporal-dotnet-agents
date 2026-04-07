@@ -190,10 +190,14 @@ When the activity executes, it receives the **entire history** flattened into a 
 
 ```csharp
 // Inside AgentActivities.ExecuteAgentAsync
-var allMessages = input.ConversationHistory
-    .SelectMany(e => e.Messages)
-    .Select(m => m.ToChatMessage())
-    .ToList();
+int messageCount = 0;
+foreach (var entry in input.ConversationHistory)
+    messageCount += entry.Messages.Count;
+
+var allMessages = new List<ChatMessage>(messageCount);
+foreach (var entry in input.ConversationHistory)
+    foreach (var msg in entry.Messages)
+        allMessages.Add(msg.ToChatMessage());
 
 // allMessages now contains: [User: "Hi", Assistant: "Hello!", User: "Weather?"]
 // The LLM sees the full conversation
@@ -283,10 +287,9 @@ Here is the complete path a message takes from an external caller to the LLM and
 │       ├─ DelegatingAIAgent delegates to real agent           │
 │       └─ Real AIAgent calls IChatClient → LLM inference      │
 │                                                              │
-│   16. If IAgentResponseHandler registered:                   │
-│       ├─ Stream chunks with ctx.Heartbeat(update.Text)       │  ← Heartbeat
-│       └─ Call responseHandler.OnStreamingResponseUpdateAsync  │
-│   17. Else: collect stream into AgentResponse                │
+│   16. Stream chunks, ctx.Heartbeat(update.Text) on each      │  ← Heartbeat (always)
+│       ├─ Without handler: collect into AgentResponse         │
+│       └─ With handler: also call OnStreamingResponseUpdateAsync│
 │                                                              │
 │   18. Return AgentResponse                                   │
 └───────────┬──────────────────────────────────────────────────┘
@@ -394,23 +397,40 @@ new ActivityOptions
 
 **How heartbeats are sent**:
 
-- **Without `IAgentResponseHandler`**: No heartbeats are sent during execution. The activity relies entirely on `StartToCloseTimeout`.
-- **With `IAgentResponseHandler`**: Every streaming chunk triggers a heartbeat:
+Heartbeats are sent on **every streaming chunk regardless of whether an `IAgentResponseHandler` is registered**. The two branches differ only in whether the handler's callback is invoked, not in whether heartbeating occurs:
+
+- **Without `IAgentResponseHandler`**: Each chunk is collected into a list and a heartbeat is fired unconditionally:
+
+```csharp
+// Heartbeat on each streamed chunk even when no handler is registered,
+// so that long-running LLM calls don't hit the heartbeat timeout.
+List<AgentResponseUpdate> collectedUpdates = [];
+await foreach (var update in responseStream.WithCancellation(ct))
+{
+    collectedUpdates.Add(update);
+    ctx.Heartbeat(update.Text);    // ← Heartbeat fired on every chunk
+}
+response = collectedUpdates.ToAgentResponse();
+```
+
+- **With `IAgentResponseHandler`**: Every streaming chunk also triggers a heartbeat, and the chunk is additionally forwarded to the handler:
 
 ```csharp
 async IAsyncEnumerable<AgentResponseUpdate> StreamWithHeartbeat()
 {
     await foreach (var update in responseStream)
     {
-        ctx.Heartbeat(update.Text);    // ← Heartbeat with chunk text as detail
+        updates.Add(update);
+        ctx.Heartbeat(update.Text);    // ← Heartbeat fired on every chunk
         yield return update;
     }
 }
+await responseHandler.OnStreamingResponseUpdateAsync(StreamWithHeartbeat(), ct);
 ```
 
 **What happens on heartbeat timeout**: Temporal cancels the activity's `CancellationToken` and marks it as timed out. This is the primary mechanism for detecting a dead worker during long LLM calls.
 
-**Key insight**: If you do **not** register an `IAgentResponseHandler`, heartbeats are never sent during streaming. In that case, `HeartbeatTimeout` has no effect and the activity relies solely on `StartToCloseTimeout` for liveness detection. To get heartbeat-based liveness, register an `IAgentResponseHandler`.
+**Key insight**: `HeartbeatTimeout` is always active for agent activities because heartbeats are sent unconditionally on each streaming chunk. Registering an `IAgentResponseHandler` adds real-time streaming delivery to an external consumer — it does not change whether heartbeats are sent.
 
 #### 3. Workflow `TimeToLive` (default: 14 days)
 
@@ -447,7 +467,7 @@ AgentWorkflow → ExecuteActivityAsync → AgentActivities running → [WORKER D
 1. Activity is executing (LLM call in progress)
 2. Worker process crashes (OOM, hardware failure, deployment)
 3. Temporal detects the failure via one of:
-   - **HeartbeatTimeout** (if heartbeats were being sent): Temporal notices no heartbeat within the window
+   - **HeartbeatTimeout**: Because heartbeats are sent on every streaming chunk, Temporal notices when the window passes with no heartbeat
    - **Worker disconnect**: Temporal detects the worker's gRPC connection dropped
 4. Temporal marks the activity task as failed
 5. The workflow is now blocked on `ExecuteActivityAsync`, waiting for a result
@@ -506,7 +526,7 @@ If the Temporal server itself restarts:
 
 ### Heartbeat Detail: What Gets Sent
 
-When `IAgentResponseHandler` is registered, each streaming chunk's text is sent as the heartbeat detail:
+On every streaming chunk, the chunk's text is sent as the heartbeat detail — regardless of whether an `IAgentResponseHandler` is registered:
 
 ```csharp
 ctx.Heartbeat(update.Text);
@@ -536,7 +556,7 @@ This has two benefits:
                     │ (14 days)                                    │
 Activity start ─────┘                                              └── Workflow ends
 
-• HeartbeatTimeout: Dead-worker detection during streaming (requires IAgentResponseHandler)
+• HeartbeatTimeout: Dead-worker detection during streaming (active unconditionally — fired on every chunk)
 • StartToCloseTimeout: Hard limit on any single agent turn
 • Workflow TTL: How long the session stays alive between messages
 ```

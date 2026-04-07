@@ -178,9 +178,14 @@ public static async Task<IReadOnlyList<AgentResponse>> ExecuteAgentsInParallelAs
     IEnumerable<(TemporalAIAgent Agent, IList<ChatMessage> Messages, AgentSession Session)> requests,
     CancellationToken cancellationToken = default)
 {
-    var tasks = requests
-        .Select(r => r.Agent.RunAsync(r.Messages, r.Session, null, cancellationToken))
-        .ToList();
+    ArgumentNullException.ThrowIfNull(requests);
+
+    // Avoid double-enumeration: cast to IList if already materialized, otherwise ToList().
+    var requestList = requests as IList<(TemporalAIAgent Agent, IList<ChatMessage> Messages, AgentSession Session)>
+        ?? requests.ToList();
+    var tasks = new List<Task<AgentResponse>>(requestList.Count);
+    foreach (var r in requestList)
+        tasks.Add(r.Agent.RunAsync(r.Messages, r.Session, null, cancellationToken));
 
     return await Workflow.WhenAllAsync(tasks);
 }
@@ -318,6 +323,8 @@ public class AlertActivities(ITemporalClient client)
 **AlertWorkflow** — receives signals, uses an LLM agent to compose notifications:
 
 ```csharp
+using static Temporalio.Extensions.Agents.TemporalWorkflowExtensions;
+
 [Workflow("AmbientAgent.AlertWorkflow")]
 public class AlertWorkflow
 {
@@ -419,7 +426,7 @@ public async Task<string> RunAsync(string question)
 - `samples/EvaluatorOptimizer/EvaluatorOptimizerWorkflow.cs` — iterative agent communication
 - `samples/AmbientAgent/` — Pattern 3 example (cross-workflow signaling)
 - [Durability & Determinism](./durability-and-determinism.md) — why activity results are cached on replay
-- [Routing Patterns](../how-to/routing.md) — LLM-powered and workflow-based routing
+- [Routing Patterns](../how-to/MAF/routing.md) — LLM-powered and workflow-based routing
 
 ---
 
