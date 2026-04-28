@@ -220,7 +220,7 @@ You can register both exporters simultaneously during a migration or for local v
 `samples/MEAI/OpenTelemetry/` contains a runnable end-to-end example that demonstrates the full span hierarchy using the console exporter. Run it with:
 
 ```bash
-# Prerequisites: temporal server start-dev, OPENAI_API_KEY in appsettings.local.json
+# Prerequisites: temporal server start-dev, OPENAI_API_KEY set via dotnet user-secrets (see README for setup)
 dotnet run --project samples/MEAI/OpenTelemetry/DurableOpenTelemetry.csproj
 ```
 

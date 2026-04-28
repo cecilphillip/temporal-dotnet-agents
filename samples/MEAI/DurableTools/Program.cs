@@ -27,7 +27,7 @@
 // ─────────────
 // • A local Temporal server:  temporal server start-dev
 //   (The dev server starts on localhost:7233 with the "default" namespace.)
-// • OPENAI_API_KEY set in appsettings.local.json (or as an env variable).
+// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/DurableTools
 //   Note: this sample does not call the LLM — the workflow invokes the tool
 //   directly, so an API key is not strictly needed for the demo to run.
 //
@@ -46,7 +46,6 @@ using Temporalio.Extensions.Hosting;
 
 // ── Setup: Build the application host ────────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY") ?? "";

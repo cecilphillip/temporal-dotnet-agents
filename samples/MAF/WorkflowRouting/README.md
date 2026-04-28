@@ -54,16 +54,13 @@ temporal server start-dev
 
 ### 2. Configure API credentials
 
-Set your API key in `appsettings.json` or create an `appsettings.local.json` (gitignored):
+Set your API key with:
 
-```json
-{
-    "OPENAI_API_BASE_URL": "https://api.openai.com/v1",
-    "OPENAI_API_KEY": "sk-..."
-}
+```bash
+dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/WorkflowRouting
 ```
 
-To use a non-default Temporal address, add:
+To use a non-default Temporal address, add it to `appsettings.json`:
 
 ```json
 {

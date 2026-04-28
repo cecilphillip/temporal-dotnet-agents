@@ -474,7 +474,7 @@ When a worker crashes:
 - **Don't use wall-clock time in workflows** — `DateTime.UtcNow`, `DateTimeOffset.Now`
 - **Don't use `Random` or `Guid.NewGuid()` in workflows** — non-deterministic
 - **Don't call `builder.Build()` twice** — assign `var host = builder.Build()` and keep the reference
-- **Don't commit real API keys in `appsettings.json`** — use `appsettings.local.json` (gitignored) or environment variables
+- **Don't commit real API keys in `appsettings.json`** — use `dotnet user-secrets` or environment variables
 
 ---
 
@@ -631,7 +631,7 @@ Pipeline defined in `.github/workflows/build.yml`. Three jobs:
 ## Run Samples
 
 ```bash
-# All samples require: temporal server start-dev + OPENAI_API_KEY in appsettings.json
+# All samples require: temporal server start-dev + OPENAI_API_KEY set via dotnet user-secrets
 
 # Temporalio.Extensions.AI sample
 dotnet run --project samples/MEAI/DurableChat/DurableChat.csproj

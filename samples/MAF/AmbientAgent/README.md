@@ -53,7 +53,15 @@ External code inspects workflow state via `[WorkflowQuery]` — e.g., `GetStatus
 ### Prerequisites
 
 - A local Temporal server: `temporal server start-dev`
-- OpenAI API credentials in `appsettings.json` or `appsettings.local.json`
+- OpenAI API credentials via `dotnet user-secrets` (see below) or environment variable
+
+### Configure API credentials
+
+Set your API key with:
+
+```bash
+dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/AmbientAgent
+```
 
 ### Run
 

@@ -12,7 +12,7 @@
 // Prerequisites
 // ─────────────
 // • A local Temporal server:  temporal server start-dev
-// • Set OPENAI_API_KEY in appsettings.json (or appsettings.local.json)
+// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/WorkflowRouting
 //
 // Run:  dotnet run --project samples/WorkflowRouting/WorkflowRouting.csproj
 
@@ -30,7 +30,6 @@ using WorkflowRouting;
 
 // ── Step 1: Build the application host ───────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 // ── Step 2: Load configuration ──────────────────────────────────────────────
@@ -44,7 +43,7 @@ if (string.IsNullOrEmpty(apiBaseUrl))
 
 if (string.IsNullOrEmpty(apiKey))
 {
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured in appsettings.json.");
+    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/WorkflowRouting");
 }
 
 var endpoint = new Uri(apiBaseUrl);

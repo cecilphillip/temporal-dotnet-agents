@@ -315,11 +315,14 @@ if (apiKey is null) throw new ArgumentNullException(nameof(apiKey));
 ```jsonc
 // WRONG — checked into source control
 { "OPENAI_API_KEY": "sk-abc123..." }
-
-// CORRECT — use appsettings.local.json (gitignored) or environment variables
 ```
 
-All samples use `appsettings.local.json` (which is in `.gitignore`) for secrets.
+```bash
+# CORRECT — store secrets outside the repo using dotnet user-secrets
+dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project <path-to-project>
+```
+
+All samples load secrets from `dotnet user-secrets`, which stores values in `~/.microsoft/usersecrets/` (outside the repo) and is automatically picked up by `Host.CreateApplicationBuilder()` in the Development environment.
 
 ### Do use NuGet packages for Temporal SDK dependencies
 
@@ -369,7 +372,7 @@ opts.AddScheduledAgentRun("Agent", "my-schedule", request, updatedSpec);
 | Set `ActivityStartToCloseTimeout` for HITL | Timeouts | Activity failure |
 | Don't reuse `TemporalAIAgent` instances | Sessions | Incorrect behavior |
 | Delete schedules before removing agents | Scheduling | Orphaned schedules |
-| Use `appsettings.local.json` for secrets | Security | Credential leak |
+| Use `dotnet user-secrets` for secrets | Security | Credential leak |
 | Use exact exception types in xUnit | Testing | Test failures |
 
 ---

@@ -45,7 +45,7 @@
 // Prerequisites
 // ─────────────
 // • A local Temporal server:  temporal server start-dev
-// • OPENAI_API_KEY set in appsettings.local.json or as an environment variable
+// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/HumanInTheLoop
 //
 // Run:  dotnet run --project samples/MEAI/HumanInTheLoop/HumanInTheLoop.csproj
 
@@ -63,7 +63,6 @@ using Temporalio.Extensions.Hosting;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 var apiKey        = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
@@ -74,7 +73,7 @@ var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS")
 if (string.IsNullOrEmpty(apiBaseUrl))
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 if (string.IsNullOrEmpty(apiKey))
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured in appsettings.json.");
+    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MEAI/HumanInTheLoop");
 
 // ── Temporal client with DurableAIDataConverter ───────────────────────────────
 // DurableAIDataConverter.Instance wraps Temporal's payload converter with

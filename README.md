@@ -75,23 +75,36 @@ Activity  ←── calls real IChatClient / AIAgent — retried automatically o
 
 ### Sample credentials
 
-Every sample reads credentials from `appsettings.local.json` in its own directory (gitignored). Copy from the committed `appsettings.json` and fill in your values:
+API keys are managed with [.NET user-secrets](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets) — stored outside the repo in `~/.microsoft/usersecrets/` and loaded automatically by `Host.CreateApplicationBuilder()` in the Development environment.
+
+Set `OPENAI_API_KEY` for each sample project you want to run:
 
 ```bash
-cp samples/MEAI/DurableChat/appsettings.json \
-   samples/MEAI/DurableChat/appsettings.local.json
+dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/DurableChat
 ```
 
-```json
-{
-  "OPENAI_API_KEY": "sk-...",
-  "OPENAI_API_BASE_URL": "https://api.openai.com/v1",
-  "OPENAI_MODEL": "gpt-4o-mini",
-  "TEMPORAL_ADDRESS": "localhost:7233"
-}
+The 14 sample projects that need keys set:
+
+```
+samples/MAF/BasicAgent
+samples/MAF/EvaluatorOptimizer
+samples/MAF/HumanInTheLoop
+samples/MAF/AmbientAgent
+samples/MAF/WorkflowOrchestration
+samples/MAF/WorkflowRouting
+samples/MAF/SplitWorkerClient/Worker
+samples/MAF/MultiAgentRouting
+samples/MEAI/DurableChat
+samples/MEAI/DurableTools
+samples/MEAI/HumanInTheLoop
+samples/MEAI/DurableEmbeddings
+samples/MEAI/OpenTelemetry
+samples/MEAI/CustomWorkflow
 ```
 
-Alternatively, set the values as environment variables — `OPENAI_API_KEY`, `OPENAI_API_BASE_URL`, and `OPENAI_MODEL` — and the samples will pick them up automatically via `IConfiguration`.
+Non-sensitive settings (`OPENAI_API_BASE_URL`, `OPENAI_MODEL`, `TEMPORAL_ADDRESS`) have working defaults in each project's committed `appsettings.json` and do not need to be set via user-secrets unless you want to override them.
+
+Alternatively, set `OPENAI_API_KEY` as an environment variable — the samples pick it up automatically via `IConfiguration`.
 
 ```bash
 # Start Temporal (separate terminal)

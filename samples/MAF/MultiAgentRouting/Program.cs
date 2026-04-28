@@ -8,7 +8,7 @@
 // ─────────────
 // • A local Temporal server:  temporal server start-dev
 //   (The dev server starts on localhost:7233 with the "default" namespace.)
-// • An OpenAI API key in appsettings.json
+// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/MultiAgentRouting
 //
 // Run:  dotnet run --project samples/MultiAgentRouting/MultiAgentRouting.csproj
 
@@ -44,7 +44,6 @@ using var tracerProvider = Sdk.CreateTracerProviderBuilder()
 
 // ── Step 2: Build the application host ───────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 // ── Step 3: Load configuration ────────────────────────────────────────────────
@@ -58,7 +57,7 @@ if (string.IsNullOrEmpty(apiBaseUrl))
 
 if (string.IsNullOrEmpty(apiKey))
 {
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured in appsettings.json.");
+    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/MultiAgentRouting");
 }
 
 var endpoint = new Uri(apiBaseUrl);
