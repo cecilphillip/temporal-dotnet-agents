@@ -1,9 +1,5 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using Temporalio.Client;
 using Temporalio.Extensions.Hosting;
 
 namespace Temporalio.Extensions.AI;
@@ -56,50 +52,7 @@ public static class DurableAIServiceCollectionExtensions
         configure?.Invoke(options);
         options.Validate();
 
-        var services = builder.Services;
-
-        // Register options as singleton.
-        services.AddSingleton(options);
-
-        // Register the function registry (populated by AddDurableTools calls).
-        services.TryAddSingleton<DurableFunctionRegistry>();
-
-        // Register the function registry as IReadOnlyDictionary for activity resolution.
-        services.TryAddSingleton<IReadOnlyDictionary<string, AIFunction>>(
-            sp => sp.GetRequiredService<DurableFunctionRegistry>());
-
-        // Register the session client and default workflow only if enabled.
-        if (options.RegisterDefaultWorkflow)
-        {
-            // Register the session client (concrete + interface alias share the same instance).
-            services.TryAddSingleton<DurableChatSessionClient>(sp =>
-                new DurableChatSessionClient(
-                    sp.GetRequiredService<ITemporalClient>(),
-                    options,
-                    sp.GetService<ILogger<DurableChatSessionClient>>()));
-            services.TryAddSingleton<IDurableChatSessionClient>(
-                sp => sp.GetRequiredService<DurableChatSessionClient>());
-
-            // Register the default workflow on the worker.
-            builder.AddWorkflow<DurableChatWorkflow>();
-        }
-
-        // Register activities on the worker (always needed).
-        builder.AddSingletonActivities<DurableChatActivities>();
-        builder.AddSingletonActivities<DurableFunctionActivities>();
-
-        // Register embedding activities (resolves IEmbeddingGenerator from DI at runtime).
-        builder.AddSingletonActivities<DurableEmbeddingActivities>();
-
-        // Auto-wire DurableAIDataConverter for both client registration patterns.
-        // TryAddEnumerable deduplicates if AddDurableAI() is called more than once.
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IConfigureOptions<TemporalClientConnectOptions>,
-            DurableAIClientOptionsConfigurator>());
-
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IPostConfigureOptions<TemporalWorkerServiceOptions>,
-            DurableAIWorkerClientConfigurator>());
+        DurableAIRegistrar.Register(builder.Services, builder, options);
 
         return builder;
     }

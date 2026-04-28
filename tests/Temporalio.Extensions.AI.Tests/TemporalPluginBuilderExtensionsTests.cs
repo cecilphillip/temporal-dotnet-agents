@@ -191,6 +191,44 @@ public class TemporalPluginBuilderExtensionsTests
         Assert.Same(customConverter, options.DataConverter);
     }
 
+    [Fact]
+    public void DurableAIDataConverterPlugin_ConfigureClient_IsIdempotent_WhenCalledTwice()
+    {
+        // Pins the contract that calling AddDurableAI() AND .AddClientPlugin(new DurableAIDataConverterPlugin())
+        // is safe — a future refactor cannot silently regress this.
+        var plugin = new DurableAIDataConverterPlugin();
+        var options = new TemporalClientOptions();
+
+        Assert.Equal(DataConverter.Default, options.DataConverter);
+
+        plugin.ConfigureClient(options);
+        var afterFirst = options.DataConverter;
+        Assert.Same(DurableAIDataConverter.Instance, afterFirst);
+
+        plugin.ConfigureClient(options);
+
+        // Second call must leave the converter unchanged — not replaced, not nulled,
+        // not swapped for a new instance.
+        Assert.Same(DurableAIDataConverter.Instance, options.DataConverter);
+        Assert.Same(afterFirst, options.DataConverter);
+    }
+
+    [Fact]
+    public void DurableAIDataConverterPlugin_ConfigureClient_DoesNotOverrideUserConverter()
+    {
+        // If the user has already set a non-default converter, ConfigureClient must
+        // never override it — neither on the first call nor on a repeated call.
+        var plugin = new DurableAIDataConverterPlugin();
+        var userConverter = new DataConverter(new DefaultPayloadConverter(), new DefaultFailureConverter());
+        var options = new TemporalClientOptions { DataConverter = userConverter };
+
+        plugin.ConfigureClient(options);
+        Assert.Same(userConverter, options.DataConverter);
+
+        plugin.ConfigureClient(options);
+        Assert.Same(userConverter, options.DataConverter);
+    }
+
     // ── AddDurableAI configurator registration ────────────────────────────
 
     [Fact]

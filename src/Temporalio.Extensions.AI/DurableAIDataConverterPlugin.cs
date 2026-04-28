@@ -16,7 +16,13 @@ internal sealed class DurableAIDataConverterPlugin : ITemporalClientPlugin
 
     public DurableAIDataConverterPlugin(ILogger? logger = null) => _logger = logger;
 
-    public string Name => "Temporalio.Extensions.AI.DataConverter";
+    /// <summary>
+    /// The plugin name. Exposed as a constant so other registrars can dedupe
+    /// without hard-coding the string in multiple places.
+    /// </summary>
+    internal const string PluginName = "Temporalio.Extensions.AI.DataConverter";
+
+    public string Name => PluginName;
 
     public void ConfigureClient(TemporalClientOptions options)
     {
@@ -94,6 +100,18 @@ internal sealed class DurableAIWorkerClientConfigurator
     {
         if (options.ClientOptions is null) return;
         var list = options.ClientOptions.Plugins?.ToList() ?? [];
+
+        // Dedupe by Name — never push a second DurableAIDataConverterPlugin if one
+        // is already present (e.g., the user manually added it via .AddClientPlugin
+        // or another registration path already wired one in).
+        if (list.Any(p => string.Equals(
+                p.Name,
+                DurableAIDataConverterPlugin.PluginName,
+                StringComparison.Ordinal)))
+        {
+            return;
+        }
+
         list.Add(new DurableAIDataConverterPlugin(_logger));
         options.ClientOptions.Plugins = list;
     }
