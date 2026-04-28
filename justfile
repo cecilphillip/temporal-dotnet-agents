@@ -87,30 +87,35 @@ test: test-unit-all test-integration test-integration-ai
 
 # Run all tests (unit + integration) with code coverage — Agents and AI libraries
 test-coverage: build
+    rm -rf {{coverage_dir}}
     dotnet test {{unit_tests_dir}} \
         --configuration {{configuration}} \
         --no-build \
         --collect "XPlat Code Coverage" \
         --results-directory {{coverage_dir}}/agents \
-        --logger "console;verbosity=normal"
+        --logger "console;verbosity=normal" \
+        -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Exclude="[Temporalio.Extensions.AI]Temporalio.Extensions.AI.DurableAIJsonContext,[Temporalio.Extensions.AI]Temporalio.Extensions.AI.DurableAIJsonUtilities"
     dotnet test {{unit_tests_ai_dir}} \
         --configuration {{configuration}} \
         --no-build \
         --collect "XPlat Code Coverage" \
         --results-directory {{coverage_dir}}/ai \
-        --logger "console;verbosity=normal"
+        --logger "console;verbosity=normal" \
+        -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Exclude="[Temporalio.Extensions.AI]Temporalio.Extensions.AI.DurableAIJsonContext,[Temporalio.Extensions.AI]Temporalio.Extensions.AI.DurableAIJsonUtilities"
     dotnet test {{integration_tests_dir}} \
         --configuration {{configuration}} \
         --no-build \
         --collect "XPlat Code Coverage" \
         --results-directory {{coverage_dir}}/agents-integration \
-        --logger "console;verbosity=normal"
+        --logger "console;verbosity=normal" \
+        -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Exclude="[Temporalio.Extensions.AI]Temporalio.Extensions.AI.DurableAIJsonContext,[Temporalio.Extensions.AI]Temporalio.Extensions.AI.DurableAIJsonUtilities"
     dotnet test {{integration_tests_ai_dir}} \
         --configuration {{configuration}} \
         --no-build \
         --collect "XPlat Code Coverage" \
         --results-directory {{coverage_dir}}/ai-integration \
-        --logger "console;verbosity=normal"
+        --logger "console;verbosity=normal" \
+        -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Exclude="[Temporalio.Extensions.AI]Temporalio.Extensions.AI.DurableAIJsonContext,[Temporalio.Extensions.AI]Temporalio.Extensions.AI.DurableAIJsonUtilities"
 
 # Merge all coverage XML files into an HTML report and print line/branch summary
 coverage-report: test-coverage
