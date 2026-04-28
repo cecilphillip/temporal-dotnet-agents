@@ -430,5 +430,6 @@ Desktop.ini
 
 # claude
 .clans/
-.claude/agents/clans-*.md
-.claude/skills/*
+.claude/
+#.claude/agents/clans-*.md
+#.claude/skills/*
