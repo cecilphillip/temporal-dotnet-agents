@@ -6,6 +6,7 @@
 // Prerequisites
 // ─────────────
 // • A local Temporal server:  temporal server start-dev
+// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/SplitWorkerClient/Worker
 //
 // Run this first, then start the Client in a separate terminal:
 //   dotnet run --project samples/SplitWorkerClient/Worker/Worker.csproj
@@ -21,7 +22,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Temporalio.Extensions.Agents;
 
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 // ── Step 1: Provide a real IChatClient ───────────────────────────────────────
@@ -34,7 +34,7 @@ if (string.IsNullOrEmpty(apiBaseUrl))
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 if (string.IsNullOrEmpty(apiKey))
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured in appsettings.json.");
+    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/SplitWorkerClient/Worker");
 
 var endpoint = new Uri(apiBaseUrl);
 var openAiOptions = new OpenAIClientOptions()

@@ -4,6 +4,7 @@
     <OutputType>Exe</OutputType>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <IsPackable>false</IsPackable>
+    <UserSecretsId>fa25b647-0a6e-48ab-b661-5b8dbae0a4dc</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
