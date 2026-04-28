@@ -63,6 +63,13 @@ public sealed class DurableExecutionOptions
     public bool EnableSearchAttributes { get; set; }
 
     /// <summary>
+    /// Default keyed DI service key used to resolve <see cref="IChatClient"/>.
+    /// When null (default), the unkeyed registration is used.
+    /// Per-call overrides via <see cref="TemporalChatOptionsExtensions.WithChatClientKey"/> take precedence.
+    /// </summary>
+    public string? DefaultChatClientKey { get; set; }
+
+    /// <summary>
     /// Gets or sets whether to register the default <see cref="DurableChatWorkflow"/> and
     /// <see cref="DurableChatSessionClient"/>. Defaults to <see langword="true"/>.
     /// </summary>
