@@ -16,7 +16,7 @@ This project ships two libraries — `Temporalio.Extensions.AI` and `Temporalio.
 | **Temporal UI search attributes** | No | Yes — `AgentName`, `SessionCreatedAt`, `TurnCount` |
 | **StateBag / AIContextProvider** | No | Yes |
 | **HITL** | Yes | Yes |
-| **Embeddings** | Yes | Yes — inject `IEmbeddingGenerator` into tool classes via DI (see [MEAI Middleware guide](how-to/MAF/meai-middleware.md)) |
+| **Embeddings** | Yes | Yes — inject `IEmbeddingGenerator` into tool classes via DI |
 | **Recommended** | Yes | Yes |
 
 ---
