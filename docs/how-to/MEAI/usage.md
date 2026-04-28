@@ -53,23 +53,36 @@ builder.Services
     .Build();
 ```
 
-`DurableChatActivities` — the internal activity class that executes LLM calls — constructor-injects the **unkeyed** `IChatClient`. This is the instance resolved by `services.GetRequiredService<IChatClient>()`.
+`DurableChatActivities` — the internal activity class that executes LLM calls — resolves the `IChatClient` per-invocation using the following priority order:
 
-> **Note:** If you use `AddKeyedChatClient` to manage multiple LLM clients in one application, also register an unkeyed alias so `DurableChatActivities` can resolve it:
+1. `ChatOptions.WithChatClientKey("key")` — per-call override set by the caller
+2. `DurableExecutionOptions.DefaultChatClientKey` — worker-level default key set in `AddDurableAI`
+3. Unkeyed `IChatClient` — existing fallback when no key is specified
+
+> **Note:** If you use `AddKeyedChatClient` to manage multiple LLM clients in one application, set `DefaultChatClientKey` in `AddDurableAI` instead of registering a redundant unkeyed alias:
 >
 > ```csharp
 > // Worker
 > builder.Services
->     .AddKeyedChatClient("gpt", gptClient)
+>     .AddKeyedChatClient("chat", gptClient)
 >     .UseFunctionInvocation()
 >     .Build();
 >
-> // Unkeyed alias — required by DurableChatActivities
-> builder.Services.AddSingleton<IChatClient>(
->     sp => sp.GetRequiredKeyedService<IChatClient>("gpt"));
+> builder.Services
+>     .AddHostedTemporalWorker("localhost:7233", "default", "durable-chat")
+>     .AddDurableAI(opts =>
+>     {
+>         opts.DefaultChatClientKey = "chat";   // resolves AddKeyedChatClient("chat", ...)
+>     });
 > ```
 >
-> Without the unkeyed alias, the worker will throw a `DependencyInjection` exception at startup.
+> To switch to a different client for a single turn without changing the worker configuration, pass a per-call override via `ChatOptions`:
+>
+> ```csharp
+> // Client
+> var options = new ChatOptions().WithChatClientKey("routing");
+> var response = await sessionClient.ChatAsync(conversationId, messages, options: options);
+> ```
 
 ---
 

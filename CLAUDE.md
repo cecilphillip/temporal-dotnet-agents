@@ -256,7 +256,7 @@ builder.Services
 - Integration tests use `WorkflowEnvironment.StartLocalAsync()` (embedded Temporal CLI binary), not a separate server
 - `IChatClient` must be registered in DI **before** `AddDurableAI` — the activities constructor-inject it
 - Use `AddChatClient(innerClient).UseFunctionInvocation().Build()` (idiomatic MEAI DI pattern) instead of `AddSingleton<IChatClient>`; `UseDurableExecution()` chains onto the same builder
-- `DurableChatActivities` injects the **unkeyed** `IChatClient` — if using `AddKeyedChatClient`, also register an unkeyed alias or the activities will fail to resolve at startup
+- `DurableChatActivities` resolves `IChatClient` per-invocation using a layered key model: (1) `ChatOptions.WithChatClientKey("key")` per-call override → (2) `DurableExecutionOptions.DefaultChatClientKey` worker-level default → (3) unkeyed `IChatClient` fallback. Set `opts.DefaultChatClientKey` in `AddDurableAI` when registering only keyed clients — no unkeyed alias is required.
 
 ---
 

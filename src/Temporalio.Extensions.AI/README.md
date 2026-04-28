@@ -156,16 +156,33 @@ Inject by key with `[FromKeyedServices]`:
 public class MyService([FromKeyedServices("chat")] IChatClient chatClient) { }
 ```
 
-**Note:** `DurableChatActivities` injects the **unkeyed** `IChatClient`. If you register only keyed clients, the activities will fail to resolve the client. Either keep one unkeyed registration for the activities, or register an additional unkeyed alias:
+**Worker-level default key:** Set `DefaultChatClientKey` on `DurableExecutionOptions` so `DurableChatActivities` resolves a specific keyed client — no unkeyed alias required:
 
 ```csharp
 // Worker
-// Register keyed clients for your own services...
-builder.Services.AddKeyedChatClient("chat", fastClient).UseFunctionInvocation().Build();
-
-// ...and an unkeyed one for DurableChatActivities:
-builder.Services.AddChatClient(fastClient).UseFunctionInvocation().Build();
+builder.Services
+    .AddHostedTemporalWorker("my-task-queue")
+    .AddDurableAI(opts =>
+    {
+        opts.DefaultChatClientKey = "chat";   // resolves AddKeyedChatClient("chat", ...)
+    });
 ```
+
+`DurableChatActivities` uses the following resolution order, from highest to lowest priority:
+
+1. `ChatOptions.WithChatClientKey("key")` — per-call override set by the caller
+2. `DurableExecutionOptions.DefaultChatClientKey` — worker-level default
+3. Unkeyed `IChatClient` — existing fallback when no key is specified
+
+**Per-call override:** Use `WithChatClientKey` on `ChatOptions` to switch models for a single turn without changing the worker configuration:
+
+```csharp
+// Client
+var options = new ChatOptions().WithChatClientKey("routing");
+var response = await sessionClient.ChatAsync("conversation-123", messages, options);
+```
+
+`WithChatClientKey` throws `ArgumentException` on a null or empty key. Overriding back to the unkeyed client via `WithChatClientKey` is not supported in v1 — omit the call to use the worker-level default instead.
 
 ### Step 3: Send a Message
 
@@ -442,7 +459,7 @@ services.AddHostedTemporalWorker(opts =>
 | `DurableAIFunction` | `DelegatingAIFunction` — dispatches tool calls as Temporal activities when inside a workflow |
 | `DurableEmbeddingGenerator` | `DelegatingEmbeddingGenerator` — dispatches embedding generation as Temporal activities |
 | `DurableChatReducer` | `IChatReducer` — preserves full history in workflow state while passing a reduced window to the LLM |
-| `TemporalChatOptionsExtensions` | Per-request overrides via `ChatOptions` — `WithActivityTimeout`, `WithMaxRetryAttempts`, `WithHeartbeatTimeout` |
+| `TemporalChatOptionsExtensions` | Per-request overrides via `ChatOptions` — `WithActivityTimeout`, `WithMaxRetryAttempts`, `WithHeartbeatTimeout`, `WithChatClientKey` |
 | `DurableApprovalRequest` | HITL — request sent to block the workflow pending human review |
 | `DurableApprovalDecision` | HITL — human decision that unblocks the workflow |
 
