@@ -336,15 +336,13 @@ temporal server start-dev          # terminal 1
 dotnet run --project samples/MEAI/DurableChat/DurableChat.csproj   # terminal 2
 ```
 
-Credentials go in `samples/MEAI/DurableChat/appsettings.local.json` (gitignored):
+Set the OpenAI API key using `dotnet user-secrets`:
 
-```json
-{
-  "OPENAI_API_KEY": "sk-...",
-  "OPENAI_API_BASE_URL": "https://api.openai.com/v1",
-  "OPENAI_MODEL": "gpt-4o-mini"
-}
+```bash
+dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/DurableChat
 ```
+
+Non-sensitive settings (`OPENAI_API_BASE_URL`, `OPENAI_MODEL`) remain in `samples/MEAI/DurableChat/appsettings.json`. Secrets stored via `dotnet user-secrets` are kept in `~/.microsoft/usersecrets/` (outside the repo) and are automatically loaded by `Host.CreateApplicationBuilder()` in the Development environment.
 
 ---
 

@@ -237,6 +237,6 @@ Submitted by the external reviewer via `SubmitApprovalAsync`.
 `samples/MEAI/HumanInTheLoop/` contains a complete end-to-end demo. The sample uses a data management assistant that can delete records but requires explicit human approval. The main loop auto-approves after detecting the pending request, demonstrating the full flow in a single process.
 
 ```bash
-# Prerequisites: temporal server start-dev, OPENAI_API_KEY in appsettings.local.json
+# Prerequisites: temporal server start-dev, OPENAI_API_KEY set via dotnet user-secrets (see README for setup)
 dotnet run --project samples/MEAI/HumanInTheLoop/HumanInTheLoop.csproj
 ```
