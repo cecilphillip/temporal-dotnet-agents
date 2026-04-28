@@ -1,57 +1,6 @@
 // OpenTelemetry sample — demonstrates how to configure distributed tracing for
 // Temporalio.Extensions.AI, showing the full span hierarchy produced by a
 // durable chat session.
-//
-// This sample also demonstrates the canonical plugin-based registration path
-// using DurableAIPlugin (an ITemporalWorkerPlugin) composed with the SDK's
-// TracingInterceptor. Both AddDurableAI() and AddWorkerPlugin(new DurableAIPlugin())
-// produce equivalent runtime behavior; the plugin form is the recommended
-// shape for users composing with other Temporal partner plugins. The plugin
-// surface is gated by [Experimental("TAI001")] — the file-level #pragma below
-// opts in.
-//
-// Span hierarchy for a single chat turn
-// ──────────────────────────────────────
-//   durable_chat.send                      ← library span (DurableChatSessionClient)
-//     UpdateWorkflow:Chat                  ← Temporal SDK span (client side)
-//       RunActivity:GetResponse            ← Temporal SDK span (worker side)
-//         durable_chat.turn                ← library span (DurableChatActivities)
-//
-// When durable tools are involved an additional level appears:
-//   durable_chat.turn
-//     durable_function.invoke              ← library span (DurableFunctionActivities)
-//
-// ActivitySource names to register
-// ─────────────────────────────────
-//   "Temporalio.Extensions.AI"    — DurableChatTelemetry.ActivitySourceName
-//       Spans:  durable_chat.send, durable_chat.turn, durable_function.invoke
-//   "Temporalio.Client"           — TracingInterceptor.ClientSource.Name
-//       Spans:  UpdateWorkflow:*, QueryWorkflow:*, StartWorkflow:*
-//   "Temporalio.Workflows"        — TracingInterceptor.WorkflowsSource.Name
-//       Spans:  workflow execution spans (replay-safe, only emit on first run)
-//   "Temporalio.Activities"       — TracingInterceptor.ActivitiesSource.Name
-//       Spans:  RunActivity:*
-//
-// Span attributes set by the library
-// ────────────────────────────────────
-//   durable_chat.send
-//     conversation.id       — the session/conversation identifier passed to ChatAsync
-//   durable_chat.turn
-//     conversation.id       — same session identifier, propagated into the activity
-//     gen_ai.request.model  — model ID from the ChatOptions
-//     gen_ai.response.model — model ID returned by the LLM in the response
-//     gen_ai.usage.input_tokens  — prompt token count
-//     gen_ai.usage.output_tokens — completion token count
-//   durable_function.invoke
-//     gen_ai.tool.name      — the AIFunction name being invoked
-//     gen_ai.tool.call_id   — the tool call ID from the LLM response
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-//   (The dev server starts on localhost:7233 with the "default" namespace.)
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/OpenTelemetry
-//
 // Run:  dotnet run --project samples/MEAI/OpenTelemetry/OpenTelemetry.csproj
 
 #pragma warning disable TAI001 // Opt in to the experimental plugin surface (DurableAIPlugin, AddWorkerPlugin)
@@ -84,26 +33,7 @@ if (string.IsNullOrEmpty(apiKey))
     throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MEAI/OpenTelemetry");
 
 // ── Setup: Register OpenTelemetry ─────────────────────────────────────────────
-// Four ActivitySource names must be registered:
-//
-//   DurableChatTelemetry.ActivitySourceName  ("Temporalio.Extensions.AI")
-//     — emits durable_chat.send (client), durable_chat.turn (worker),
-//       and durable_function.invoke (per-tool activity)
-//
-//   TracingInterceptor.ClientSource.Name     ("Temporalio.Client")
-//     — emits spans for workflow updates, queries, and starts issued from
-//       the client side (e.g. UpdateWorkflow:Chat)
-//
-//   TracingInterceptor.WorkflowsSource.Name  ("Temporalio.Workflows")
-//     — emits spans during workflow execution; these are suppressed on
-//       replay so they only appear on the first execution
-//
-//   TracingInterceptor.ActivitiesSource.Name ("Temporalio.Activities")
-//     — emits spans for every activity invocation (e.g. RunActivity:GetResponse)
-//
-// The console exporter prints each span to stdout so you can see the full
-// hierarchy without running a collector. In production, replace or supplement
-// AddConsoleExporter() with AddOtlpExporter().
+
 builder.Services
     .AddOpenTelemetry()
     .WithTracing(tracing => tracing
@@ -151,25 +81,11 @@ builder.Services
     .Build();
 
 // ── Setup: Register worker + durable AI via the plugin path ─────────────────
-// AddWorkerPlugin(DurableAIPlugin) is the canonical Temporal Partner pattern
-// for AI integrations. It registers DurableChatWorkflow, DurableChatActivities,
+// AddWorkerPlugin(DurableAIPlugin) is the canonical pattern for AI integrations.
+// It registers DurableChatWorkflow, DurableChatActivities,
 // DurableFunctionActivities, DurableEmbeddingActivities, the function registry,
 // DurableChatSessionClient, the DurableExecutionOptions singleton, and queues
 // DurableAIPlugin in the worker plugin chain — equivalent to AddDurableAI().
-//
-// Composing with other plugins/interceptors:
-//   • TracingInterceptor was added to the client's Interceptors list above —
-//     that handles W3C trace context propagation across the gRPC boundary.
-//   • DurableAIPlugin handles the AI-specific worker-side wiring.
-//   • Other partner plugins (Braintrust, Pydantic, etc.) can be added with
-//     additional .AddWorkerPlugin(...) calls without conflict — each has a
-//     unique Name so the client-plugin dedupe path leaves them alone.
-//
-// AddDurableAI() remains supported and is equivalent for users who prefer
-// the lowest-friction DI-extension shape:
-//
-//     .AddHostedTemporalWorker(temporalAddress, "default", "durable-chat-otel")
-//     .AddDurableAI(opts => { /* ... */ });
 builder.Services
     .AddHostedTemporalWorker(temporalAddress, "default", "durable-chat-otel")
     .AddWorkerPlugin(new DurableAIPlugin(opts =>
