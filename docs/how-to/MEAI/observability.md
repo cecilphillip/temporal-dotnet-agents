@@ -215,6 +215,26 @@ You can register both exporters simultaneously during a migration or for local v
 
 ---
 
+## Activity Summaries in the Temporal Web UI
+
+Beyond OpenTelemetry spans, the library also populates `ActivityOptions.Summary` at every activity dispatch site. The summary value is rendered in the Temporal Web UI activity list — clicking into a workflow shows each activity row with its summary alongside the activity type, making it easy to scan which model handled a turn or which tool a turn invoked without opening individual events.
+
+This is fully automatic. There is no public API knob to override the summary; the values are derived from the call site:
+
+| Activity | Summary value |
+|---|---|
+| Chat (`DurableChatActivities.GetResponseAsync`, streaming and non-streaming) | `chatOptions.ModelId` (e.g., `"gpt-4o-mini"`) |
+| Tool (`DurableFunctionActivities.InvokeFunctionAsync` via `DurableAIFunction`) | function `Name` (e.g., `"GetWeather"`) |
+| Embedding (`DurableEmbeddingActivities.GenerateAsync`) | `EmbeddingGenerationOptions.ModelId` |
+
+When the underlying field is null or empty the summary is omitted (no padding) — the activity row still appears, just without the summary label. HITL approval is implemented as a `[WorkflowUpdate]`, not an activity, so it has no `Summary` site.
+
+This follows the Temporal AI Partner Ecosystem Guide's recommendation: *"For debuggability, pass in a Summary when you call an activity, such as a summary of the user's query or the choice of LLM model. This will improve the rendering in Temporal UI."* For the full UI mechanics see [Enriching the UI — adding Summary to activities and timers](https://docs.temporal.io/develop/dotnet/platform/enriching-ui#adding-summary-to-activities-and-timers).
+
+Activity summaries are independent of OpenTelemetry — they are written into Temporal event history directly by the SDK and require no exporter or additional configuration.
+
+---
+
 ## Reference
 
 `samples/MEAI/OpenTelemetry/` contains a runnable end-to-end example that demonstrates the full span hierarchy using the console exporter. Run it with:

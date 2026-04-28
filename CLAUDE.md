@@ -68,6 +68,9 @@ TemporalAgents/
 │       ├── ChatClientBuilderExtensions.cs  # UseDurableExecution()
 │       ├── EmbeddingGeneratorBuilderExtensions.cs # UseDurableExecution() for embeddings
 │       ├── DurableAIServiceCollectionExtensions.cs # AddDurableAI(), AddDurableTools()
+│       ├── DurableAIPlugin.cs              # ITemporalWorkerPlugin entry point (parallel to AddDurableAI) [TAI001]
+│       ├── DurableAIRegistrar.cs           # Internal: shared DI registration body for both entry points
+│       ├── TemporalPluginBuilderExtensions.cs # AddWorkerPlugin() / AddClientPlugin() — incl. DurableAIPlugin overload
 │       ├── AIFunctionExtensions.cs         # AsDurable() extension on AIFunction
 │       └── TemporalChatOptionsExtensions.cs # WithActivityTimeout(), WithMaxRetryAttempts(), etc.
 
@@ -237,15 +240,47 @@ builder.Services
     .AddClientPlugin(new EncryptionPlugin());
 ```
 
-**`DurableAIDataConverter` auto-wiring**: `AddDurableAI()` registers `IConfigureOptions<TemporalClientConnectOptions>` (`DurableAIClientOptionsConfigurator`) and `IPostConfigureOptions<TemporalWorkerServiceOptions>` (`DurableAIWorkerClientConfigurator`) that apply `DurableAIDataConverter.Instance` when the converter is still `DataConverter.Default`.
+### Two equivalent registration entry points
+
+Two parallel paths register the durable AI workflow, activities, function registry, session client, and `DurableAIDataConverter` auto-wiring. They produce identical DI state — pick whichever fits your composition style. `AddDurableAI()` is the lowest-friction option for hosted-worker users; `DurableAIPlugin` matches the canonical "AI Agent SDK" pattern from the Temporal AI Partner Ecosystem Guide ("Our standard partner integration mechanism is the Plugin").
+
+```csharp
+// Path A — DI extension (unchanged, primary example in user docs)
+services.AddHostedTemporalWorker(addr, ns, "q")
+    .AddDurableAI(o => o.ActivityTimeout = TimeSpan.FromMinutes(5));
+
+// Path B — Worker plugin ([Experimental("TAI001")])
+services.AddHostedTemporalWorker(addr, ns, "q")
+    .AddWorkerPlugin(new DurableAIPlugin(o => o.ActivityTimeout = TimeSpan.FromMinutes(5)));
+```
+
+- `DurableAIPlugin : ITemporalWorkerPlugin`. Constructors: `()`, `(Action<DurableExecutionOptions>)`, `(DurableExecutionOptions)`. `Name` is `"Temporalio.Extensions.AI.DurableAIPlugin"` (matches Partner Guide convention). Gated by `[Experimental("TAI001")]`.
+- The `AddWorkerPlugin(DurableAIPlugin)` overload is the only ergonomic path: it registers DI services AND queues the plugin in one call, because activities cannot be registered from `ConfigureWorker` (no `IServiceProvider` at that hook). Also `[Experimental("TAI001")]`.
+- `DurableAIRegistrar` (internal) holds the shared DI registration body so both entry points converge on identical state.
+- Calling both `AddDurableAI()` and `AddWorkerPlugin(new DurableAIPlugin())` on the same builder is idempotent — DI services are registered with `TryAdd*` semantics, and `DurableAIWorkerClientConfigurator.PostConfigure` dedupes `DurableAIDataConverterPlugin` by plugin `Name` before pushing it into `ClientOptions.Plugins`.
+
+**`DurableAIDataConverter` auto-wiring**: both entry points register `IConfigureOptions<TemporalClientConnectOptions>` (`DurableAIClientOptionsConfigurator`) and `IPostConfigureOptions<TemporalWorkerServiceOptions>` (`DurableAIWorkerClientConfigurator`) that apply `DurableAIDataConverter.Instance` when the converter is still `DataConverter.Default`.
 
 | Scenario | Auto-wired? |
 |---|---|
 | `AddTemporalClient(addr, ns)` + `AddDurableAI()` | ✅ Yes — via `IConfigureOptions<TemporalClientConnectOptions>` |
 | `AddHostedTemporalWorker(addr, ns, queue)` + `AddDurableAI()` | ✅ Yes — via `IPostConfigureOptions<TemporalWorkerServiceOptions>` |
+| `AddHostedTemporalWorker(addr, ns, queue)` + `AddWorkerPlugin(new DurableAIPlugin())` | ✅ Yes — same configurators registered by `DurableAIRegistrar` |
 | Manual `TemporalClient.ConnectAsync` + `AddSingleton<ITemporalClient>` | ❌ No — set `DataConverter = DurableAIDataConverter.Instance` explicitly |
 
-`TryAddEnumerable` is used so calling `AddDurableAI()` twice does not register the configurators twice.
+`TryAddEnumerable` is used so calling `AddDurableAI()` twice — or mixing `AddDurableAI()` and `AddWorkerPlugin(new DurableAIPlugin())` — does not register the configurators twice.
+
+### Activity summaries (automatic)
+
+Wave 1 added `ActivityOptions.Summary` at every activity dispatch site, populated automatically by the library. Users get the right summary in the Temporal Web UI with no public API knob to set.
+
+| Activity | Summary value |
+|---|---|
+| Chat (`DurableChatActivities.GetResponseAsync`, streaming and non-streaming) | `chatOptions.ModelId` (e.g., `"gpt-4o-mini"`) |
+| Tool (`DurableFunctionActivities.InvokeFunctionAsync` via `DurableAIFunction`) | function `Name` (e.g., `"GetWeather"`) |
+| Embedding (`DurableEmbeddingActivities.GenerateAsync`) | `EmbeddingGenerationOptions.ModelId` |
+
+Each middleware class has an `internal static BuildActivitySummary(...)` helper. Falls back to `null` when the underlying field is null/empty (no padding). HITL approval is implemented as a `[WorkflowUpdate]`, not an activity, so it has no `ActivityOptions.Summary` site. See the Temporal "enriching the UI" doc: https://docs.temporal.io/develop/dotnet/platform/enriching-ui#adding-summary-to-activities-and-timers.
 
 ### Important Notes
 

@@ -294,6 +294,27 @@ builder.Services
 #pragma warning restore TAI001
 ```
 
+### Alternative: `DurableAIPlugin` entry point
+
+If you are already composing with other Temporal partner plugins, you may prefer a uniform `.AddWorkerPlugin(...)` registration style. `DurableAIPlugin` is an `ITemporalWorkerPlugin` that registers the same DI services as `AddDurableAI()` — workflow, activities, function registry, session client, and `DurableAIDataConverter` auto-wiring. The two paths are equivalent; `AddDurableAI()` is the recommended primary entry point and remains unchanged.
+
+This pattern matches the canonical "AI Agent SDK" approach from the Temporal AI Partner Ecosystem Guide, which describes plugins as the standard partner integration mechanism.
+
+```csharp
+// Worker — equivalent to AddDurableAI() above; pick whichever fits your composition style
+#pragma warning disable TAI001
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "durable-chat")
+    .AddWorkerPlugin(new DurableAIPlugin(opts =>
+    {
+        opts.ActivityTimeout   = TimeSpan.FromMinutes(5);
+        opts.SessionTimeToLive = TimeSpan.FromHours(24);
+    }));
+#pragma warning restore TAI001
+```
+
+`DurableAIPlugin` constructors: `()`, `(Action<DurableExecutionOptions>)`, and `(DurableExecutionOptions)`. Both `DurableAIPlugin` and the `AddWorkerPlugin(DurableAIPlugin)` overload are gated by `[Experimental("TAI001")]`. Mixing `AddDurableAI()` and `AddWorkerPlugin(new DurableAIPlugin())` on the same builder is safe — DI registrations are idempotent and the underlying client-converter plugin is deduplicated by name.
+
 ---
 
 ## DurableChatSessionClient
