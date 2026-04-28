@@ -104,6 +104,27 @@ public class DurableChatClientTests
         Assert.Equal("keep-me", capturedOptions.AdditionalProperties["user.custom.key"]);
     }
 
+    // ── Activity Summary (visible in Temporal Web UI activity list) ────────
+
+    [Fact]
+    public void BuildActivitySummary_ReturnsModelId_WhenSet()
+    {
+        var opts = new ChatOptions { ModelId = "gpt-4o-mini" };
+        Assert.Equal("gpt-4o-mini", DurableChatClient.BuildActivitySummary(opts));
+    }
+
+    [Fact]
+    public void BuildActivitySummary_ReturnsNull_WhenChatOptionsNull() =>
+        Assert.Null(DurableChatClient.BuildActivitySummary(null));
+
+    [Fact]
+    public void BuildActivitySummary_ReturnsNull_WhenModelIdMissing()
+    {
+        Assert.Null(DurableChatClient.BuildActivitySummary(new ChatOptions()));
+        Assert.Null(DurableChatClient.BuildActivitySummary(new ChatOptions { ModelId = "" }));
+        Assert.Null(DurableChatClient.BuildActivitySummary(new ChatOptions { ModelId = "   " }));
+    }
+
     [Fact]
     public async Task GetResponseAsync_StripsChartClientKey_BeforeForwardingToInnerClient()
     {

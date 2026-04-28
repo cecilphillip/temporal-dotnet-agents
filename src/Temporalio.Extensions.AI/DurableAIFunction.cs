@@ -44,6 +44,7 @@ public sealed class DurableAIFunction : DelegatingAIFunction
         var activityOptions = new ActivityOptions
         {
             StartToCloseTimeout = _options.ActivityTimeout,
+            Summary = BuildActivitySummary(Name),
         };
 
         if (_options.RetryPolicy is not null)
@@ -65,4 +66,11 @@ public sealed class DurableAIFunction : DelegatingAIFunction
     {
         return arguments.Count == 0 ? null : new Dictionary<string, object?>(arguments);
     }
+
+    /// <summary>
+    /// Builds the activity summary value (visible in the Temporal Web UI activity list).
+    /// Uses the function name; returns null when the name is missing so the SDK omits the field.
+    /// </summary>
+    internal static string? BuildActivitySummary(string? functionName) =>
+        string.IsNullOrWhiteSpace(functionName) ? null : functionName;
 }

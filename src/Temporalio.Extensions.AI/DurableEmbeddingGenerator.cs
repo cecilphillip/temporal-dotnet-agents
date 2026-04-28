@@ -53,6 +53,7 @@ public sealed class DurableEmbeddingGenerator : DelegatingEmbeddingGenerator<str
         {
             StartToCloseTimeout = _options.ActivityTimeout,
             HeartbeatTimeout = _options.HeartbeatTimeout,
+            Summary = BuildActivitySummary(options),
         };
 
         if (_options.RetryPolicy is not null)
@@ -65,6 +66,16 @@ public sealed class DurableEmbeddingGenerator : DelegatingEmbeddingGenerator<str
             activityOptions).ConfigureAwait(false);
 
         return output.Embeddings;
+    }
+
+    /// <summary>
+    /// Builds the activity summary value (visible in the Temporal Web UI activity list).
+    /// Uses the model id when available; returns null otherwise so the SDK omits the field.
+    /// </summary>
+    internal static string? BuildActivitySummary(EmbeddingGenerationOptions? options)
+    {
+        var modelId = options?.ModelId;
+        return string.IsNullOrWhiteSpace(modelId) ? null : modelId;
     }
 
     /// <inheritdoc/>

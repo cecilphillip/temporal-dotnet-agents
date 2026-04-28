@@ -69,6 +69,27 @@ public class DurableEmbeddingGeneratorTests
         Assert.Equal("emb-queue", durableOptions!.TaskQueue);
     }
 
+    // ── Activity Summary (visible in Temporal Web UI activity list) ────────
+
+    [Fact]
+    public void BuildActivitySummary_ReturnsModelId_WhenSet()
+    {
+        var opts = new EmbeddingGenerationOptions { ModelId = "text-embedding-3-small" };
+        Assert.Equal("text-embedding-3-small", DurableEmbeddingGenerator.BuildActivitySummary(opts));
+    }
+
+    [Fact]
+    public void BuildActivitySummary_ReturnsNull_WhenOptionsNull() =>
+        Assert.Null(DurableEmbeddingGenerator.BuildActivitySummary(null));
+
+    [Fact]
+    public void BuildActivitySummary_ReturnsNull_WhenModelIdMissing()
+    {
+        Assert.Null(DurableEmbeddingGenerator.BuildActivitySummary(new EmbeddingGenerationOptions()));
+        Assert.Null(DurableEmbeddingGenerator.BuildActivitySummary(new EmbeddingGenerationOptions { ModelId = "" }));
+        Assert.Null(DurableEmbeddingGenerator.BuildActivitySummary(new EmbeddingGenerationOptions { ModelId = "   " }));
+    }
+
     [Fact]
     public void DurableEmbeddingActivities_Constructor_AcceptsNullLogger()
     {

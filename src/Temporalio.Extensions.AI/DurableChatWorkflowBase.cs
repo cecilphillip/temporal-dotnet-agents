@@ -148,6 +148,7 @@ public abstract class DurableChatWorkflowBase<TOutput>
             {
                 StartToCloseTimeout = Input!.ActivityTimeout,
                 HeartbeatTimeout = Input!.HeartbeatTimeout,
+                Summary = DurableChatClient.BuildActivitySummary(options),
             };
 
             var output = await ExecuteTurnAsync(activityOptions, activityInput);

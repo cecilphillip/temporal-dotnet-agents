@@ -50,4 +50,18 @@ public class DurableAIFunctionTests
         var result = await durable.InvokeAsync(args);
         Assert.Equal("Hello, World!", result?.ToString());
     }
+
+    // ── Activity Summary (visible in Temporal Web UI activity list) ────────
+
+    [Fact]
+    public void BuildActivitySummary_ReturnsFunctionName_WhenSet() =>
+        Assert.Equal("GetWeather", DurableAIFunction.BuildActivitySummary("GetWeather"));
+
+    [Fact]
+    public void BuildActivitySummary_ReturnsNull_WhenNameMissing()
+    {
+        Assert.Null(DurableAIFunction.BuildActivitySummary(null));
+        Assert.Null(DurableAIFunction.BuildActivitySummary(""));
+        Assert.Null(DurableAIFunction.BuildActivitySummary("   "));
+    }
 }

@@ -129,6 +129,7 @@ public sealed class DurableChatClient : DelegatingChatClient
         {
             StartToCloseTimeout = chatOptions.GetActivityTimeout() ?? _options.ActivityTimeout,
             HeartbeatTimeout = chatOptions.GetHeartbeatTimeout() ?? _options.HeartbeatTimeout,
+            Summary = BuildActivitySummary(chatOptions),
         };
 
         if (_options.RetryPolicy is not null)
@@ -147,6 +148,16 @@ public sealed class DurableChatClient : DelegatingChatClient
         }
 
         return activityOptions;
+    }
+
+    /// <summary>
+    /// Builds the activity summary value (visible in the Temporal Web UI activity list).
+    /// Uses the model id when available; returns null otherwise so the SDK omits the field.
+    /// </summary>
+    internal static string? BuildActivitySummary(ChatOptions? chatOptions)
+    {
+        var modelId = chatOptions?.ModelId;
+        return string.IsNullOrWhiteSpace(modelId) ? null : modelId;
     }
 
     /// <summary>
