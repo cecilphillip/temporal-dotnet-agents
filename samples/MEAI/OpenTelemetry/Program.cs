@@ -2,6 +2,14 @@
 // Temporalio.Extensions.AI, showing the full span hierarchy produced by a
 // durable chat session.
 //
+// This sample also demonstrates the canonical plugin-based registration path
+// using DurableAIPlugin (an ITemporalWorkerPlugin) composed with the SDK's
+// TracingInterceptor. Both AddDurableAI() and AddWorkerPlugin(new DurableAIPlugin())
+// produce equivalent runtime behavior; the plugin form is the recommended
+// shape for users composing with other Temporal partner plugins. The plugin
+// surface is gated by [Experimental("TAI001")] — the file-level #pragma below
+// opts in.
+//
 // Span hierarchy for a single chat turn
 // ──────────────────────────────────────
 //   durable_chat.send                      ← library span (DurableChatSessionClient)
@@ -45,6 +53,8 @@
 // • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/OpenTelemetry
 //
 // Run:  dotnet run --project samples/MEAI/OpenTelemetry/OpenTelemetry.csproj
+
+#pragma warning disable TAI001 // Opt in to the experimental plugin surface (DurableAIPlugin, AddWorkerPlugin)
 
 using System.ClientModel;
 using Microsoft.Extensions.AI;
@@ -140,16 +150,33 @@ builder.Services
     .UseFunctionInvocation()   // handles tool call loops inside the activity
     .Build();
 
-// ── Setup: Register worker + durable AI ──────────────────────────────────────
-// AddDurableAI registers DurableChatWorkflow, DurableChatActivities, and
-// DurableChatSessionClient on the worker.
+// ── Setup: Register worker + durable AI via the plugin path ─────────────────
+// AddWorkerPlugin(DurableAIPlugin) is the canonical Temporal Partner pattern
+// for AI integrations. It registers DurableChatWorkflow, DurableChatActivities,
+// DurableFunctionActivities, DurableEmbeddingActivities, the function registry,
+// DurableChatSessionClient, the DurableExecutionOptions singleton, and queues
+// DurableAIPlugin in the worker plugin chain — equivalent to AddDurableAI().
+//
+// Composing with other plugins/interceptors:
+//   • TracingInterceptor was added to the client's Interceptors list above —
+//     that handles W3C trace context propagation across the gRPC boundary.
+//   • DurableAIPlugin handles the AI-specific worker-side wiring.
+//   • Other partner plugins (Braintrust, Pydantic, etc.) can be added with
+//     additional .AddWorkerPlugin(...) calls without conflict — each has a
+//     unique Name so the client-plugin dedupe path leaves them alone.
+//
+// AddDurableAI() remains supported and is equivalent for users who prefer
+// the lowest-friction DI-extension shape:
+//
+//     .AddHostedTemporalWorker(temporalAddress, "default", "durable-chat-otel")
+//     .AddDurableAI(opts => { /* ... */ });
 builder.Services
     .AddHostedTemporalWorker(temporalAddress, "default", "durable-chat-otel")
-    .AddDurableAI(opts =>
+    .AddWorkerPlugin(new DurableAIPlugin(opts =>
     {
         opts.ActivityTimeout = TimeSpan.FromMinutes(5);
         opts.SessionTimeToLive = TimeSpan.FromHours(1);
-    });
+    }));
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 var host = builder.Build();
