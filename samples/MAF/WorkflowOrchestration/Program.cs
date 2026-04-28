@@ -2,7 +2,6 @@
 // (call) an AI agent as a sub-agent, using the new fluent AddTemporalAgents() API.
 //
 // Key differences from BasicAgent:
-// • Uses the new fluent builder API: .AddTemporalAgents() instead of ConfigureTemporalAgents()
 // • Demonstrates a workflow that internally calls an agent via TemporalAIAgent
 // • Shows how agent calls flow through Temporal activities for determinism
 //
@@ -29,7 +28,6 @@ using static Temporalio.Extensions.Agents.TemporalWorkflowExtensions;
 
 // ── Step 1: Build the application host ───────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 // ── Step 2: Provide an IChatClient ───────────────────────────────────────────
@@ -40,7 +38,7 @@ if (string.IsNullOrEmpty(apiBaseUrl))
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 if (string.IsNullOrEmpty(apiKey))
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured in appsettings.json.");
+    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/WorkflowOrchestration");
 
 var endpoint = new Uri(apiBaseUrl);
 var openAiOptions = new OpenAIClientOptions() { Endpoint = endpoint };

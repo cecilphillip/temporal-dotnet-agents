@@ -5,6 +5,7 @@
     <!-- Samples don't need strict warning enforcement -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <IsPackable>false</IsPackable>
+    <UserSecretsId>4069c184-450f-4c33-a81a-26b10a3099ab</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

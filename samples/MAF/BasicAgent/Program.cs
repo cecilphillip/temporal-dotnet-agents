@@ -5,6 +5,7 @@
 // ─────────────
 // • A local Temporal server:  temporal server start-dev
 //   (The dev server starts on localhost:7233 with the "default" namespace.)
+// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/BasicAgent
 //
 // Run:  dotnet run --project samples/BasicAgent/BasicAgent.csproj
 
@@ -20,7 +21,6 @@ using Temporalio.Extensions.Agents;
 
 // ── Step 1: Build the application host ───────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
 builder.Logging.SetMinimumLevel(LogLevel.Warning); // suppress Temporal SDK noise in the sample
 
 // ── Step 2: Provide an IChatClient ───────────────────────────────────────────
@@ -33,7 +33,7 @@ if (string.IsNullOrEmpty(apiBaseUrl))
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 if (string.IsNullOrEmpty(apiKey))
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured in appsettings.json.");
+    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/BasicAgent");
 
 var endpoint = new Uri(apiBaseUrl);
 var openAiOptions = new OpenAIClientOptions()

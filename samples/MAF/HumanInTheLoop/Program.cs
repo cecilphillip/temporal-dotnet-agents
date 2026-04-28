@@ -49,11 +49,10 @@ using ChatRole = Microsoft.Extensions.AI.ChatRole;
 
 // ── Configuration ──────────────────────────────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 var apiKey     = builder.Configuration.GetValue<string>("OPENAI_API_KEY")
-    ?? throw new InvalidOperationException("OPENAI_API_KEY is required in appsettings.json.");
+    ?? throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/HumanInTheLoop");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL")
     ?? throw new InvalidOperationException("OPENAI_API_BASE_URL is required in appsettings.json.");
 var model           = "gpt-4o-mini";
