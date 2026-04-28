@@ -17,6 +17,9 @@ public static class TemporalChatOptionsExtensions
     /// <summary>Key for per-request heartbeat timeout override.</summary>
     public const string HeartbeatTimeoutKey = "temporal.heartbeat.timeout";
 
+    /// <summary>Key for per-request keyed DI service key for <see cref="IChatClient"/> resolution.</summary>
+    public const string ChatClientKeyKey = "temporal.chatClientKey";
+
     /// <summary>
     /// Sets a per-request activity timeout that overrides <see cref="DurableExecutionOptions.ActivityTimeout"/>.
     /// </summary>
@@ -51,6 +54,19 @@ public static class TemporalChatOptionsExtensions
     }
 
     /// <summary>
+    /// Sets the keyed DI service key used to resolve <see cref="IChatClient"/> for this request.
+    /// Takes precedence over <see cref="DurableExecutionOptions.DefaultChatClientKey"/>.
+    /// Overriding back to the unkeyed client is not supported; omit this call to use the worker default.
+    /// </summary>
+    public static ChatOptions WithChatClientKey(this ChatOptions options, string key)
+    {
+        if (string.IsNullOrEmpty(key))
+            throw new ArgumentException("Key must not be null or empty.", nameof(key));
+        (options.AdditionalProperties ??= new())[ChatClientKeyKey] = key;
+        return options;
+    }
+
+    /// <summary>
     /// Tries to read a per-request activity timeout from <see cref="ChatOptions.AdditionalProperties"/>.
     /// </summary>
     internal static TimeSpan? GetActivityTimeout(this ChatOptions? options) =>
@@ -77,6 +93,14 @@ public static class TemporalChatOptionsExtensions
 
         return null;
     }
+
+    /// <summary>
+    /// Tries to read a per-request chat client key from <see cref="ChatOptions.AdditionalProperties"/>.
+    /// </summary>
+    internal static string? GetChatClientKey(this ChatOptions? options) =>
+        options?.AdditionalProperties?.TryGetValue(ChatClientKeyKey, out var v) == true
+            ? v as string
+            : null;
 
     private static TimeSpan? GetTimeSpanProperty(ChatOptions? options, string key)
     {

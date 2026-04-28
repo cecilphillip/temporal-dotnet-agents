@@ -193,7 +193,8 @@ public sealed class DurableChatClient : DelegatingChatClient
         // Only allocate a stripped copy when there are Temporal keys to remove.
         bool hasTemporalKeys = options.AdditionalProperties.ContainsKey(TemporalChatOptionsExtensions.ActivityTimeoutKey)
             || options.AdditionalProperties.ContainsKey(TemporalChatOptionsExtensions.HeartbeatTimeoutKey)
-            || options.AdditionalProperties.ContainsKey(TemporalChatOptionsExtensions.MaxRetryAttemptsKey);
+            || options.AdditionalProperties.ContainsKey(TemporalChatOptionsExtensions.MaxRetryAttemptsKey)
+            || options.AdditionalProperties.ContainsKey(TemporalChatOptionsExtensions.ChatClientKeyKey);
 
         if (!hasTemporalKeys) return options;
 
@@ -229,7 +230,8 @@ public sealed class DurableChatClient : DelegatingChatClient
         {
             if (kvp.Key is TemporalChatOptionsExtensions.ActivityTimeoutKey
                         or TemporalChatOptionsExtensions.HeartbeatTimeoutKey
-                        or TemporalChatOptionsExtensions.MaxRetryAttemptsKey)
+                        or TemporalChatOptionsExtensions.MaxRetryAttemptsKey
+                        or TemporalChatOptionsExtensions.ChatClientKeyKey)
                 continue;
             result ??= new AdditionalPropertiesDictionary();
             result[kvp.Key] = kvp.Value;
