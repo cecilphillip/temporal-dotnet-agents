@@ -85,7 +85,7 @@ test-integration-ai: build
 # Run both unit and integration tests (all libraries)
 test: test-unit-all test-integration test-integration-ai
 
-# Run unit tests with code coverage (Agents + AI)
+# Run all tests (unit + integration) with code coverage — Agents and AI libraries
 test-coverage: build
     dotnet test {{unit_tests_dir}} \
         --configuration {{configuration}} \
@@ -99,6 +99,26 @@ test-coverage: build
         --collect "XPlat Code Coverage" \
         --results-directory {{coverage_dir}}/ai \
         --logger "console;verbosity=normal"
+    dotnet test {{integration_tests_dir}} \
+        --configuration {{configuration}} \
+        --no-build \
+        --collect "XPlat Code Coverage" \
+        --results-directory {{coverage_dir}}/agents-integration \
+        --logger "console;verbosity=normal"
+    dotnet test {{integration_tests_ai_dir}} \
+        --configuration {{configuration}} \
+        --no-build \
+        --collect "XPlat Code Coverage" \
+        --results-directory {{coverage_dir}}/ai-integration \
+        --logger "console;verbosity=normal"
+
+# Merge all coverage XML files into an HTML report and print line/branch summary
+coverage-report: test-coverage
+    dotnet tool run reportgenerator \
+        -reports:"{{coverage_dir}}/**/*.cobertura.xml" \
+        -targetdir:"{{coverage_dir}}/report" \
+        -reporttypes:"HtmlInline_AzurePipelines;Cobertura;TextSummary"
+    @cat "{{coverage_dir}}/report/Summary.txt"
 
 # Run tests matching a filter expression (e.g. just test-filter "FullyQualifiedName~Router")
 test-filter filter: build
