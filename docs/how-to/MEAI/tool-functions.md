@@ -132,6 +132,14 @@ public class MyWorkflow
 The function name passed to `AIFunctionFactory.Create` must match the name registered
 via `AddDurableTools` — `DurableFunctionActivities` resolves by name (case-insensitive).
 
+> **Prerequisites for `AsDurable()`.** The activity worker handling the workflow's task
+> queue must have both `AddDurableAI()` (registers the dispatch activity) and
+> `AddDurableTools(function)` (registers the function in the durable function registry)
+> called on it. These are runtime requirements — `AsDurable()` itself has no DI context
+> and cannot validate them at wrap time. If the function is missing from the registry,
+> the activity throws `InvalidOperationException` at invocation time with the message
+> `"Function '{name}' is not registered in the durable function registry."`
+
 ### When to use
 
 - The tool is **long-running** or calls a slow external API that may time out
