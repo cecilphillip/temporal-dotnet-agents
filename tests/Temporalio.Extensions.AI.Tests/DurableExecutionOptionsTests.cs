@@ -67,4 +67,18 @@ public class DurableExecutionOptionsTests
         Assert.True(options.EnableSessionManagement);
         Assert.Equal(TimeSpan.FromMinutes(5), options.HeartbeatTimeout);
     }
+
+    [Fact]
+    public void DefaultChatClientKey_IsNullByDefault()
+    {
+        var options = new DurableExecutionOptions();
+        Assert.Null(options.DefaultChatClientKey);
+    }
+
+    [Fact]
+    public void DefaultChatClientKey_CanBeSet()
+    {
+        var options = new DurableExecutionOptions { DefaultChatClientKey = "gpt-4o" };
+        Assert.Equal("gpt-4o", options.DefaultChatClientKey);
+    }
 }
