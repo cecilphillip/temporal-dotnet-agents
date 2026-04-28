@@ -24,7 +24,7 @@ Use this package when you want Temporal durability on top of a standard MEAI pip
 - Durable multi-turn conversations — full history persisted in workflow state across turns and restarts
 - Durable tool functions — `AIFunction` invocations dispatched as individual Temporal activities
 - Durable embeddings — `IEmbeddingGenerator` wrapped for deterministic workflow execution
-- History reduction — sliding context window for the LLM while preserving full history durably
+- History reduction — chain any `IChatReducer` for a sliding LLM context window; full conversation history is preserved durably by the workflow and read via `GetHistoryAsync`
 - Human-in-the-loop (HITL) — approval gates via `[WorkflowUpdate]` that block until a human responds
 - Plugin composition — inject OTel tracing, encryption, or any Temporal SDK plugin via `.AddWorkerPlugin()` / `.AddClientPlugin()`
 - OpenTelemetry spans — conversation ID and token counts attached as span attributes
@@ -294,21 +294,28 @@ When `GenerateAsync` is called inside a Temporal workflow, the call is dispatche
 
 ## History Reduction
 
-Use `UseDurableReduction` to apply a sliding context window while preserving the full conversation history in workflow state. This lets you control token costs without losing history durability.
+Apply a sliding context window with a plain stateless `IChatReducer` — for example MEAI's `MessageCountingChatReducer` — chained onto the inner chat client. The reducer runs inside the activity, so it doesn't need to be replay-safe. The full unreduced history is already preserved by `DurableChatWorkflow` and is accessible via `DurableChatSessionClient.GetHistoryAsync`.
 
 This pipeline registration belongs in the **worker process**.
 
 ```csharp
 // Worker
-builder.Services.AddSingleton<IChatClient>(sp =>
-    openAiClient.GetChatClient("gpt-4o-mini")
-        .AsBuilder()
-        .UseDurableReduction(new MessageCountingChatReducer(20))  // 20-message window to LLM
-        .UseDurableExecution()
-        .Build());
+builder.Services
+    .AddChatClient(openAiClient.GetChatClient("gpt-4o-mini"))
+    .UseChatReducer(new MessageCountingChatReducer(20))   // 20-message window to the LLM
+    .UseFunctionInvocation()
+    .UseDurableExecution()
+    .Build();
 ```
 
-`DurableChatReducer` stores the full unreduced history in workflow state and delegates only the sliding window to the LLM. Outside a workflow it behaves as a transparent pass-through to the inner reducer.
+Retrieve the complete conversation history from workflow state at any time:
+
+```csharp
+// Client
+var history = await sessionClient.GetHistoryAsync("conversation-123");
+```
+
+For a full walk-through of the reduction pattern, see [Reducing the LLM Context Window](../../docs/how-to/MEAI/usage.md#reducing-the-llm-context-window).
 
 ## Human-in-the-Loop
 
@@ -458,7 +465,6 @@ services.AddHostedTemporalWorker(opts =>
 | `DurableAIDataConverter` | Data converter — wraps `AIJsonUtilities.DefaultOptions` for correct MEAI type round-trips |
 | `DurableAIFunction` | `DelegatingAIFunction` — dispatches tool calls as Temporal activities when inside a workflow |
 | `DurableEmbeddingGenerator` | `DelegatingEmbeddingGenerator` — dispatches embedding generation as Temporal activities |
-| `DurableChatReducer` | `IChatReducer` — preserves full history in workflow state while passing a reduced window to the LLM |
 | `TemporalChatOptionsExtensions` | Per-request overrides via `ChatOptions` — `WithActivityTimeout`, `WithMaxRetryAttempts`, `WithHeartbeatTimeout`, `WithChatClientKey` |
 | `DurableApprovalRequest` | HITL — request sent to block the workflow pending human review |
 | `DurableApprovalDecision` | HITL — human decision that unblocks the workflow |

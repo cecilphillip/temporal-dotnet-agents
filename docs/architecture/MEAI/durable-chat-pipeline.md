@@ -34,7 +34,6 @@ This document covers the internal architecture of the pipeline: how the componen
 | `DurableFunctionActivities` | `[Activity]` host | Receives `DurableFunctionInput` with function name; resolves from `DurableFunctionRegistry`; invokes the real `AIFunction` |
 | `DurableEmbeddingGenerator` | `DelegatingEmbeddingGenerator` | Same dispatch guard for `IEmbeddingGenerator.GenerateAsync` |
 | `DurableEmbeddingActivities` | `[Activity]` host | Calls the real `IEmbeddingGenerator` on the worker side |
-| `DurableChatReducer` | `IChatReducer` | Preserves full history in workflow state before delegating to an inner sliding-window reducer |
 | `DurableFunctionRegistry` | Internal singleton dictionary | Populated at startup by `AddDurableTools`; maps function name to `AIFunction` (case-insensitive) |
 | `DurableAIDataConverter` | `DataConverter` | Wraps Temporal's `DefaultPayloadConverter` with `AIJsonUtilities.DefaultOptions` to handle `AIContent` polymorphism |
 | `DurableExecutionOptions` | Configuration | `TaskQueue`, `ActivityTimeout`, `HeartbeatTimeout`, `ApprovalTimeout`, `SessionTimeToLive`, `RetryPolicy`, `WorkflowIdPrefix` |
@@ -46,7 +45,7 @@ The middleware components compose via MEAI's `ChatClientBuilder` API:
 ```csharp
 services
     .AddChatClient(innerClient)           // OpenAI / Azure OAI / Ollama
-    .UseDurableReduction(                  // optional: sliding window + full history in workflow state
+    .UseChatReducer(                       // optional: sliding window for the LLM (stateless reducer)
         new MessageCountingChatReducer(20))
     .UseFunctionInvocation()               // MEAI built-in: calls AIFunction from FunctionCallContent
     .UseDurableExecution()                 // DurableChatClient middleware
@@ -291,17 +290,19 @@ public IReadOnlyList<ChatMessage> GetHistory() => _history;
 
 ### History Reduction (Optional)
 
-`DurableChatReducer` intercepts the message list before it reaches the LLM and applies a sliding window via an inner reducer (e.g., `MessageCountingChatReducer`). The `DurableChatReducer` maintains `_fullHistory` internally — a running accumulation of every message seen — while the inner reducer trims what actually gets sent to the LLM. The full history stored in `DurableChatWorkflow._history` is unaffected.
+Apply a sliding window for the LLM with a plain stateless `IChatReducer` such as `MessageCountingChatReducer`. The reducer trims what gets sent on each turn; the full conversation log remains in `DurableChatWorkflow._history` and is read via `DurableChatSessionClient.GetHistoryAsync`.
 
 ```csharp
 // Registration
 services
     .AddChatClient(innerClient)
-    .UseDurableReduction(new MessageCountingChatReducer(20))
+    .UseChatReducer(new MessageCountingChatReducer(20))
     .UseFunctionInvocation()
     .UseDurableExecution()
     .Build();
 ```
+
+> **Design rationale — full history lives on the workflow, not on middleware.** `DurableChatWorkflow._history` is the single source of truth for full conversation state. It is workflow-local (no leakage across conversations), replay-safe (rebuilt deterministically from Temporal event history), and carried through `ContinueAsNew` transitions. Reducer middleware stays in its proper, stateless role of trimming the message list passed to the LLM on each turn — it never accumulates conversation state of its own.
 
 See [docs/how-to/MEAI/usage.md](../../how-to/MEAI/usage.md) for complete registration examples.
 

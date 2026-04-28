@@ -158,7 +158,7 @@ Some projects build the correct Combination 1 pattern independently — a `[Work
 Incremental adoption paths:
 
 - **Replace the custom workflow** — swap the hand-rolled workflow and activities for `DurableChatWorkflow` + `DurableChatActivities` by registering `AddDurableAI()` and updating the external entry point to `DurableChatSessionClient`.
-- **Adopt specific components** — keep the custom workflow and add `DurableEmbeddingGenerator` + `EmbeddingGeneratorBuilderExtensions.UseDurableExecution()`, `DurableAIDataConverter`, or `UseDurableReduction()` individually. These components are each independently composable and do not require the full workflow replacement.
+- **Adopt specific components** — keep the custom workflow and add `DurableEmbeddingGenerator` + `EmbeddingGeneratorBuilderExtensions.UseDurableExecution()` or `DurableAIDataConverter` individually. These components are each independently composable and do not require the full workflow replacement.
 
 ---
 

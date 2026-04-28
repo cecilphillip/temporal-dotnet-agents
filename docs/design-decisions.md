@@ -21,11 +21,9 @@ The question: do the durable embedding and history reduction features from `Temp
 
 **Yes — via a plain `IChatReducer` in `clientFactory`.**
 
-`AgentWorkflow._history` already provides durable full-history persistence across turns and continue-as-new transitions. `DurableChatReducer` (from `Temporalio.Extensions.AI`) is designed to fill that gap for `DurableChatWorkflow`, which has no equivalent `_history` accumulator of its own. In the MAF stack, `DurableChatReducer` is redundant.
+`AgentWorkflow._history` already provides durable full-history persistence across turns and continue-as-new transitions. The same approach now applies to `DurableChatWorkflow`, whose `_history` field is the single source of truth for full conversation state in the MEAI stack.
 
-The useful pattern is passing a plain `IChatReducer` (e.g., `new MessageCountingChatReducer(N)`) in the `clientFactory` pipeline. This trims the LLM context window on each turn without disturbing `AgentWorkflow._history`.
-
-`UseDurableReduction()` and `DurableChatReducer` should not be used in MAF. `DurableChatReducer` checks `Workflow.InWorkflow` — inside `clientFactory`, that flag is always `false` (activities context), so the full-history accumulation path in `DurableChatReducer` never activates.
+The useful pattern in either stack is passing a plain stateless `IChatReducer` (e.g., `new MessageCountingChatReducer(N)`) in the chat client pipeline. This trims the LLM context window on each turn without disturbing the workflow-owned history.
 
 ### Durable Embeddings
 
@@ -84,7 +82,7 @@ These directions indicate that `AIAgent` and `IChatClient` will continue to be p
 
 **`[Workflow]` attribute is not inheritable.** `[Workflow(Inherited = false)]` means workflow attributes cannot be declared on a base class and inherited by a subclass. This is a hard constraint against building a shared workflow base class that the Temporal SDK discovers automatically.
 
-**One plausible upstream ask:** `AIAgent.AsChatClient()` — an adapter that wraps an `AIAgent` as an `IChatClient`. If it existed, a MAF agent could be registered with `AddDurableAI()` (Combination 2) and gain the full MEAI middleware pipeline, including `DurableChatReducer` and `DurableChatClient`, without `AddTemporalAgents()`. Impact: moderate — would simplify the transitional Combination 1 posture and allow MEAI middleware to compose over MAF agents more naturally. Likelihood: uncertain; not on any known public roadmap as of this writing.
+**One plausible upstream ask:** `AIAgent.AsChatClient()` — an adapter that wraps an `AIAgent` as an `IChatClient`. If it existed, a MAF agent could be registered with `AddDurableAI()` (Combination 2) and gain the full MEAI middleware pipeline, including `DurableChatClient`, without `AddTemporalAgents()`. Impact: moderate — would simplify the transitional Combination 1 posture and allow MEAI middleware to compose over MAF agents more naturally. Likelihood: uncertain; not on any known public roadmap as of this writing.
 
 ---
 

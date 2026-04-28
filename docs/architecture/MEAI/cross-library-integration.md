@@ -116,9 +116,8 @@ The following are entirely separate and belong to their respective libraries. No
 - `DurableEmbeddingActivities` — the activity that executes `IEmbeddingGenerator.GenerateAsync`
 - `DurableChatClient` — `DelegatingChatClient` middleware
 - `DurableEmbeddingGenerator` — `DelegatingEmbeddingGenerator` middleware
-- `DurableChatReducer` — `IChatReducer` middleware
 - `DurableChatSessionClient` — external entry point for MEAI sessions
-- Registration APIs: `AddDurableAI()`, `AddDurableTools()`, `UseDurableExecution()`, `UseDurableReduction()`
+- Registration APIs: `AddDurableAI()`, `AddDurableTools()`, `UseDurableExecution()`
 
 **Extensions.Agents only:**
 

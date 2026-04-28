@@ -189,28 +189,36 @@ These values are stored in `ChatOptions.AdditionalProperties` under well-known s
 
 ---
 
-## History Reduction
+## Reducing the LLM Context Window
 
-For long-running sessions the full conversation history can grow large enough to make LLM calls expensive. `UseDurableReduction` chains a sliding context window into the MEAI pipeline while keeping the complete history safe in workflow state:
+For long-running sessions the full conversation history can grow large enough to make LLM calls expensive. Chain a plain stateless `IChatReducer` — such as MEAI's `MessageCountingChatReducer` — onto your inner chat client so each turn only sends the LLM a sliding window. The reducer runs inside the Temporal activity, never in workflow context, so it does not need to be replay-safe:
 
 ```csharp
 // Worker
 builder.Services
     .AddChatClient(innerClient)
+    .UseChatReducer(new MessageCountingChatReducer(20))   // 20-message window to the LLM
     .UseFunctionInvocation()
-    .UseDurableReduction(new MessageCountingChatReducer(20))
+    .UseDurableExecution()
     .Build();
 ```
 
 With this configuration:
 
-- The `DurableChatWorkflow` retains every message ever exchanged in the conversation.
-- The `DurableChatReducer` passes only the most recent 20 messages to the LLM on each turn.
-- `GetHistoryAsync` still returns the full unreduced log.
+- The `DurableChatWorkflow` retains every message ever exchanged in the conversation as part of its event history — that is the durable, replay-safe source of truth.
+- The reducer passes only the most recent 20 messages to the LLM on each turn.
+- `GetHistoryAsync` still returns the full unreduced log straight from workflow state.
 
-When running outside a Temporal workflow (for example, in a unit test or a plain console app), `DurableChatReducer` delegates directly to the inner reducer without storing anything — it is a transparent pass-through.
+To retrieve the complete conversation at any point, query the workflow:
 
-> **Note:** `MessageCountingChatReducer` is provided by the MEAI library (`Microsoft.Extensions.AI`). Any `IChatReducer` implementation works here — token-counting reducers, summarization reducers, etc.
+```csharp
+// Client — full, durable history straight from the workflow
+var history = await sessionClient.GetHistoryAsync("conversation-123");
+```
+
+> **Design rationale:** Full conversation history is kept on the workflow itself (`DurableChatWorkflow._history`), where it is replay-safe and durable via Temporal event history. Reducers are stateless and only shape what is sent to the LLM on each turn — they never own conversation state.
+
+> **Note:** `MessageCountingChatReducer` is provided by the MEAI library (`Microsoft.Extensions.AI`). Any `IChatReducer` implementation works here — token-counting reducers, summarization reducers, etc. — as long as it is stateless or scoped per-call.
 
 ---
 

@@ -62,11 +62,10 @@ TemporalAgents/
 │       ├── DurableFunctionActivities.cs    # [Activity] resolving + invoking AIFunction from DI registry
 │       ├── DurableEmbeddingGenerator.cs    # DelegatingEmbeddingGenerator for IEmbeddingGenerator
 │       ├── DurableEmbeddingActivities.cs   # [Activity] wrapping IEmbeddingGenerator.GenerateAsync
-│       ├── DurableChatReducer.cs           # IChatReducer preserving full history in workflow state
 │       ├── DurableApprovalRequest.cs       # HITL request type (RequestId, FunctionName, Description)
 │       ├── DurableApprovalDecision.cs      # HITL decision type (RequestId, Approved, Reason)
 │       ├── DurableChatTelemetry.cs         # ActivitySource "Temporalio.Extensions.AI" + span constants
-│       ├── ChatClientBuilderExtensions.cs  # UseDurableExecution(), UseDurableReduction()
+│       ├── ChatClientBuilderExtensions.cs  # UseDurableExecution()
 │       ├── EmbeddingGeneratorBuilderExtensions.cs # UseDurableExecution() for embeddings
 │       ├── DurableAIServiceCollectionExtensions.cs # AddDurableAI(), AddDurableTools()
 │       ├── AIFunctionExtensions.cs         # AsDurable() extension on AIFunction
@@ -115,7 +114,6 @@ TemporalAgents/
 │   │   ├── SerializationTests.cs
 │   │   ├── DurableAIDataConverterTests.cs
 │   │   ├── TemporalChatOptionsExtensionsTests.cs
-│   │   ├── DurableChatReducerTests.cs
 │   │   ├── DurableEmbeddingGeneratorTests.cs
 │   │   ├── DurableApprovalTests.cs
 │   │   └── ...
@@ -205,7 +203,7 @@ Keys live in `TemporalChatOptionsExtensions` as `public const string` constants.
 
 ### Context Detection
 
-All middleware (`DurableChatClient`, `DurableAIFunction`, `DurableEmbeddingGenerator`, `DurableChatReducer`) uses `Workflow.InWorkflow` as the dispatch guard. `false` = pass through to inner; `true` = dispatch as Temporal activity.
+All middleware (`DurableChatClient`, `DurableAIFunction`, `DurableEmbeddingGenerator`) uses `Workflow.InWorkflow` as the dispatch guard. `false` = pass through to inner; `true` = dispatch as Temporal activity.
 
 ### HITL
 
@@ -739,4 +737,4 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 
 ---
 
-**Last Updated**: 2026-03-18
+**Last Updated**: 2026-04-28
