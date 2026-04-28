@@ -75,7 +75,7 @@ Activity  ←── calls real IChatClient / AIAgent — retried automatically o
 
 ### Sample credentials
 
-API keys are managed with [.NET user-secrets](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets) — stored outside the repo in `~/.microsoft/usersecrets/` and loaded automatically by `Host.CreateApplicationBuilder()` in the Development environment.
+API keys are managed with [dotnet user-secrets](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets) — stored outside the repo in `~/.microsoft/usersecrets/` and loaded automatically by `Host.CreateApplicationBuilder()` in the Development environment.
 
 Set `OPENAI_API_KEY` for each sample project you want to run:
 
@@ -83,24 +83,6 @@ Set `OPENAI_API_KEY` for each sample project you want to run:
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/DurableChat
 ```
 
-The 14 sample projects that need keys set:
-
-```
-samples/MAF/BasicAgent
-samples/MAF/EvaluatorOptimizer
-samples/MAF/HumanInTheLoop
-samples/MAF/AmbientAgent
-samples/MAF/WorkflowOrchestration
-samples/MAF/WorkflowRouting
-samples/MAF/SplitWorkerClient/Worker
-samples/MAF/MultiAgentRouting
-samples/MEAI/DurableChat
-samples/MEAI/DurableTools
-samples/MEAI/HumanInTheLoop
-samples/MEAI/DurableEmbeddings
-samples/MEAI/OpenTelemetry
-samples/MEAI/CustomWorkflow
-```
 
 Non-sensitive settings (`OPENAI_API_BASE_URL`, `OPENAI_MODEL`, `TEMPORAL_ADDRESS`) have working defaults in each project's committed `appsettings.json` and do not need to be set via user-secrets unless you want to override them.
 
