@@ -81,12 +81,16 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
         // Use a handle WITHOUT a pinned RunId so updates follow the continue-as-new chain.
         var handle = _client.GetWorkflowHandle<DurableChatWorkflow>(workflowId);
 
+        // Resolve effective client key: per-call override wins, then worker-level default.
+        var effectiveKey = options.GetChatClientKey() ?? _options.DefaultChatClientKey;
+
         // Send the chat turn via workflow update.
         var input = new DurableChatInput
         {
             Messages = messages as IList<ChatMessage> ?? messages.ToList(),
             Options = options,
             ConversationId = conversationId,
+            ClientKey = effectiveKey,
         };
 
         var output = await handle.ExecuteUpdateAsync<DurableChatWorkflow, DurableChatOutput>(
