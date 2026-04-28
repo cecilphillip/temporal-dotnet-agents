@@ -103,4 +103,34 @@ public class DurableChatClientTests
         Assert.True(capturedOptions.AdditionalProperties.ContainsKey("user.custom.key"));
         Assert.Equal("keep-me", capturedOptions.AdditionalProperties["user.custom.key"]);
     }
+
+    [Fact]
+    public async Task GetResponseAsync_StripsChartClientKey_BeforeForwardingToInnerClient()
+    {
+        ChatOptions? capturedOptions = null;
+        var expectedResponse = new ChatResponse([new ChatMessage(ChatRole.Assistant, "hi")]);
+        var innerClient = A.Fake<IChatClient>();
+        A.CallTo(() => innerClient.GetResponseAsync(
+                A<IEnumerable<ChatMessage>>._, A<ChatOptions?>._, A<CancellationToken>._))
+            .Invokes((IEnumerable<ChatMessage> _, ChatOptions? opts, CancellationToken _) =>
+                capturedOptions = opts)
+            .Returns(Task.FromResult(expectedResponse));
+
+        var execOptions = new DurableExecutionOptions { TaskQueue = "test" };
+        var client = new DurableChatClient(innerClient, execOptions);
+
+        // Set ChatClientKey AND one non-Temporal additional property.
+        var chatOptions = new ChatOptions().WithChatClientKey("gpt-4o");
+        chatOptions.AdditionalProperties!["custom-key"] = "custom-value";
+
+        var messages = new List<ChatMessage> { new(ChatRole.User, "hello") };
+        await client.GetResponseAsync(messages, chatOptions);
+
+        // ChatClientKey must not leak to the inner client.
+        Assert.NotNull(capturedOptions?.AdditionalProperties);
+        Assert.False(capturedOptions!.AdditionalProperties!.ContainsKey(TemporalChatOptionsExtensions.ChatClientKeyKey));
+        // Non-Temporal key must be preserved.
+        Assert.True(capturedOptions.AdditionalProperties.ContainsKey("custom-key"));
+        Assert.Equal("custom-value", capturedOptions.AdditionalProperties["custom-key"]);
+    }
 }
