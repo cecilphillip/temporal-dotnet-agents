@@ -25,7 +25,6 @@
     <Project Path="samples/MAF/HumanInTheLoop/HumanInTheLoop.csproj" />
     <Project Path="samples/MAF/AmbientAgent/AmbientAgent.csproj" />
     <Project Path="samples/MAF/WorkflowRouting/WorkflowRouting.csproj" />
-    <Project Path="samples/MAF/MEAIMiddleware/MEAIMiddleware.csproj" />
   </Folder>
   <Folder Name="/samples/MAF/SplitWorkerClient/">
     <Project Path="samples/MAF/SplitWorkerClient/Client/Client.csproj" />
