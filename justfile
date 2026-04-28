@@ -85,13 +85,19 @@ test-integration-ai: build
 # Run both unit and integration tests (all libraries)
 test: test-unit-all test-integration test-integration-ai
 
-# Run unit tests with code coverage
+# Run unit tests with code coverage (Agents + AI)
 test-coverage: build
     dotnet test {{unit_tests_dir}} \
         --configuration {{configuration}} \
         --no-build \
         --collect "XPlat Code Coverage" \
-        --results-directory {{coverage_dir}} \
+        --results-directory {{coverage_dir}}/agents \
+        --logger "console;verbosity=normal"
+    dotnet test {{unit_tests_ai_dir}} \
+        --configuration {{configuration}} \
+        --no-build \
+        --collect "XPlat Code Coverage" \
+        --results-directory {{coverage_dir}}/ai \
         --logger "console;verbosity=normal"
 
 # Run tests matching a filter expression (e.g. just test-filter "FullyQualifiedName~Router")
