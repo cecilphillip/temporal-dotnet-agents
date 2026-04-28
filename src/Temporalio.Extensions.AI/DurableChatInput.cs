@@ -28,4 +28,10 @@ public sealed class DurableChatInput
     /// The turn number within the conversation (for diagnostics).
     /// </summary>
     public int TurnNumber { get; init; }
+
+    /// <summary>
+    /// Optional DI service key used to resolve <see cref="IChatClient"/> on the worker.
+    /// When null, the unkeyed <see cref="IChatClient"/> registration is used.
+    /// </summary>
+    public string? ClientKey { get; init; }
 }
