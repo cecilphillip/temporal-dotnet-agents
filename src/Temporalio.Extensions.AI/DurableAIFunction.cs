@@ -63,17 +63,6 @@ public sealed class DurableAIFunction : DelegatingAIFunction
     /// </summary>
     private static Dictionary<string, object?>? ConvertArguments(AIFunctionArguments arguments)
     {
-        if (arguments.Count == 0)
-        {
-            return null;
-        }
-
-        var dict = new Dictionary<string, object?>(arguments.Count);
-        foreach (var kvp in arguments)
-        {
-            dict[kvp.Key] = kvp.Value;
-        }
-
-        return dict;
+        return arguments.Count == 0 ? null : new Dictionary<string, object?>(arguments);
     }
 }

@@ -128,12 +128,13 @@ public static class DurableAIServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        var services = builder.Services;
+        if (!builder.Services.Any(d => d.ServiceType == typeof(DurableExecutionOptions)))
+        {
+            throw new InvalidOperationException(
+                "AddDurableTools requires AddDurableAI to be called first on the same worker builder.");
+        }
 
-        // Ensure the registry exists (AddDurableAI registers it, but allow standalone use).
-        services.TryAddSingleton<DurableFunctionRegistry>();
-        services.TryAddSingleton<IReadOnlyDictionary<string, AIFunction>>(
-            sp => sp.GetRequiredService<DurableFunctionRegistry>());
+        var services = builder.Services;
 
         // Register each tool in the registry via a configure callback.
         foreach (var tool in tools)
