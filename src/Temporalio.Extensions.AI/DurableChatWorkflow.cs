@@ -33,7 +33,7 @@ internal sealed class DurableChatWorkflow : DurableChatWorkflowBase<DurableChatO
     /// </summary>
     [WorkflowUpdate("Chat")]
     public Task<DurableChatOutput> ChatAsync(DurableChatInput input) =>
-        RunTurnAsync(input.Messages, input.Options, input.ConversationId);
+        RunTurnAsync(input.Messages, input.Options, input.ConversationId, input.ClientKey);
 
     protected override IEnumerable<ChatMessage> GetHistoryMessages(DurableChatOutput output) =>
         output.Response.Messages;

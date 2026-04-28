@@ -118,7 +118,8 @@ public abstract class DurableChatWorkflowBase<TOutput>
     protected async Task<TOutput> RunTurnAsync(
         IEnumerable<ChatMessage> userMessages,
         ChatOptions? options,
-        string? conversationId)
+        string? conversationId,
+        string? clientKey = null)
     {
         // Serialize: wait for any in-progress turn to finish.
         await Workflow.WaitConditionAsync(() => !_isProcessing);
@@ -140,6 +141,7 @@ public abstract class DurableChatWorkflowBase<TOutput>
                 Options = options,
                 ConversationId = conversationId ?? Workflow.Info.WorkflowId,
                 TurnNumber = _turnCount,
+                ClientKey = clientKey,
             };
 
             var activityOptions = new ActivityOptions
