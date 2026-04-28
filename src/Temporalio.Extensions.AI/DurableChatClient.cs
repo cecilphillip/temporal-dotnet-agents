@@ -119,6 +119,7 @@ public sealed class DurableChatClient : DelegatingChatClient
             Options = StripNonSerializableOptions(options),
             ConversationId = Workflow.Info.WorkflowId,
             TurnNumber = turnNumber,
+            ClientKey = options.GetChatClientKey() ?? _options.DefaultChatClientKey,
         };
     }
 
