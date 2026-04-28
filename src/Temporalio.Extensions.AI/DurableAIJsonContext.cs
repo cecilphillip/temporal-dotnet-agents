@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
@@ -9,6 +10,7 @@ namespace Temporalio.Extensions.AI;
 /// Uses <see cref="AIJsonUtilities.DefaultOptions"/> as the base to correctly
 /// handle <see cref="AIContent"/> polymorphism (TextContent, FunctionCallContent, etc.).
 /// </summary>
+[ExcludeFromCodeCoverage(Justification = "Source-generated serialization context — no hand-written logic to measure.")]
 [JsonSerializable(typeof(DurableChatInput))]
 [JsonSerializable(typeof(DurableChatOutput))]
 [JsonSerializable(typeof(DurableFunctionInput))]
@@ -29,6 +31,7 @@ internal partial class DurableAIJsonContext : JsonSerializerContext;
 /// <summary>
 /// JSON serialization utilities for the durable AI library.
 /// </summary>
+[ExcludeFromCodeCoverage(Justification = "Boilerplate options wiring for the source-generated serialization context.")]
 internal static class DurableAIJsonUtilities
 {
     /// <summary>
