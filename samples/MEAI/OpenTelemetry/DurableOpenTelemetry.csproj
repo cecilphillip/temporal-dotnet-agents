@@ -7,6 +7,7 @@
     <IsPackable>false</IsPackable>
     <!-- Avoid namespace collision with the OpenTelemetry NuGet package -->
     <RootNamespace>DurableOpenTelemetry</RootNamespace>
+    <UserSecretsId>9f2e0995-ad0f-4cf0-9e35-f9469b5f9744</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

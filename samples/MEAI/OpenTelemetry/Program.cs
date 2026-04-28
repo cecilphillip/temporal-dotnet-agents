@@ -42,7 +42,7 @@
 // ─────────────
 // • A local Temporal server:  temporal server start-dev
 //   (The dev server starts on localhost:7233 with the "default" namespace.)
-// • OPENAI_API_KEY set in appsettings.local.json (or as an env variable).
+// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/OpenTelemetry
 //
 // Run:  dotnet run --project samples/MEAI/OpenTelemetry/OpenTelemetry.csproj
 
@@ -61,7 +61,6 @@ using Temporalio.Extensions.OpenTelemetry;
 
 // ── Setup: Build the application host ────────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
@@ -72,7 +71,7 @@ var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS")
 if (string.IsNullOrEmpty(apiBaseUrl))
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 if (string.IsNullOrEmpty(apiKey))
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured in appsettings.json.");
+    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MEAI/OpenTelemetry");
 
 // ── Setup: Register OpenTelemetry ─────────────────────────────────────────────
 // Four ActivitySource names must be registered:
