@@ -1,30 +1,27 @@
 # Library Combinations Guide
 
-This project ships two libraries — `Temporalio.Extensions.AI` and `Temporalio.Extensions.Agents` — and the choices you make at registration time determine which Temporal primitives back your AI calls, what operational features are available, and what constraints you inherit. There are three meaningful combinations. Two of them are designed happy paths. One of them is a transitional posture that should be migrated away from.
+This project ships two libraries — `Temporalio.Extensions.AI` and `Temporalio.Extensions.Agents` — and the choices you make at registration time determine which Temporal primitives back your AI calls, what operational features are available, and what constraints you inherit. There are two supported combinations. One pairing — MAF + `Extensions.AI` — is an anti-pattern to avoid.
 
 ---
 
-## The Three Combinations at a Glance
+## The Two Combinations at a Glance
 
-| | Combination 1 | Combination 2 | Combination 3 |
-|---|---|---|---|
-| **Stack** | MAF + `Extensions.AI` | MEAI + `Extensions.AI` | MAF + `Extensions.Agents` |
-| **Entry point** | `DurableChatSessionClient` | `DurableChatSessionClient` | `ITemporalAgentClient` / `TemporalAIAgentProxy` |
-| **Registration** | `AddDurableAI()` | `AddDurableAI()` | `AddTemporalAgents()` |
-| **NuGet package** | `Temporalio.Extensions.AI` | `Temporalio.Extensions.AI` | `Temporalio.Extensions.Agents` |
-| **`Microsoft.Agents.AI` required** | Yes (but unused by the library) | No | Yes |
-| **Named agents** | No | No | Yes |
-| **Temporal UI search attributes** | No | No | Yes — `AgentName`, `SessionCreatedAt`, `TurnCount` |
-| **LLM-powered routing** | No | No | Yes |
-| **Parallel fan-out** | No | No | Yes |
-| **StateBag / AIContextProvider** | No | No | Yes |
-| **HITL** | Yes | Yes | Yes |
-| **Embeddings** | Yes | Yes | No (not wired into `Extensions.Agents`) |
-| **Recommended** | Migration path only | Yes | Yes |
+| | Combination 1 | Combination 2 |
+|---|---|---|
+| **Stack** | MEAI + `Extensions.AI` | MAF + `Extensions.Agents` |
+| **Entry point** | `DurableChatSessionClient` | `ITemporalAgentClient` / `TemporalAIAgentProxy` |
+| **Registration** | `AddDurableAI()` | `AddTemporalAgents()` |
+| **NuGet package** | `Temporalio.Extensions.AI` | `Temporalio.Extensions.Agents` |
+| **Named agents** | No | Yes |
+| **Temporal UI search attributes** | No | Yes — `AgentName`, `SessionCreatedAt`, `TurnCount` |
+| **StateBag / AIContextProvider** | No | Yes |
+| **HITL** | Yes | Yes |
+| **Embeddings** | Yes | Yes — inject `IEmbeddingGenerator` into tool classes via DI (see [MEAI Middleware guide](how-to/MAF/meai-middleware.md)) |
+| **Recommended** | Yes | Yes |
 
 ---
 
-## Combination 2 — MEAI + `Temporalio.Extensions.AI`
+## Combination 1 — MEAI + `Temporalio.Extensions.AI`
 
 **The designed happy path for `Temporalio.Extensions.AI`.**
 
@@ -70,11 +67,11 @@ var response = await sessionClient.ChatAsync(
 
 ### Limitations
 
-Conversations are identified by an opaque string ID. There are no named agents, no Temporal UI search attributes, no LLM-powered routing, no `StateBag`, no `AIContextProvider` support, and no parallel orchestration primitives. If your use case needs any of these, move to Combination 3.
+Conversations are identified by an opaque string ID. There are no named agents, no Temporal UI search attributes, no `StateBag`, no `AIContextProvider` support, and no parallel orchestration primitives. If your use case needs any of these, move to Combination 2.
 
 ---
 
-## Combination 3 — MAF + `Temporalio.Extensions.Agents`
+## Combination 2 — MAF + `Temporalio.Extensions.Agents`
 
 **The designed happy path for `Temporalio.Extensions.Agents`.**
 
@@ -127,12 +124,10 @@ public class ResearchWorkflow
 
 ### What you get
 
-On top of everything in Combination 2:
+On top of everything in Combination 1:
 
 - **Named agents** — each `AIAgent` is registered under a name; the Temporal workflow ID encodes the agent name and session key (`ta-weatheragent-{key}`).
 - **Temporal UI search attributes** — `AgentWorkflow` upserts `AgentName`, `SessionCreatedAt`, and `TurnCount` on every run, enabling queries like `AgentName = "BillingAgent" AND TurnCount > 10` in the Web UI.
-- **LLM-powered routing** — `SetRouterAgent` registers `AIModelAgentRouter`, which classifies an incoming message and dispatches it to the right specialist automatically.
-- **Parallel fan-out** — `ExecuteAgentsInParallelAsync` dispatches multiple agent calls concurrently inside a `[Workflow]` via `Workflow.WhenAllAsync`.
 - **StateBag / `AIContextProvider`** — `AgentSessionStateBag` state is serialized and carried across turns, restarts, and `ContinueAsNew` transitions.
 - **`TemporalAgentContext.Current`** inside tools — direct access to the current session and HITL helpers without building a workflow handle manually.
 - **Structured output** — `RunAsync<T>` deserializes the agent's response into a typed object, with retry-on-failure.
@@ -148,81 +143,17 @@ On top of everything in Combination 2:
 
 ---
 
-## Combination 1 — MAF + `Temporalio.Extensions.AI`
+## Anti-pattern: MAF + `Temporalio.Extensions.AI`
 
-**A transitional posture, not a destination.**
+Do not register an `AIAgent` or `ChatClientAgent` with `AddDurableAI()`. `DurableChatWorkflow` does not know about `AIAgent`, `AgentSession`, `AgentSessionStateBag`, or `TemporalAgentContext` — the agent runs as a plain `IChatClient`. You pay the `Microsoft.Agents.AI` dependency cost and receive exactly Combination 1's capabilities, with none of the Agents-specific features.
 
-This combination uses `AIAgent` / `ChatClientAgent` from `Microsoft.Agents.AI` but registers with `AddDurableAI()` instead of `AddTemporalAgents()`. The result is that `DurableChatWorkflow` injects `IChatClient` and calls `GetResponseAsync` directly — exactly as in Combination 2. The agent's session, `AgentSessionStateBag`, `AIContextProvider` hooks, `AgentResponse`, and `TemporalAgentContext` have no Temporal backing here.
-
-### What happens at runtime
-
-```csharp
-// What you register
-builder.Services
-    .AddChatClient(myAgentAsIChatClient)  // surfacing the AIAgent as a bare IChatClient
-    .Build();
-
-builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "durable-chat")
-    .AddDurableAI();
-```
-
-`DurableChatActivities` resolves the unkeyed `IChatClient` from DI and calls `GetResponseAsync`. It does not know anything about `AIAgent`, `AgentSession`, or `AgentSessionStateBag`. The MAF agent runs as a plain chat client — no routing, no StateBag serialization, no search attributes, no `TemporalAgentContext`.
-
-You pay the `Microsoft.Agents.AI` dependency cost and receive exactly Combination 2's capabilities.
-
-### The only valid use
-
-Combination 1 makes sense as a **transitional posture** when migrating an existing MAF project to Temporal before committing to `Temporalio.Extensions.Agents`. It gets the project onto the Temporal execution model quickly, with minimal registration changes, while Combination 3 features are evaluated or ported.
-
-### Exit path
-
-Moving from Combination 1 to Combination 3 is a two-line registration change:
-
-```csharp
-// Before (Combination 1)
-builder.Services
-    .AddChatClient(myAgentAsIChatClient).Build();
-builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .AddDurableAI();
-
-// After (Combination 3)
-builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .AddTemporalAgents(opts => opts.AddAIAgent(myAgent));
-```
-
-`Temporalio.Extensions.Agents` already depends on `Temporalio.Extensions.AI` transitively — no new NuGet package is needed.
-
----
-
-## HITL Portability Across Combinations
-
-`DurableApprovalRequest` and `DurableApprovalDecision` are defined in `Temporalio.Extensions.AI` and used by both libraries as the shared wire protocol for approval flows. An external approval system (a UI dashboard, a monitoring tool, an admin API) built against Combination 2 works unchanged with Combination 3 — the approval query and update mechanism is identical.
-
-```csharp
-// Works against both DurableChatSessionClient (Combination 2)
-// and ITemporalAgentClient (Combination 3)
-
-var pending = await sessionClient.GetPendingApprovalAsync(conversationId);
-if (pending is not null)
-{
-    await sessionClient.SubmitApprovalAsync(conversationId, new DurableApprovalDecision
-    {
-        RequestId = pending.RequestId,
-        Approved  = true,
-    });
-}
-```
-
-The difference is the entry point: `DurableChatSessionClient` in Combination 2, `ITemporalAgentClient` in Combination 3. The types themselves are the same.
+If you use `Microsoft.Agents.AI`, use Combination 2 (`AddTemporalAgents()`).
 
 ---
 
 ## Adopting Extensions.AI Incrementally
 
-Some projects build the correct Combination 2 pattern independently — a `[WorkflowUpdate]`-based request/response loop, `WaitConditionAsync` for turn gating, `IChatClient` + `UseFunctionInvocation()` for tools — before encountering these libraries. These projects fit Combination 2 and can adopt `Temporalio.Extensions.AI` selectively rather than wholesale.
+Some projects build the correct Combination 1 pattern independently — a `[WorkflowUpdate]`-based request/response loop, `WaitConditionAsync` for turn gating, `IChatClient` + `UseFunctionInvocation()` for tools — before encountering these libraries. These projects fit Combination 1 and can adopt `Temporalio.Extensions.AI` selectively rather than wholesale.
 
 Incremental adoption paths:
 
@@ -236,26 +167,15 @@ Incremental adoption paths:
 ```
 Do you use Microsoft.Agents.AI (AIAgent, ChatClientAgent)?
 │
-├── No
-│   └── Combination 2 — plain IChatClient + AddDurableAI()
+├── No  → Combination 1 — plain IChatClient + AddDurableAI()
 │
-└── Yes
-    │
-    ├── Are you migrating an existing MAF project to Temporal
-    │   and not yet ready to adopt AddTemporalAgents()?
-    │   │
-    │   └── Yes → Combination 1 (transitional only)
-    │           Plan the move to Combination 3
-    │
-    └── No (new project, or ready to commit)
-        └── Combination 3 — AIAgent + AddTemporalAgents()
+└── Yes → Combination 2 — AIAgent + AddTemporalAgents()
 ```
 
 In short:
 
-- No `Microsoft.Agents.AI` in your project — use Combination 2.
-- `Microsoft.Agents.AI` in your project — use Combination 3.
-- Already in Combination 1 — migrate to Combination 3; the registration change is two lines.
+- No `Microsoft.Agents.AI` in your project — use Combination 1.
+- `Microsoft.Agents.AI` in your project — use Combination 2.
 
 ---
 
