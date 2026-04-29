@@ -34,7 +34,19 @@ public static class TemporalWorkerBuilderExtensions
         this ITemporalWorkerServiceOptionsBuilder builder,
         Action<TemporalAgentsOptions> configure)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configure);
+
+        // Fail-fast: detect a duplicate registration on the same worker builder before it can
+        // silently override the agent factory dictionary at runtime. Mirrors AddDurableTools'
+        // precondition check in the AI library.
+        if (builder.Services.Any(d => d.ServiceType == typeof(TemporalAgentsOptions)))
+        {
+            throw new InvalidOperationException(
+                "AddTemporalAgents has already been called on this worker builder. " +
+                "Calling it twice would silently override the agent factory dictionary. " +
+                "Configure all agents in a single AddTemporalAgents call.");
+        }
 
         var agentsOptions = new TemporalAgentsOptions();
         configure(agentsOptions);
@@ -43,13 +55,13 @@ public static class TemporalWorkerBuilderExtensions
         var services = builder.Services;
 
         // Agent factory dictionary — consumed by AgentActivities to resolve real agent instances.
-        // Uses AddSingleton (not Try) so a duplicate AddTemporalAgents call on the same worker
-        // produces a clear failure rather than silently using the first registration.
-        services.AddSingleton<IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>>>(
+        // TryAddSingleton keeps the registration idempotent; the fail-fast guard above already
+        // rejects a duplicate AddTemporalAgents call before we get here.
+        services.TryAddSingleton<IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>>>(
             _ => agentsOptions.GetAgentFactories());
 
         // Options singleton — consumed by DefaultTemporalAgentClient for per-agent TTL resolution.
-        services.AddSingleton(agentsOptions);
+        services.TryAddSingleton(agentsOptions);
 
         // Register AIAgentRouter when a router agent has been configured.
         if (agentsOptions.GetRouterAgent() is { } routerAgent)

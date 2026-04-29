@@ -137,6 +137,30 @@ public class TemporalWorkerBuilderExtensionsTests
     }
 
     [Fact]
+    public void AddTemporalAgents_Throws_WhenCalledTwiceOnSameBuilder()
+    {
+        // Arrange — register once, then attempt a second registration.
+        var services = new ServiceCollection();
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+        builder.AddTemporalAgents(opts => opts.AddAIAgent(new StubAIAgent("agent-1")));
+
+        // Act & Assert — second call must surface the misuse loudly.
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            builder.AddTemporalAgents(opts => opts.AddAIAgent(new StubAIAgent("agent-2"))));
+        Assert.Contains("already been called", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AddTemporalAgents_ThrowsOnNullBuilder()
+    {
+        var ex = Assert.Throws<ArgumentNullException>(() =>
+            ((ITemporalWorkerServiceOptionsBuilder)null!).AddTemporalAgents(_ => { }));
+        Assert.Equal("builder", ex.ParamName);
+    }
+
+    [Fact]
     public void AddTemporalAgents_ThrowsOnNullConfigure()
     {
         // Arrange
