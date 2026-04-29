@@ -20,7 +20,7 @@ Key benefits over in-memory agent frameworks:
 ## Feature Highlights
 
 - Durable multi-turn conversations with automatic history management
-- LLM-powered routing (`IAgentRouter` / `AIModelAgentRouter`)
+- LLM-powered routing (`IAgentRouter` / `AIAgentRouter`)
 - Parallel agent execution inside workflows (`ExecuteAgentsInParallelAsync`)
 - Human-in-the-loop approval gates via `[WorkflowUpdate]`
 - Typed structured output with `RunAsync<T>` (markdown fence stripping + retry)
@@ -108,19 +108,21 @@ Console.WriteLine(response.Messages[0].Text);
 temporal server start-dev --namespace default
 
 # Run a sample
-dotnet run --project samples/BasicAgent
+dotnet run --project samples/MAF/BasicAgent/BasicAgent.csproj
 ```
 
 ## Samples
 
 | Sample | Description |
 |--------|-------------|
-| [BasicAgent](../../samples/BasicAgent) | External caller pattern — send messages to an agent from a console app |
-| [SplitWorkerClient](../../samples/SplitWorkerClient) | Worker and client in separate processes |
-| [WorkflowOrchestration](../../samples/WorkflowOrchestration) | Sub-agent orchestration inside a Temporal workflow |
-| [EvaluatorOptimizer](../../samples/EvaluatorOptimizer) | Generator + evaluator loop pattern |
-| [MultiAgentRouting](../../samples/MultiAgentRouting) | LLM-powered routing, parallel execution, and OpenTelemetry |
-| [HumanInTheLoop](../../samples/HumanInTheLoop) | HITL approval gates via `[WorkflowUpdate]` |
+| [BasicAgent](../../samples/MAF/BasicAgent) | External caller pattern — send messages to an agent from a console app |
+| [SplitWorkerClient](../../samples/MAF/SplitWorkerClient) | Worker and client in separate processes |
+| [WorkflowOrchestration](../../samples/MAF/WorkflowOrchestration) | Sub-agent orchestration inside a Temporal workflow |
+| [EvaluatorOptimizer](../../samples/MAF/EvaluatorOptimizer) | Generator + evaluator loop pattern |
+| [MultiAgentRouting](../../samples/MAF/MultiAgentRouting) | LLM-powered routing, parallel execution, and OpenTelemetry |
+| [HumanInTheLoop](../../samples/MAF/HumanInTheLoop) | HITL approval gates via `[WorkflowUpdate]` |
+| [WorkflowRouting](../../samples/MAF/WorkflowRouting) | LLM-powered routing inside a Temporal workflow |
+| [AmbientAgent](../../samples/MAF/AmbientAgent) | Ambient agent pattern |
 
 ## Core Components
 
