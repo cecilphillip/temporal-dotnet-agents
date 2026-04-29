@@ -68,6 +68,109 @@ These require separate activity classes. A unified base class would need to abst
 
 ---
 
+## Function Invocation: Loop Ownership and Durability Granularity
+
+The two libraries handle tool/function invocation differently. This difference is not a bug — it
+reflects a deliberate trade-off between durability granularity and implementation complexity.
+
+### The AI library supports two modes
+
+**Mode 1 — Full loop inside one activity (default, idiomatic MEAI registration)**
+
+When `IChatClient` is registered with MEAI's `UseFunctionInvocation()` middleware:
+
+```csharp
+services.AddChatClient(innerClient)
+    .UseFunctionInvocation()
+    .Build();
+```
+
+`DurableChatActivities.GetStreamingResponseAsync` calls a `FunctionInvokingChatClient` under the
+hood. That middleware owns the entire tool loop — LLM call, detect tool requests, execute tools,
+feed results back, LLM call again — and only returns the final complete response. From Temporal's
+perspective, the entire turn is one atomic activity regardless of how many tool rounds occurred.
+
+**Mode 2 — Workflow-managed loop (opt-in, requires `AddDurableTools()`)**
+
+When tools are registered via `AddDurableTools()` and the `IChatClient` does NOT have
+`UseFunctionInvocation()`, each `AIFunction` is wrapped as a `DurableAIFunction`. When called
+from inside a `[Workflow]`, `DurableAIFunction` dispatches via `Workflow.ExecuteActivityAsync`
+rather than calling the function directly. The workflow manages the loop: call LLM activity →
+detect tool requests → dispatch each tool as a separate activity → feed results back → repeat.
+
+In this mode every tool call has its own entry in workflow event history, its own retry policy,
+and its own timeout. Failure on tool 7 retries only tool 7 — not the full turn.
+
+**Both modes produce identical final responses.** The difference is durability granularity:
+
+| Registration | Loop location | Temporal checkpoint per |
+|---|---|---|
+| `UseFunctionInvocation()` | MEAI middleware inside one activity | Turn |
+| `AddDurableTools()` (no `UseFunctionInvocation`) | Workflow across multiple activities | LLM call + each tool call |
+
+### The Agents library today: always full loop
+
+`AgentActivities.ExecuteAgentAsync` calls MAF's `RunStreamingAsync`, which owns the entire
+agentic loop internally — identical in behavior to Mode 1 above. MAF's `FunctionInvokingChatClient`
+handles all LLM rounds and tool executions before the activity returns.
+
+There is no opt-in equivalent of Mode 2 in the Agents library today. Adding one would require the
+workflow to manage the tool loop — calling a "LLM-only" activity, dispatching tool activities,
+feeding results back — mirroring the AI library's Mode 2.
+
+### The `AIContextProvider` constraint on granular dispatch
+
+MAF's `AIContextProvider.InvokingAsync` fires once per `RunStreamingAsync` call at the MAF
+orchestration level. In the current single-activity model it fires exactly once per turn — even
+if `FunctionInvokingChatClient` internally loops through many tool rounds.
+
+A workflow-managed loop would call `RunStreamingAsync` multiple times per turn (once for the
+initial LLM call, once per LLM round after tool results). This would cause `AIContextProvider` to
+fire on each call, potentially:
+
+- Adding duplicate context messages for providers like `Mem0Provider`
+- Double-writing state in `InvokedAsync`
+
+Any granular dispatch mode in the Agents library must either: (a) document this as an
+incompatibility with stateful `AIContextProvider` implementations, or (b) use MAF's
+`ChatClientAgentRunOptions.ChatClientFactory` to inject a stripped `IChatClient` per-call rather
+than calling `RunStreamingAsync` at all for the LLM-only rounds.
+
+### How `ChatClientFactory` enables granular dispatch without a second agent instance
+
+`ChatClientAgentRunOptions.ChatClientFactory` (`Func<IChatClient, IChatClient>?`) allows
+per-request replacement or decoration of the chat client. MAF applies it before each
+`RunAsync`/`RunStreamingAsync` call without permanently modifying the agent:
+
+```csharp
+private static IChatClient ApplyRunOptionsTransformations(AgentRunOptions? options, IChatClient chatClient)
+{
+    if (options is ChatClientAgentRunOptions agentChatOptions && agentChatOptions.ChatClientFactory is not null)
+    {
+        chatClient = agentChatOptions.ChatClientFactory(chatClient);
+    }
+    return chatClient;
+}
+```
+
+This is the mechanism a future granular dispatch implementation would use: for the LLM-only call,
+pass a `ChatClientFactory` that strips `FunctionInvokingChatClient` from the pipeline. The LLM
+sees full tool definitions, returns `FunctionCallContent`, and the workflow dispatches those tool
+calls as separate activities. No second agent registration required; the agent's DI key and options
+remain unchanged.
+
+### Current recommendation
+
+Do not add granular tool dispatch to the Agents library until a real production use case
+demonstrates the need. The full-loop model is correct for most workloads — it already provides
+per-turn durability via Temporal's workflow history, activity retry, and heartbeating. The granular
+model adds implementation complexity and the `AIContextProvider` constraint described above.
+
+If per-tool granularity is needed today, use `Temporalio.Extensions.AI` with `AddDurableTools()`
+(Mode 2 above) and compose with MAF-specific state via `TemporalAgentContext.GetService<T>()`.
+
+---
+
 ## MAF Library Evolution
 
 `Microsoft.Agents.AI` is diverging from MEAI as a platform, not converging. Upstream direction includes:
