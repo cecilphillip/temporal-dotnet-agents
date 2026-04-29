@@ -30,12 +30,16 @@ public class TemporalAgentTelemetryTests
     [Fact]
     public void AttributeNames_AreExpected()
     {
-        Assert.Equal("agent.name", TemporalAgentTelemetry.AgentNameAttribute);
-        Assert.Equal("agent.session_id", TemporalAgentTelemetry.AgentSessionIdAttribute);
-        Assert.Equal("agent.correlation_id", TemporalAgentTelemetry.AgentCorrelationIdAttribute);
-        Assert.Equal("agent.input_tokens", TemporalAgentTelemetry.InputTokensAttribute);
-        Assert.Equal("agent.output_tokens", TemporalAgentTelemetry.OutputTokensAttribute);
-        Assert.Equal("agent.total_tokens", TemporalAgentTelemetry.TotalTokensAttribute);
+        // Aligned with OpenTelemetry GenAI semantic conventions (Development tier).
+        // See https://opentelemetry.io/docs/specs/semconv/gen-ai/.
+        Assert.Equal("gen_ai.agent.name", TemporalAgentTelemetry.AgentNameAttribute);
+        Assert.Equal("gen_ai.conversation.id", TemporalAgentTelemetry.AgentSessionIdAttribute);
+        // Temporal-namespaced: OTel has no canonical request-correlation attribute.
+        Assert.Equal("temporal.agent.correlation_id", TemporalAgentTelemetry.AgentCorrelationIdAttribute);
+        Assert.Equal("gen_ai.usage.input_tokens", TemporalAgentTelemetry.InputTokensAttribute);
+        Assert.Equal("gen_ai.usage.output_tokens", TemporalAgentTelemetry.OutputTokensAttribute);
+        // Extends gen_ai.usage namespace — no canonical OTel attribute for total tokens.
+        Assert.Equal("gen_ai.usage.total_tokens", TemporalAgentTelemetry.TotalTokensAttribute);
         Assert.Equal("schedule.id", TemporalAgentTelemetry.ScheduleIdAttribute);
         Assert.Equal("schedule.delay", TemporalAgentTelemetry.ScheduleDelayAttribute);
         Assert.Equal("schedule.job_id", TemporalAgentTelemetry.ScheduleJobIdAttribute);
