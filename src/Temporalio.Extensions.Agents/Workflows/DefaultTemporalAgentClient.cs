@@ -6,6 +6,7 @@ using Temporalio.Api.Enums.V1;
 using Temporalio.Client;
 using Temporalio.Client.Schedules;
 using Temporalio.Extensions.Agents.Session;
+using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.Workflows;
@@ -23,6 +24,9 @@ internal sealed class DefaultTemporalAgentClient(
 {
     private readonly ILogger<DefaultTemporalAgentClient> _logger =
         logger ?? NullLogger<DefaultTemporalAgentClient>.Instance;
+
+    // Cached at construction — the descriptor registry is immutable after AddTemporalAgents completes.
+    private readonly IReadOnlyList<AgentDescriptor> _agentDescriptors = options.GetAgentDescriptors();
 
     /// <inheritdoc/>
     public async Task<AgentResponse> RunAgentAsync(
@@ -157,7 +161,7 @@ internal sealed class DefaultTemporalAgentClient(
                 "No IAgentRouter is configured. Call SetRouterAgent() on TemporalAgentsOptions to enable LLM routing.");
         }
 
-        var descriptors = options.GetAgentDescriptors();
+        var descriptors = _agentDescriptors;
         if (descriptors.Count == 0)
         {
             throw new InvalidOperationException(

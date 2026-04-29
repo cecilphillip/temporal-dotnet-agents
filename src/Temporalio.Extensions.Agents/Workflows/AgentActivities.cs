@@ -114,7 +114,7 @@ internal sealed class AgentActivities(
                     }
                 }
 
-                await responseHandler.OnStreamingResponseUpdateAsync(StreamWithHeartbeat(), ct);
+                await responseHandler.OnStreamingResponseUpdateAsync(StreamWithHeartbeat(), ct).ConfigureAwait(false);
                 response = updates.ToAgentResponse();
             }
 
