@@ -131,10 +131,12 @@ internal class AgentWorkflow
             _history.Add(TemporalAgentStateRequest.FromRunRequest(request, Workflow.UtcNow));
 
             // GAP 6: pass the stored StateBag so the activity can restore provider state.
+            // _history is passed directly (not copied) — the activity input is serialized
+            // eagerly by Workflow.ExecuteActivityAsync, snapshotting the contents at dispatch.
             var activityInput = new ExecuteAgentInput(
                 _input!.AgentName,
                 request,
-                [.. _history],
+                _history,
                 _currentStateBag);
 
             var result = await Workflow.ExecuteActivityAsync(
@@ -260,7 +262,7 @@ internal class AgentWorkflow
             var activityInput = new ExecuteAgentInput(
                 _input!.AgentName,
                 request,
-                [.. _history],
+                _history,
                 _currentStateBag);
 
             var result = await Workflow.ExecuteActivityAsync(

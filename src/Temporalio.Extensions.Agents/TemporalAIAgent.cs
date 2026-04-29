@@ -112,7 +112,7 @@ public sealed class TemporalAIAgent : AIAgent
         // We pass the session ID explicitly because the orchestrating workflow's ID
         // may not follow the ta-{agentName}-{key} convention.
         var sessionId = session is TemporalAgentSession ts ? ts.SessionId : (TemporalAgentSessionId?)null;
-        var activityInput = new ExecuteAgentInput(_agentName, request, [.. _history], sessionId: sessionId);
+        var activityInput = new ExecuteAgentInput(_agentName, request, _history, sessionId: sessionId);
 
         Workflow.Logger.LogInWorkflowAgentDispatching(_agentName, _requestCount);
 
