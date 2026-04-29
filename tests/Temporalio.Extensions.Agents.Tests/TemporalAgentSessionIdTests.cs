@@ -78,9 +78,9 @@ public class TemporalAgentSessionIdTests
     }
 
     [Fact]
-    public void ImplicitConversion_FromString_ParsesWorkflowId()
+    public void Parse_FromString_ParsesWorkflowId()
     {
-        TemporalAgentSessionId id = "ta-myagent-abc123";
+        TemporalAgentSessionId id = TemporalAgentSessionId.Parse("ta-myagent-abc123");
         Assert.Equal("myagent", id.AgentName);
         Assert.Equal("abc123", id.Key);
     }
@@ -161,14 +161,25 @@ public class TemporalAgentSessionIdTests
     }
 
     [Fact]
-    public void KeyWithDashes_ParseUsesLastDashAsDelimiter()
+    public void SessionId_ThrowsOnKeyWithHyphen()
     {
-        // When the key contains dashes, Parse splits on the LAST dash.
-        // This means "ta-myagent-abc-123" parses as agent="myagent-abc" key="123".
-        // This is a documented trade-off: keys with dashes shift the agent name.
-        var parsed = TemporalAgentSessionId.Parse("ta-myagent-abc-123");
-        Assert.Equal("myagent-abc", parsed.AgentName);
-        Assert.Equal("123", parsed.Key);
+        Assert.Throws<ArgumentException>(() => new TemporalAgentSessionId("agent", "key-with-hyphen"));
+    }
+
+    [Fact]
+    public void SessionId_AcceptsKeyWithoutHyphen()
+    {
+        var id = new TemporalAgentSessionId("agent", "keywithout");
+        Assert.Equal("ta-agent-keywithout", id.WorkflowId);
+    }
+
+    [Fact]
+    public void SessionId_AgentNameWithHyphensIsAllowed()
+    {
+        var id = new TemporalAgentSessionId("my-agent", "key123");
+        var parsed = TemporalAgentSessionId.Parse(id.WorkflowId);
+        Assert.Equal("my-agent", parsed.AgentName);
+        Assert.Equal("key123", parsed.Key);
     }
 
     [Fact]

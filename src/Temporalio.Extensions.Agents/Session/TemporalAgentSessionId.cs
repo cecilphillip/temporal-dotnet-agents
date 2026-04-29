@@ -15,10 +15,16 @@ public readonly struct TemporalAgentSessionId : IEquatable<TemporalAgentSessionI
     /// <summary>
     /// Initializes a new instance of the <see cref="TemporalAgentSessionId"/> struct.
     /// </summary>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="key"/> contains a hyphen.</exception>
     public TemporalAgentSessionId(string agentName, string key)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        if (key.Contains('-'))
+            throw new ArgumentException(
+                "Session key must not contain hyphens — hyphens are used as the segment separator in the workflow ID. " +
+                "Use Guid.NewGuid().ToString(\"N\") or a similar hyphen-free format.",
+                nameof(key));
         this.AgentName = agentName;
         this.Key = key;
     }
@@ -69,9 +75,6 @@ public readonly struct TemporalAgentSessionId : IEquatable<TemporalAgentSessionI
 
     /// <summary>Implicit conversion to workflow ID string.</summary>
     public static implicit operator string(TemporalAgentSessionId sessionId) => sessionId.WorkflowId;
-
-    /// <summary>Implicit conversion from workflow ID string (via <see cref="Parse"/>).</summary>
-    public static implicit operator TemporalAgentSessionId(string workflowId) => Parse(workflowId);
 
     public static bool operator ==(TemporalAgentSessionId left, TemporalAgentSessionId right) =>
         left.AgentName.Equals(right.AgentName, StringComparison.OrdinalIgnoreCase) && left.Key == right.Key;
