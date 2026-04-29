@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.AI;
@@ -47,19 +48,11 @@ public sealed class DurableChatWorkflowInput
     public int MaxHistorySize { get; init; } = 1000;
 
     /// <summary>
-    /// Optional strategy to reduce conversation history before a continue-as-new transition.
-    /// When non-null, invoked with the current history before history is carried forward.
-    /// Must be a pure, deterministic function — no async, no side effects, no wall-clock time.
+    /// Optional reducer applied to conversation history before a continue-as-new transition.
+    /// Not serialized — the session client re-supplies this on each workflow start.
     /// </summary>
-    /// <remarks>
-    /// Not serialized across the continue-as-new boundary (delegates are not JSON-serializable).
-    /// The reducer is re-attached on each run by re-supplying the same options to
-    /// <see cref="DurableChatSessionClient"/>. Callers using <see cref="DurableChatSessionClient"/>
-    /// should set <see cref="DurableExecutionOptions.HistoryReducer"/> — it is threaded through
-    /// to this property on each workflow start.
-    /// </remarks>
-    [System.Text.Json.Serialization.JsonIgnore]
-    public Func<IList<ChatMessage>, IList<ChatMessage>>? HistoryReducer { get; init; }
+    [JsonIgnore]
+    public IChatReducer? HistoryReducer { get; init; }
 
     /// <summary>
     /// The UTC timestamp at which the session was originally created.

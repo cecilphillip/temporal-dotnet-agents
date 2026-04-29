@@ -94,6 +94,25 @@ public sealed class DurableExecutionOptions
     public string? DefaultChatClientKey { get; set; }
 
     /// <summary>
+    /// Gets or sets a reducer applied to conversation history before a continue-as-new transition.
+    /// When null (default), the full history is carried forward.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Use this to trim or summarize history when the workflow is about to continue-as-new,
+    /// preventing the carried history from growing unbounded across runs.
+    /// </para>
+    /// <para>
+    /// <b>Workflow determinism:</b> the reducer runs inside the workflow task scheduler.
+    /// <see cref="IChatReducer.ReduceAsync"/> must complete synchronously — do not perform
+    /// async I/O, call LLM APIs, or use <c>Task.Delay</c>. Return <c>Task.FromResult(...)</c>
+    /// from your implementation. To adapt an existing lambda, use
+    /// <c>new FuncChatReducer(msgs => ...)</c>.
+    /// </para>
+    /// </remarks>
+    public IChatReducer? HistoryReducer { get; set; }
+
+    /// <summary>
     /// Gets or sets whether to register the default <see cref="DurableChatWorkflow"/> and
     /// <see cref="DurableChatSessionClient"/>. Defaults to <see langword="true"/>.
     /// </summary>
@@ -122,19 +141,6 @@ public sealed class DurableExecutionOptions
     /// Reduce this value to limit payload size on long-running sessions.
     /// </remarks>
     public int MaxHistorySize { get; set; } = 1000;
-
-    /// <summary>
-    /// Optional strategy to reduce conversation history before a continue-as-new transition.
-    /// Invoked with the current history when the list reaches <see cref="MaxHistorySize"/>
-    /// or the Temporal SDK suggests continue-as-new.
-    /// Return a trimmed or summarized list. Defaults to <c>null</c> (no reduction — full history
-    /// is carried forward).
-    /// </summary>
-    /// <remarks>
-    /// The reducer runs in workflow context. It must be a pure, deterministic function.
-    /// Do not call async APIs, random number generators, or wall-clock time inside a reducer.
-    /// </remarks>
-    public Func<IList<ChatMessage>, IList<ChatMessage>>? HistoryReducer { get; set; }
 
     internal void Validate()
     {

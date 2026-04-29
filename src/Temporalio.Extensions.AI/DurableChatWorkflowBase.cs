@@ -101,13 +101,13 @@ public abstract class DurableChatWorkflowBase<TOutput>
 
         if ((Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxHistorySize) && !_shutdownRequested)
         {
-            // Apply the optional history reducer before carrying history forward.
-            var historyToCarry = input.HistoryReducer?.Invoke(_history) ?? _history;
-
+            var carriedHistory = input.HistoryReducer is not null
+                ? (await input.HistoryReducer.ReduceAsync(_history, CancellationToken.None)).ToList()
+                : _history.ToList();
             var carriedInput = new DurableChatWorkflowInput
             {
                 TimeToLive = input.TimeToLive,
-                CarriedHistory = historyToCarry.ToList(),
+                CarriedHistory = carriedHistory,
                 ActivityTimeout = input.ActivityTimeout,
                 HeartbeatTimeout = input.HeartbeatTimeout,
                 ApprovalTimeout = input.ApprovalTimeout,
