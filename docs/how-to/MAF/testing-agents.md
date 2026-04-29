@@ -60,22 +60,18 @@ internal sealed class StubAIAgent(
 }
 ```
 
-**Usage in router tests:**
+**Usage in a workflow test:**
 
 ```csharp
-private static StubAIAgent ResponseWithText(string text) =>
-    new("Router", new AgentResponse { Text = text });
+// StubAIAgent returns a fixed classification keyword — no LLM required.
+private static StubAIAgent ClassifierReturning(string keyword) =>
+    new("Classifier", new AgentResponse { Text = keyword });
 
 [Fact]
-public async Task RouteAsync_ExactMatch_ReturnsAgentName()
+public void StubAIAgent_ReturnsFixedResponse()
 {
-    var router = new AIAgentRouter(ResponseWithText("WeatherAgent"));
-
-    var result = await router.RouteAsync(
-        [new ChatMessage(ChatRole.User, "What's the weather?")],
-        descriptors);
-
-    Assert.Equal("WeatherAgent", result);
+    var agent = ClassifierReturning("ORDERS");
+    Assert.Equal("Classifier", agent.Name);
 }
 ```
 
@@ -149,48 +145,35 @@ public void AddTemporalAgents_ThrowsOnNullConfigure()
 }
 ```
 
-### Testing AIAgentRouter
+### Testing Routing Activities
 
-The router has several edge cases worth testing — exact match, fuzzy match, ambiguous responses, and hallucinations:
+Routing activities (`GetAvailableAgents`, `ValidateAgent`) are plain C# methods — test them directly without a Temporal server:
 
 ```csharp
-private static readonly AgentDescriptor[] descriptors =
-[
-    new("WeatherAgent", "Handles weather queries"),
-    new("BillingAgent", "Handles billing inquiries"),
-    new("TechSupport", "Handles technical support")
-];
-
 [Fact]
-public async Task RouteAsync_FuzzyMatch_ReturnsAgentName()
+public void GetAvailableAgents_ReturnsRegisteredDescriptors()
 {
-    // LLM returns "I think WeatherAgent is best" — fuzzy finds it
-    var router = new AIAgentRouter(
-        ResponseWithText("I think WeatherAgent is best"));
+    var options = BuildOptionsWithAgents();  // helper that builds TemporalAgentsOptions
+    var activities = new RoutingActivities(options);
 
-    var result = await router.RouteAsync(messages, descriptors);
-    Assert.Equal("WeatherAgent", result);
+    var agents = activities.GetAvailableAgents();
+
+    Assert.Contains(agents, a => a.Name == "OrdersAgent");
+    Assert.Contains(agents, a => a.Name == "TechSupportAgent");
 }
 
 [Fact]
-public async Task RouteAsync_MultipleNamesInResponse_ThrowsAmbiguousException()
+public void ValidateAgent_KnownName_ReturnsName()
 {
-    // LLM mentions two agents — ambiguous
-    var router = new AIAgentRouter(
-        ResponseWithText("WeatherAgent or BillingAgent"));
-
-    await Assert.ThrowsAsync<InvalidOperationException>(
-        () => router.RouteAsync(messages, descriptors));
+    var activities = new RoutingActivities(BuildOptionsWithAgents());
+    Assert.Equal("OrdersAgent", activities.ValidateAgent("OrdersAgent", "GeneralAgent"));
 }
 
 [Fact]
-public async Task RouteAsync_UnknownName_ThrowsInvalidOperationException()
+public void ValidateAgent_UnknownName_ReturnsFallback()
 {
-    var router = new AIAgentRouter(
-        ResponseWithText("NonexistentAgent"));
-
-    await Assert.ThrowsAsync<InvalidOperationException>(
-        () => router.RouteAsync(messages, descriptors));
+    var activities = new RoutingActivities(BuildOptionsWithAgents());
+    Assert.Equal("GeneralAgent", activities.ValidateAgent("HallucinatedAgent", "GeneralAgent"));
 }
 ```
 

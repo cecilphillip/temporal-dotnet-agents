@@ -26,7 +26,7 @@ The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) are defined
 10. [Activity Timeouts](#activity-timeouts)
 11. [Accessing Temporal from Agent Tools](#accessing-temporal-from-agent-tools)
 12. [Streaming Responses](#streaming-responses)
-13. [LLM-Powered Routing](#llm-powered-routing)
+13. [Routing](#routing)
 14. [Parallel Agent Execution](#parallel-agent-execution)
 15. [Human-in-the-Loop (HITL) Approval Gates](#human-in-the-loop-hitl-approval-gates)
 16. [Scheduling](#scheduling)
@@ -395,67 +395,14 @@ public class MyStreamingHandler : IAgentResponseHandler
 
 ---
 
-## LLM-Powered Routing
+## Routing
 
-When multiple agents are registered, `IAgentRouter` / `AIAgentRouter` can classify an incoming message and dispatch
-it to the best-matching agent automatically.
+Routing belongs inside your workflow, where every decision is durable, visible in history, and replayed from cache on crash recovery. The library provides two patterns:
 
-### Configuration
+- **Static routing** — a classifier agent runs inside the workflow and the result drives a switch statement with hardcoded agent names. Best for a fixed agent set.
+- **Dynamic routing via activity** — the workflow discovers available agents by querying the descriptor registry inside an activity (whose result is cached in history). Best when the set of agents changes across deployments.
 
-Register descriptors for each routable agent, then set a lightweight router agent whose sole job is to return the name
-of the best match:
-
-```csharp
-var routerAgent = openAiClient
-    .GetChatClient("gpt-4o-mini")
-    .AsAIAgent(
-        name: "__router__",
-        instructions:
-            "You are a routing agent. Given a user query, respond with ONLY the name of the " +
-            "most appropriate specialist agent from the available options. Do not include any " +
-            "explanation or punctuation — only the agent name.");
-
-builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .AddTemporalAgents(opts =>
-    {
-        opts.AddAIAgent(weatherAgent);
-        opts.AddAIAgent(bookingAgent);
-
-        // Describe each agent so the router can classify messages
-        opts.AddAgentDescriptor("WeatherAgent", "Handles weather queries and forecasts");
-        opts.AddAgentDescriptor("BookingAgent", "Handles travel bookings and reservations");
-
-        // AIAgentRouter is registered automatically when a router agent is set
-        opts.SetRouterAgent(routerAgent);
-    });
-```
-
-### Using RouteAsync
-
-Call `ITemporalAgentClient.RouteAsync` instead of targeting a specific agent. The router classifies the messages,
-selects the best agent, and runs it — all in one call:
-
-```csharp
-ITemporalAgentClient client = // resolved from DI
-
-var messages = new List<ChatMessage>
-{
-    new(ChatRole.User, "What will the weather be like in Boston tomorrow?")
-};
-
-AgentResponse response = await client.RouteAsync(
-    sessionKey: userId,
-    new RunRequest(messages));
-```
-
-The `sessionKey` is used to construct a `TemporalAgentSessionId` from the chosen agent name and that key, so the same
-user always routes to the same session for a given agent.
-
-`AIAgentRouter` uses a fuzzy-match fallback to tolerate minor formatting variation in the model's output. To use a
-custom routing strategy, implement `IAgentRouter` and register it in DI before calling `AddTemporalAgents`.
-
-For advanced routing patterns (static workflow routing, dynamic routing via activity), see [Routing Patterns](./routing.md).
+Both patterns are covered in detail in [Routing Patterns](./routing.md), with complete working code in `samples/MAF/WorkflowRouting/`.
 
 ---
 

@@ -8,7 +8,7 @@ This document describes the structural relationship between `Temporalio.Extensio
 
 `Temporalio.Extensions.AI` is the lower-level primitive. It makes any `IChatClient` (Microsoft.Extensions.AI / MEAI) durable using Temporal workflows. It has no dependency on the Microsoft Agent Framework and carries minimal abstractions: a workflow, a set of activities, a session client, and the HITL types.
 
-`Temporalio.Extensions.Agents` builds on top of `Extensions.AI`. It adds the full Microsoft Agent Framework model — `AIAgent`, `ChatClientAgent`, `AgentSessionStateBag`, multi-agent orchestration, LLM-powered routing, and scheduled runs — all backed by its own workflow (`AgentWorkflow`) and activity (`AgentActivities`). It takes a NuGet dependency on `Temporalio.Extensions.AI`, pulling in the shared types described below.
+`Temporalio.Extensions.Agents` builds on top of `Extensions.AI`. It adds the full Microsoft Agent Framework model — `AIAgent`, `ChatClientAgent`, `AgentSessionStateBag`, multi-agent orchestration, workflow-based routing, and scheduled runs — all backed by its own workflow (`AgentWorkflow`) and activity (`AgentActivities`). It takes a NuGet dependency on `Temporalio.Extensions.AI`, pulling in the shared types described below.
 
 ---
 
@@ -125,10 +125,9 @@ The following are entirely separate and belong to their respective libraries. No
 - `AgentActivities` — the activity that executes the `AIAgent`
 - `TemporalAIAgent` / `TemporalAIAgentProxy` — agent handles for workflow and external contexts
 - `ITemporalAgentClient` / `DefaultTemporalAgentClient` — the update-based client
-- `IAgentRouter` / `AIModelAgentRouter` — LLM-powered routing
 - `TemporalAgentContext` — async-local context for tools running inside activities
 - `AgentSessionStateBag` — per-session state bag persisted across turns
-- Registration APIs: `AddTemporalAgents()`, `SetRouterAgent()`, `AddAIAgent()`
+- Registration APIs: `AddTemporalAgents()`, `AddAIAgent()`
 
 `Extensions.Agents` does not use `DurableChatWorkflow` or any Extensions.AI pipeline component. The two workflow types run independently, each managing its own history and HITL state.
 

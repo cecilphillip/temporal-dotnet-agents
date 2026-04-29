@@ -1,106 +1,44 @@
 # Agent Routing Patterns
 
-How TemporalAgents routes messages to the right agent — from framework-managed LLM routing to fully custom workflow-based routing. This document covers all three patterns, when to use each, and critical determinism considerations.
+How to route messages to the right agent in TemporalAgents. Because routing belongs inside your workflow — where it is durable, observable, and fully under your control — this document covers two workflow-based patterns and the determinism rules that govern them.
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Three Routing Approaches](#three-routing-approaches)
-3. [Pattern 1: IAgentRouter + RouteAsync](#pattern-1-iagentrouterrouteasync)
-4. [Pattern 2: Workflow Static Routing](#pattern-2-workflow-static-routing)
-5. [Pattern 3: Dynamic Routing via Activity](#pattern-3-dynamic-routing-via-activity)
-6. [Do's and Don'ts](#dos-and-donts)
-7. [Agent Registry: Safe vs. Unsafe Contexts](#agent-registry-safe-vs-unsafe-contexts)
-8. [Choosing the Right Pattern](#choosing-the-right-pattern)
-9. [References](#references)
+2. [Two Routing Patterns](#two-routing-patterns)
+3. [Pattern 1: Static Routing](#pattern-1-static-routing)
+4. [Pattern 2: Dynamic Routing via Activity](#pattern-2-dynamic-routing-via-activity)
+5. [Do's and Don'ts](#dos-and-donts)
+6. [Agent Registry: Safe vs. Unsafe Contexts](#agent-registry-safe-vs-unsafe-contexts)
+7. [Choosing the Right Pattern](#choosing-the-right-pattern)
+8. [References](#references)
 
 ---
 
 ## Overview
 
-TemporalAgents supports multiple routing approaches. The simplest delegates routing to an LLM via `IAgentRouter`. For more control, you can route inside a Temporal workflow with hardcoded agent names. And when the set of available agents changes at runtime — feature flags, A/B tests, rolling deployments — you need the dynamic routing pattern that safely queries the agent registry inside an activity.
+Routing in TemporalAgents is implemented as workflow logic. This means every routing decision is:
 
-All three patterns produce **durable** routing decisions: once Temporal records which agent was chosen, that decision survives crashes and replays without re-evaluation.
+- **Durable** — recorded in Temporal's event history; a crash after the routing decision never re-evaluates it
+- **Observable** — visible in the Temporal Web UI alongside every agent call
+- **Deterministic** — replayed from history on crash recovery, not re-executed
+
+The `samples/MAF/WorkflowRouting/` sample demonstrates both patterns described here.
 
 ---
 
-## Three Routing Approaches
+## Two Routing Patterns
 
-| Approach | Where routing happens | Registration | Use case |
+| Pattern | Where routing happens | Agent names | Use case |
 |---|---|---|---|
-| **IAgentRouter + RouteAsync** | External (`DefaultTemporalAgentClient`) | `SetRouterAgent` + `AddAgentDescriptor` | External callers, simple classification |
-| **Workflow static routing** | Inside `[Workflow]` with hardcoded agent names | Just `AddAIAgent` | Conditional logic, fallback chains, multi-step classification |
-| **Workflow dynamic routing** | Inside `[Workflow]` via activity that queries descriptors | `AddAIAgent` + `AddAgentDescriptor` + custom activity | Agent set changes at runtime, feature flags, A/B testing |
+| **Static routing** | Inside `[Workflow]` with a classifier agent | Hardcoded in workflow code | Fixed agent set, conditional logic, fallback chains |
+| **Dynamic routing via activity** | Inside `[Workflow]` via activity that queries descriptors | Discovered at runtime | Agent set changes across deployments, feature flags, A/B testing |
 
 ---
 
-## Pattern 1: IAgentRouter + RouteAsync
-
-### How It Works
-
-`AIAgentRouter` is the built-in `IAgentRouter` implementation. It sends a compact prompt to an LLM — listing registered agent names and descriptions — and asks the model to respond with the single best-matching agent name. The response is parsed with an exact match first, then a fuzzy (case-insensitive substring) fallback.
-
-### Registration
-
-```csharp
-// Agents carry their descriptions via AsAIAgent(description: ...),
-// which are auto-extracted into the descriptor registry on AddAIAgent().
-var weatherAgent = chatClient.AsAIAgent(
-    name: "WeatherAgent",
-    description: "Handles weather forecasts and conditions.",
-    instructions: "You are a weather specialist...");
-
-var billingAgent = chatClient.AsAIAgent(
-    name: "BillingAgent",
-    description: "Handles billing inquiries and payment issues.",
-    instructions: "You are a billing specialist...");
-
-services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .AddTemporalAgents(opts =>
-    {
-        // Descriptions are auto-extracted — no AddAgentDescriptor() needed
-        opts.AddAIAgent(weatherAgent);
-        opts.AddAIAgent(billingAgent);
-
-        // Registers AIAgentRouter as IAgentRouter automatically
-        opts.SetRouterAgent(routerAgent);
-    });
-```
-
-> **Note:** `AddAgentDescriptor()` is still available for factory-registered agents (`AddAIAgentFactory`) or to explicitly override an auto-extracted description.
-
-### Usage
-
-```csharp
-var response = await agentClient.RouteAsync(sessionKey, new RunRequest(userMessage));
-```
-
-The `DefaultTemporalAgentClient` calls `IAgentRouter.RouteAsync` to pick the agent, then forwards the message to that agent's workflow.
-
-### Matching Behavior
-
-1. **Exact match** — the LLM response equals a registered name (most common case)
-2. **Fuzzy fallback** — exactly one registered name appears as a substring in the response (logged as a warning)
-3. **Ambiguous** — multiple names found in the response text: throws `InvalidOperationException`
-4. **Unrecognized** — no match at all: throws `InvalidOperationException`
-
-### Pros and Cons
-
-| Pros | Cons |
-|------|------|
-| Simplest setup, no custom workflow needed | Less control over routing logic |
-| Routing prompt is built automatically from descriptors | LLM-dependent — may misclassify |
-| Fuzzy fallback tolerates minor formatting variation | No fallback chain or multi-step classification |
-
-### Reference
-
-See `samples/MAF/MultiAgentRouting/` for a complete working example.
-
----
-
-## Pattern 2: Workflow Static Routing
+## Pattern 1: Static Routing
 
 ### How It Works
 
@@ -108,7 +46,7 @@ A classifier agent runs as the first step inside a Temporal workflow. The workfl
 
 ### Registration
 
-No `SetRouterAgent` or `AddAgentDescriptor` needed — just register the agents:
+No special routing configuration needed — just register the agents:
 
 ```csharp
 services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
@@ -116,12 +54,13 @@ services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
     {
         opts.AddAIAgent(classifierAgent);
         opts.AddAIAgent(ordersAgent);
-        opts.AddAIAgent(supportAgent);
+        opts.AddAIAgent(techSupportAgent);
         opts.AddAIAgent(generalAgent);
-    });
+    })
+    .AddWorkflow<CustomerServiceWorkflow>();
 ```
 
-### Usage
+### Workflow Implementation
 
 ```csharp
 [Workflow("CustomerServiceWorkflow")]
@@ -131,56 +70,58 @@ public class CustomerServiceWorkflow
     public async Task<string> RunAsync(string userQuestion)
     {
         // Step 1: Classify the intent
-        var classifier = TemporalWorkflowExtensions.GetAgent("Classifier");
-        var session = await classifier.CreateSessionAsync();
+        var classifier = GetAgent("Classifier");
+        var classifierSession = await classifier.CreateSessionAsync();
         var classification = (await classifier.RunAsync(
-            [new ChatMessage(ChatRole.User, userQuestion)], session))
-            .Text?.Trim().ToUpperInvariant();
+            [new ChatMessage(ChatRole.User, userQuestion)],
+            classifierSession)).Text?.Trim().ToUpperInvariant();
 
         // Step 2: Route based on classification
         var specialistName = classification switch
         {
-            "ORDERS" => "OrdersAgent",
-            "TECH_SUPPORT" => "SupportAgent",
-            _ => "GeneralAgent",  // always provide a fallback
+            "ORDERS"       => "OrdersAgent",
+            "TECH_SUPPORT" => "TechSupportAgent",
+            _              => "GeneralAgent",  // always provide a fallback
         };
 
+        Workflow.Logger.LogInformation(
+            "Classified as '{Classification}' → routing to {Agent}",
+            classification, specialistName);
+
         // Step 3: Call the specialist
-        var specialist = TemporalWorkflowExtensions.GetAgent(specialistName);
+        var specialist = GetAgent(specialistName);
         var specialistSession = await specialist.CreateSessionAsync();
         var response = await specialist.RunAsync(
-            [new ChatMessage(ChatRole.User, userQuestion)], specialistSession);
+            [new ChatMessage(ChatRole.User, userQuestion)],
+            specialistSession);
 
         return response.Text ?? string.Empty;
     }
 }
 ```
 
+The classifier result is recorded in Temporal's event history before the specialist is invoked. A crash after classification replays the cached result — the LLM is never called again.
+
 ### Pros and Cons
 
 | Pros | Cons |
 |------|------|
-| Full control over routing logic | Agent names hardcoded in workflow code |
-| Durable routing decisions (recorded in history) | Requires a custom workflow |
-| Composable with fallback chains and multi-step logic | Adding new agents requires code changes + deployment |
+| Simple — just workflow code and a switch | Agent names hardcoded in workflow code |
+| Full control: if/else, fallback chains, multi-step logic | Adding new agents requires code changes and redeployment |
+| Every routing decision recorded in history | |
+| No extra infrastructure | |
 
 ### Reference
 
-See `samples/MAF/WorkflowRouting/` for the static routing workflow (`CustomerServiceWorkflow`).
+See `samples/MAF/WorkflowRouting/` (`CustomerServiceWorkflow.cs`) for a complete working example.
 
 ---
 
-## Pattern 3: Dynamic Routing via Activity
+## Pattern 2: Dynamic Routing via Activity
 
-This is the most flexible pattern — and the one that requires the most care to get right.
+This pattern is for when the set of available agents changes across deployments — feature flags, A/B tests, gradual rollouts — without recompiling the workflow.
 
-### The Problem
-
-You want routing decisions to depend on which agents are currently registered. Maybe you are:
-
-- Rolling out `OrdersAgentV2` behind a feature flag
-- A/B testing two different support agents
-- Adding or removing agents at runtime without redeploying the workflow
+### The Determinism Problem
 
 The natural instinct is to call `TemporalAgentsOptions.GetRegisteredAgentNames()` or `TemporalAgentsOptions.IsAgentRegistered()` directly in workflow code. **This is unsafe.** Here is why:
 
@@ -191,39 +132,44 @@ The natural instinct is to call `TemporalAgentsOptions.GetRegisteredAgentNames()
 
 ### The Safe Pattern: Descriptors + Activity
 
-The key insight: `AddAgentDescriptor()` stores `(Name, Description)` pairs in `TemporalAgentsOptions`. While its primary consumer is `AIAgentRouter`, the descriptors are also available via `options.GetRegisteredDescriptors()` — making them a general-purpose agent metadata store that any activity can query.
+Store agent metadata in `TemporalAgentsOptions` via the `description` parameter of `AsAIAgent()` — descriptions are available via `options.GetRegisteredDescriptors()`. The workflow discovers available agents by reading descriptors inside an activity, where the result is cached in workflow history.
 
-The workflow discovers available agents by reading descriptors inside an activity, then passes them to the Classifier as context. No hardcoded agent names in the routing logic at all.
-
-#### Step 1: Register agents with descriptions (no `SetRouterAgent`)
+#### Step 1: Register agents with descriptions
 
 ```csharp
-// Specialist agents carry descriptions via AsAIAgent(description: ...)
 var ordersAgent = chatClient.AsAIAgent(
     name: "OrdersAgent",
     description: "Handles order tracking, returns, and shipping.",
     instructions: "You are an orders specialist...");
 
-// ... similarly for supportAgent, generalAgent
+var techSupportAgent = chatClient.AsAIAgent(
+    name: "TechSupportAgent",
+    description: "Handles technical issues, app crashes, and troubleshooting.",
+    instructions: "You are a technical support specialist...");
 
 services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(classifierAgent);  // No description — not routable
-        opts.AddAIAgent(ordersAgent);      // Description auto-extracted
-        opts.AddAIAgent(supportAgent);
+        opts.AddAIAgent(classifierAgent);   // no description needed — not a routable specialist
+        opts.AddAIAgent(ordersAgent);       // description auto-extracted from AsAIAgent()
+        opts.AddAIAgent(techSupportAgent);
         opts.AddAIAgent(generalAgent);
-    });
+    })
+    .AddWorkflow<DynamicRoutingWorkflow>()
+    .AddSingletonActivities<RoutingActivities>();
 ```
 
-> Descriptions are auto-extracted from `AIAgent.Description` into the descriptor registry. For factory-registered agents, use `AddAgentDescriptor()` explicitly.
+> Descriptions are auto-extracted from the `description:` parameter of `AsAIAgent()`. For factory-registered agents (`AddAIAgentFactory`), use `AddAgentDescriptor()` to register metadata explicitly.
 
 #### Step 2: Define routing activities
+
+Activities are not replayed — their results are cached in workflow history. This makes registry lookups safe.
 
 ```csharp
 public class RoutingActivities(TemporalAgentsOptions options)
 {
-    // Returns all registered descriptors — the workflow uses these to build the classifier prompt
+    // Returns all registered descriptors — the workflow uses these to build the classifier prompt.
+    // Safe inside an activity: result is cached in history; registry not re-queried on replay.
     [Activity("GetAvailableAgents")]
     public AgentInfo[] GetAvailableAgents()
     {
@@ -232,7 +178,8 @@ public class RoutingActivities(TemporalAgentsOptions options)
             .ToArray();
     }
 
-    // Validates an LLM-chosen name against the registry (LLMs can hallucinate)
+    // Validates an LLM-chosen name against the registry.
+    // LLMs can hallucinate names — this activity is the safety net.
     [Activity("ValidateAgent")]
     public string ValidateAgent(string agentName, string fallback)
     {
@@ -243,12 +190,14 @@ public class RoutingActivities(TemporalAgentsOptions options)
 public record AgentInfo(string Name, string Description);
 ```
 
-#### Step 3: Use in a workflow — zero hardcoded agent names
+#### Step 3: Use in a workflow — no hardcoded agent names
 
 ```csharp
 [Workflow("DynamicRoutingWorkflow")]
 public class DynamicRoutingWorkflow
 {
+    private const string FallbackAgent = "GeneralAgent";
+
     [WorkflowRun]
     public async Task<string> RunAsync(string userQuestion)
     {
@@ -257,28 +206,38 @@ public class DynamicRoutingWorkflow
             (RoutingActivities a) => a.GetAvailableAgents(),
             new ActivityOptions { StartToCloseTimeout = TimeSpan.FromSeconds(10) });
 
-        // Step 2: Build a dynamic routing prompt from discovered descriptors
+        if (agents.Length == 0)
+            return await CallAgent(FallbackAgent, userQuestion);
+
+        // Step 2: Build a routing prompt from the discovered descriptors
         var agentList = string.Join("\n", agents.Select(a => $"  {a.Name} — {a.Description}"));
         var routingPrompt =
-            $"Given the user question, respond with ONLY the best-matching agent name.\n\n" +
-            $"Available agents:\n{agentList}\n\nUser question: {userQuestion}";
+            $"Given the user question, respond with ONLY the name of the best-matching agent.\n\n" +
+            $"Available agents:\n{agentList}\n\n" +
+            $"User question: {userQuestion}\n\n" +
+            $"Respond with the agent name only. No explanation, no punctuation.";
 
-        var classifier = TemporalWorkflowExtensions.GetAgent("Classifier");
-        var session = await classifier.CreateSessionAsync();
+        var classifier = GetAgent("Classifier");
+        var classifierSession = await classifier.CreateSessionAsync();
         var chosenAgent = (await classifier.RunAsync(
-            [new ChatMessage(ChatRole.User, routingPrompt)], session)).Text?.Trim();
+            [new ChatMessage(ChatRole.User, routingPrompt)], classifierSession))
+            .Text?.Trim() ?? string.Empty;
 
         // Step 3: Validate the LLM's choice via activity (cached on replay)
         var agentName = await Workflow.ExecuteActivityAsync(
-            (RoutingActivities a) => a.ValidateAgent(chosenAgent!, "GeneralAgent"),
+            (RoutingActivities a) => a.ValidateAgent(chosenAgent, FallbackAgent),
             new ActivityOptions { StartToCloseTimeout = TimeSpan.FromSeconds(10) });
 
-        // Step 4: Call the resolved agent
-        var specialist = TemporalWorkflowExtensions.GetAgent(agentName);
+        // Step 4: Call the resolved specialist
+        return await CallAgent(agentName, userQuestion);
+    }
+
+    private static async Task<string> CallAgent(string agentName, string userQuestion)
+    {
+        var specialist = GetAgent(agentName);
         var specialistSession = await specialist.CreateSessionAsync();
         var response = await specialist.RunAsync(
             [new ChatMessage(ChatRole.User, userQuestion)], specialistSession);
-
         return response.Text ?? string.Empty;
     }
 }
@@ -286,11 +245,11 @@ public class DynamicRoutingWorkflow
 
 ### Why This Is Safe
 
-Both activity results (descriptor list + validated agent name) are recorded in Temporal's event history. On replay, cached results are returned — the registry is never re-queried:
+Both activity results are recorded in Temporal's event history. On replay, cached results are returned — the registry is never re-queried:
 
 ```
 Original execution:
-  Activity("GetAvailableAgents")  → reads registry → ["OrdersAgent", "SupportAgent", ...] → cached
+  Activity("GetAvailableAgents")  → reads registry → ["OrdersAgent", "TechSupportAgent", ...] → cached
   Activity("ValidateAgent")       → confirms "OrdersAgent" exists → cached
 
 Replay after crash / new deployment:
@@ -298,22 +257,18 @@ Replay after crash / new deployment:
   Activity("ValidateAgent")       → returns cached "OrdersAgent" (registry NOT queried)
 ```
 
-### `AddAgentDescriptor` Without `SetRouterAgent`
-
-A common misconception: `AddAgentDescriptor` only works with `IAgentRouter`. In reality, descriptors are stored in `TemporalAgentsOptions` and exposed via `GetRegisteredDescriptors()` — any code with access to the options can read them. The dynamic routing pattern uses descriptors as a queryable metadata store without creating an `IAgentRouter`.
-
-> **Since auto-extraction:** If your agents carry `description:` in their `AsAIAgent()` calls, descriptors are populated automatically when you call `AddAIAgent()`. You only need explicit `AddAgentDescriptor()` for factory-registered agents or to override an auto-extracted value.
-
 ### Pros and Cons
 
 | Pros | Cons |
 |------|------|
-| Zero hardcoded agent names in routing workflow | Most complex setup |
-| Add/remove agents by changing registration, not workflow code | Requires custom activities + workflow |
-| Feature flags and A/B testing are natural | Two extra activity calls (discovery + validation) |
+| No hardcoded agent names in the routing workflow | More complex setup than static routing |
+| Add/remove agents by changing registration, not workflow code | Requires custom activities and workflow |
+| Naturally handles feature flags and A/B testing | Two extra activity calls per request |
 | Descriptors provide rich context for LLM classification | Descriptors must be kept in sync with agent registrations |
 
-See `samples/MAF/WorkflowRouting/` for the dynamic routing workflow (`DynamicRoutingWorkflow`) and activities (`RoutingActivities`).
+### Reference
+
+See `samples/MAF/WorkflowRouting/` (`DynamicRoutingWorkflow.cs` and `RoutingActivities.cs`) for a complete working example.
 
 ---
 
@@ -321,20 +276,18 @@ See `samples/MAF/WorkflowRouting/` for the dynamic routing workflow (`DynamicRou
 
 ### DO
 
+- Route inside a workflow — the decision is durable, visible in history, and replayed from cache
 - Use `GetAgent("name")` with string constants or activity results inside workflows
-- Query `TemporalAgentsOptions` inside activities (they are not replayed)
-- Provide a default/fallback agent for unrecognized classifications
-- Use `AddAgentDescriptor` for `IAgentRouter` routing prompts AND as a queryable metadata store for dynamic routing via activities
-- Test routing with edge cases: empty LLM response, unexpected classification, ambiguous matches
-- Catch `InvalidOperationException` from `IAgentRouter` when the LLM returns an unrecognized name
+- Query `TemporalAgentsOptions` inside **activities** — activity results are cached; the registry is never re-queried on replay
+- Provide a default/fallback agent for unrecognized or empty classifications
+- Validate LLM-chosen agent names via an activity before dispatching (LLMs can hallucinate names)
+- Test routing with edge cases: empty LLM response, unexpected classification, no registered descriptors
 
 ### DON'T
 
 - Don't call `TemporalAgentsOptions.GetRegisteredAgentNames()` inside a `[Workflow]` class — non-deterministic on replay
 - Don't call `TemporalAgentsOptions.IsAgentRegistered()` inside a `[Workflow]` class — same reason
-- Don't use `IAgentRouter` AND workflow-based routing for the same message — pick one approach
-- Don't forget the `_` default case in switch expressions — LLMs produce unexpected output
-- Don't assume `IAgentRouter` will always return a valid name — handle `InvalidOperationException`
+- Don't forget the `_` default case in switch expressions — classifiers produce unexpected output
 
 ---
 
@@ -344,7 +297,7 @@ See `samples/MAF/WorkflowRouting/` for the dynamic routing workflow (`DynamicRou
 |---|---|---|
 | `Program.cs` / startup | Yes | Runs once at startup, not replayed |
 | Health-check endpoint | Yes | External HTTP handler, not workflow code |
-| Activity code | Yes | Activities return cached results on replay |
+| Activity code | Yes | Results are cached in history on replay |
 | `[Workflow]` class method | **NO** | Replayed deterministically — registry may have changed |
 | `[WorkflowUpdate]` handler | **NO** | Part of workflow code, subject to replay |
 | `[WorkflowQuery]` handler | Read-only is safe but pointless | Queries don't affect workflow state |
@@ -355,38 +308,26 @@ The rule is simple: **if the code runs inside a workflow execution context, do n
 
 ## Choosing the Right Pattern
 
-Use this decision tree to pick the right routing approach:
-
 **Is the agent set fixed at compile time?**
 
-- **Yes** -- Do you need custom routing logic (fallbacks, multi-step, confidence thresholds)?
-  - **Yes** -- Use **Pattern 2** (static workflow routing)
-  - **No** -- Use **Pattern 1** (`IAgentRouter` + `RouteAsync`) for the simplest setup
-- **No** (agents change at runtime: feature flags, deployments, A/B tests) -- Use **Pattern 3** (dynamic routing via activity)
-
-**Are callers external (API endpoints, CLI, console app)?**
-
-- **Yes, and simple routing is fine** -- Use **Pattern 1** (`IAgentRouter` + `RouteAsync`)
-- **Yes, but you need workflow durability** -- Start a workflow that uses **Pattern 2** or **Pattern 3** internally
+- **Yes** — Use **Pattern 1** (static routing). Plain switch expressions and `GetAgent("name")` give you full control with minimal ceremony.
+- **No** (agents change across deployments: feature flags, A/B tests, gradual rollouts) — Use **Pattern 2** (dynamic routing via activity).
 
 **Do you need fallback chains or multi-step classification?**
 
-- **Yes** -- Use **Pattern 2** or **Pattern 3** (workflow-based patterns give full control)
-- **No** -- Use **Pattern 1** (`IAgentRouter` handles single-step classification automatically)
+- **Yes** — Both patterns support this. With static routing, compose multiple classifier calls and switch statements directly in the workflow.
+- **No** — Static routing is the lower-friction choice.
 
 ---
 
 ## References
 
-- `samples/MAF/MultiAgentRouting/` — Pattern 1 example (LLM-powered routing with `IAgentRouter`)
-- `samples/MAF/WorkflowRouting/` — Pattern 2 (static, `CustomerServiceWorkflow`) and Pattern 3 (dynamic, `DynamicRoutingWorkflow`) examples
-- [`durability-and-determinism.md`](../architecture/MAF/durability-and-determinism.md) — Why workflow code must be deterministic
-- [`agent-sessions-and-workflow-loop.md`](../architecture/MAF/agent-sessions-and-workflow-loop.md) — How agent calls become durable activities
+- `samples/MAF/WorkflowRouting/` — both patterns (`CustomerServiceWorkflow.cs`, `DynamicRoutingWorkflow.cs`, `RoutingActivities.cs`)
+- [`durability-and-determinism.md`](../architecture/MAF/durability-and-determinism.md) — why workflow code must be deterministic
+- [`agent-sessions-and-workflow-loop.md`](../architecture/MAF/agent-sessions-and-workflow-loop.md) — how agent calls become durable activities
 - [`session-statebag-and-context-providers.md`](../architecture/MAF/session-statebag-and-context-providers.md) — StateBag and AIContextProvider integration
-- `src/Temporalio.Extensions.Agents/TemporalAgentsOptions.cs` — Agent registry API (`GetRegisteredAgentNames`, `IsAgentRegistered`)
-- `src/Temporalio.Extensions.Agents/AIAgentRouter.cs` — Built-in LLM router implementation
-- `src/Temporalio.Extensions.Agents/IAgentRouter.cs` — Router interface
+- `src/Temporalio.Extensions.Agents/TemporalAgentsOptions.cs` — agent registry API (`GetRegisteredDescriptors`, `IsAgentRegistered`)
 
 ---
 
-_Last updated: 2026-03-11_
+_Last updated: 2026-04-29_

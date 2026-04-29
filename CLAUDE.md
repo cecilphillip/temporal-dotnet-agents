@@ -77,7 +77,7 @@ TemporalAgents/
 │       ├── ServiceCollectionExtensions.cs  # GetTemporalAgentProxy, AddTemporalAgentProxies
 │       ├── TemporalWorkerBuilderExtensions.cs # [NEW API] .AddTemporalAgents() fluent builder
 │       ├── TemporalAgentsOptions.cs        # Configuration (internal ctor)
-│       ├── ITemporalAgentClient.cs         # Interface: RunAgentAsync, RouteAsync, HITL
+│       ├── ITemporalAgentClient.cs         # Interface: RunAgentAsync, HITL
 │       ├── DefaultTemporalAgentClient.cs   # Implementation using WorkflowUpdate + OTel
 │       ├── AgentWorkflow.cs                # Durable session: history, HITL handlers, StateBag
 │       ├── AgentActivities.cs              # Activity: calls real AIAgent, OTel span
@@ -87,9 +87,6 @@ TemporalAgents/
 │       ├── AgentWorkflowWrapper.cs         # Wraps agent with request context
 │       ├── TemporalAgentSession.cs         # Session with StateBag persistence
 │       ├── TemporalAgentTelemetry.cs       # ActivitySource + span/attribute constants
-│       ├── IAgentRouter.cs                 # Routing abstraction
-│       ├── AIAgentRouter.cs                    # LLM-backed router implementation
-│       ├── AgentDescriptor.cs              # Name+description for routing
 │       │   # HITL types: DurableApprovalRequest / DurableApprovalDecision (from Temporalio.Extensions.AI)
 │       ├── ExecuteAgentResult.cs           # Internal: wraps AgentResponse + StateBag
 │       ├── State/                          # Conversation history serialization
@@ -98,8 +95,6 @@ TemporalAgents/
 ├── tests/
 │   ├── Temporalio.Extensions.Agents.Tests/       # 214 unit tests
 │   │   ├── TemporalWorkerBuilderExtensionsTests.cs
-│   │   ├── AIAgentRouterTests.cs
-│   │   ├── RoutingOptionsTests.cs
 │   │   ├── HITLTypesTests.cs
 │   │   ├── StateBagPersistenceTests.cs
 │   │   ├── TemporalAgentTelemetryTests.cs
@@ -348,32 +343,46 @@ Composes with other worker configuration (e.g., `.ConfigureOptions(opts => opts.
 
 ---
 
-### 3. LLM-Powered Routing
+### 3. Workflow-Based Routing
+
+Routing belongs inside a Temporal workflow, where every decision is durable, visible in history, and replayed from cache. Two patterns are supported:
+
+**Static routing** — a classifier agent runs first; the result drives a switch to a hardcoded specialist name. Best for a fixed agent set.
 
 ```csharp
-// Agents carry descriptions via AsAIAgent(description: ...) — auto-extracted on AddAIAgent()
-var weatherAgent = chatClient.AsAIAgent(
-    name: "WeatherAgent",
-    description: "Handles weather questions.",
-    instructions: "You are a weather specialist...");
-
-builder.Services.AddHostedTemporalWorker("agents")
-    .AddTemporalAgents(opts =>
+[Workflow("CustomerServiceWorkflow")]
+public class CustomerServiceWorkflow
+{
+    [WorkflowRun]
+    public async Task<string> RunAsync(string userQuestion)
     {
-        opts.AddAIAgent(weatherAgent);   // description auto-extracted into descriptors
-        opts.AddAIAgent(billingAgent);
-        opts.SetRouterAgent(routerAgent);  // registers AIAgentRouter as IAgentRouter
-    });
+        var classifier = GetAgent("Classifier");
+        var session = await classifier.CreateSessionAsync();
+        var category = (await classifier.RunAsync(
+            [new ChatMessage(ChatRole.User, userQuestion)], session))
+            .Text?.Trim().ToUpperInvariant();
 
-// External routing — LLM picks the specialist automatically
-var response = await client.RouteAsync(sessionKey, new RunRequest(userMessage));
+        var specialistName = category switch
+        {
+            "ORDERS"       => "OrdersAgent",
+            "TECH_SUPPORT" => "TechSupportAgent",
+            _              => "GeneralAgent",
+        };
+
+        var specialist = GetAgent(specialistName);
+        var specialistSession = await specialist.CreateSessionAsync();
+        return (await specialist.RunAsync(
+            [new ChatMessage(ChatRole.User, userQuestion)], specialistSession))
+            .Text ?? string.Empty;
+    }
+}
 ```
 
-- `AddAIAgent()` auto-extracts `AIAgent.Description` into the descriptor registry (used by routing)
-- `AddAgentDescriptor()` is still available for factory-registered agents or explicit overrides
-- `SetRouterAgent` registers `AIAgentRouter` as `IAgentRouter` in DI automatically
-- `AIAgentRouter` uses exact match then fuzzy (case-insensitive) fallback on the response text
-- Throws `InvalidOperationException` if the LLM returns an unrecognized agent name
+**Dynamic routing** — when the agent set changes across deployments, discover available agents via an activity that queries `TemporalAgentsOptions.GetRegisteredDescriptors()`. Activity results are cached in workflow history, keeping the workflow deterministic on replay. See `samples/MAF/WorkflowRouting/DynamicRoutingWorkflow.cs` for the full example.
+
+- `AddAIAgent()` auto-extracts `AIAgent.Description` into the descriptor registry (readable via `GetRegisteredDescriptors()` from an activity)
+- `AddAgentDescriptor()` is available for factory-registered agents (`AddAIAgentFactory`) or explicit overrides
+- Never call `GetRegisteredAgentNames()` or `IsAgentRegistered()` directly inside a `[Workflow]` — non-deterministic on replay; wrap in an activity instead
 
 ---
 
@@ -487,7 +496,6 @@ When a worker crashes:
 
 ### DI Patterns
 - `TemporalAgentsOptions` — **internal constructor** (always access via delegate parameter)
-- `IAgentRouter` — registered automatically as singleton when `SetRouterAgent` is called
 - `TryAddSingleton` for `ITemporalAgentClient` — allows custom implementations
 - `ActivatorUtilities.CreateInstance<T>(provider, taskQueue)` — pattern for extra constructor args
 
@@ -550,9 +558,14 @@ var session = await proxy.CreateSessionAsync();
 var response = await proxy.RunAsync(userMessage, session);
 ```
 
-### Pattern 2: LLM-Powered Routing
+### Pattern 2: Workflow-Based Routing (inside workflow)
 ```csharp
-var response = await agentClient.RouteAsync(sessionKey, new RunRequest(userMessage));
+// Classify intent, then dispatch by name — routing decision is recorded in history
+var classifier = GetAgent("Classifier");
+var session = await classifier.CreateSessionAsync();
+var category = (await classifier.RunAsync(messages, session)).Text?.Trim();
+var agentName = category == "ORDERS" ? "OrdersAgent" : "GeneralAgent";
+var specialist = GetAgent(agentName);
 ```
 
 ### Pattern 3: Parallel Fan-out (inside workflow)
@@ -721,13 +734,12 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 └──────────┬──────────────────┬────────────────────┬────────────┘
            │                  │                    │
            │ GetTemporalAgent  │ ITemporalAgent      │ ITemporalAgent
-           │ Proxy(name)       │ Client.RouteAsync   │ Client.SubmitApproval
+           │ Proxy(name)       │ Client.RunAsync     │ Client.SubmitApproval
            ▼                  ▼                    ▼
   ┌──────────────┐   ┌──────────────────┐   ┌──────────────────┐
   │ Temporal     │   │ DefaultTemporal  │   │ DefaultTemporal  │
   │ AIAgentProxy │   │ AgentClient      │   │ AgentClient      │
-  └──────┬───────┘   │ + IAgentRouter   │   │ + HITL support   │
-         │           └────────┬─────────┘   └────────┬─────────┘
+  └──────┬───────┘   └────────┬─────────┘   └────────┬─────────┘
          │                    │                      │
          └───────────────┬────┘                      │
                          │ ExecuteUpdateAsync         │
@@ -760,7 +772,6 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 |-------|----------|
 | "Cannot find Temporalio package" | Use NuGet, not project refs; run `dotnet restore` |
 | "Agent not registered" | Verify agent is added via `.AddTemporalAgents()` |
-| "Router returned unrecognized name" | Check `AddAgentDescriptor` names match registered agents exactly |
 | `Assert.Throws<ArgumentException>` fails | xUnit requires exact type — use `ArgumentNullException` for null, `ArgumentException` for empty |
 | `GetTypeInfo metadata not provided` for `TemporalAgentSession` | Do not serialize `TemporalAgentSession` via `DefaultOptions`; use `StateBag.Serialize()` directly |
 | "Activity timeout" | Increase `ActivityStartToCloseTimeout` — especially for HITL (needs human review time) |
@@ -804,4 +815,4 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 
 ---
 
-**Last Updated**: 2026-04-28
+**Last Updated**: 2026-04-29

@@ -20,7 +20,7 @@ Key benefits over in-memory agent frameworks:
 ## Feature Highlights
 
 - Durable multi-turn conversations with automatic history management
-- LLM-powered routing (`IAgentRouter` / `AIAgentRouter`)
+- Workflow-based routing — durable, observable, and fully under your control
 - Parallel agent execution inside workflows (`ExecuteAgentsInParallelAsync`)
 - Human-in-the-loop approval gates via `[WorkflowUpdate]`
 - Typed structured output with `RunAsync<T>` (markdown fence stripping + retry)
@@ -147,9 +147,9 @@ Key options on `TemporalAgentsOptions` (accessed via the `AddTemporalAgents(opts
 | [SplitWorkerClient](../../samples/MAF/SplitWorkerClient) | Worker and client in separate processes |
 | [WorkflowOrchestration](../../samples/MAF/WorkflowOrchestration) | Sub-agent orchestration inside a Temporal workflow |
 | [EvaluatorOptimizer](../../samples/MAF/EvaluatorOptimizer) | Generator + evaluator loop pattern |
-| [MultiAgentRouting](../../samples/MAF/MultiAgentRouting) | LLM-powered routing, parallel execution, and OpenTelemetry |
+| [MultiAgentRouting](../../samples/MAF/MultiAgentRouting) | Parallel agent execution and OpenTelemetry |
 | [HumanInTheLoop](../../samples/MAF/HumanInTheLoop) | HITL approval gates via `[WorkflowUpdate]` |
-| [WorkflowRouting](../../samples/MAF/WorkflowRouting) | LLM-powered routing inside a Temporal workflow |
+| [WorkflowRouting](../../samples/MAF/WorkflowRouting) | Durable routing inside a Temporal workflow — static and dynamic patterns |
 | [AmbientAgent](../../samples/MAF/AmbientAgent) | Ambient agent pattern |
 
 ## Core Components
@@ -175,7 +175,7 @@ The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) are defined
 ### How-To Guides
 
 - [Usage Guide](../../docs/how-to/MAF/usage.md) — structured output, orchestration, HITL, scheduling, OTel, and more
-- [Routing Patterns](../../docs/how-to/MAF/routing.md) — LLM-powered, static, and dynamic routing
+- [Routing Patterns](../../docs/how-to/MAF/routing.md) — static and dynamic workflow-based routing
 - [Testing Agents](../../docs/how-to/MAF/testing-agents.md) — unit and integration testing patterns
 - [Observability](../../docs/how-to/MAF/observability.md) — OpenTelemetry spans, search attributes, and operational queries
 - [Scheduling](../../docs/how-to/MAF/scheduling.md) — recurring and one-time agent runs, lifecycle management
