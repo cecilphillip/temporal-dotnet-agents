@@ -121,14 +121,14 @@ internal class AgentWorkflow
         await Workflow.WaitConditionAsync(() => !_isProcessing);
         _isProcessing = true;
 
-        Workflow.Logger.LogWorkflowUpdateReceived(_input!.AgentName, Workflow.Info.WorkflowId, request.CorrelationId);
+        Workflow.Logger.LogWorkflowUpdateReceived(_input!.AgentName, Workflow.Info.WorkflowId, request.CorrelationId ?? string.Empty);
 
         try
         {
             // Intentional: request is added before the activity executes because the activity
             // input includes the full history (the request must be part of it). If the activity
             // fails, this entry remains in history without a matching response.
-            _history.Add(TemporalAgentStateRequest.FromRunRequest(request));
+            _history.Add(TemporalAgentStateRequest.FromRunRequest(request, Workflow.UtcNow));
 
             // GAP 6: pass the stored StateBag so the activity can restore provider state.
             var activityInput = new ExecuteAgentInput(
@@ -148,14 +148,14 @@ internal class AgentWorkflow
             // GAP 6: persist the updated StateBag for the next turn.
             _currentStateBag = result.SerializedStateBag;
 
-            _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId, result.Response));
+            _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
             _turnCount++;
 
             // Update turn count for operational queries.
             Workflow.UpsertTypedSearchAttributes(
                 TurnCountSearchAttribute.ValueSet(_turnCount));
 
-            Workflow.Logger.LogWorkflowUpdateCompleted(_input!.AgentName, Workflow.Info.WorkflowId, request.CorrelationId);
+            Workflow.Logger.LogWorkflowUpdateCompleted(_input!.AgentName, Workflow.Info.WorkflowId, request.CorrelationId ?? string.Empty);
             return result.Response;
         }
         finally
@@ -254,7 +254,7 @@ internal class AgentWorkflow
         _isProcessing = true;
         try
         {
-            _history.Add(TemporalAgentStateRequest.FromRunRequest(request));
+            _history.Add(TemporalAgentStateRequest.FromRunRequest(request, Workflow.UtcNow));
 
             var activityInput = new ExecuteAgentInput(
                 _input!.AgentName,
@@ -271,7 +271,7 @@ internal class AgentWorkflow
                 });
 
             _currentStateBag = result.SerializedStateBag;
-            _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId, result.Response));
+            _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
         }
         finally
         {

@@ -80,7 +80,10 @@ internal class DefaultTemporalAgentClient(
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
 
         var sessionId = TemporalAgentSessionId.WithRandomKey(agentName);
-        var request = new RunRequest(message);
+        var request = new RunRequest(message)
+        {
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        };
         return RunAgentAsync(sessionId, request, cancellationToken);
     }
 

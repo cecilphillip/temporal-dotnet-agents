@@ -30,18 +30,20 @@ public class RunRequestTests
     }
 
     [Fact]
-    public void CorrelationId_IsNotEmpty()
+    public void CorrelationId_DefaultsToNull()
     {
+        // CorrelationId no longer auto-generates a Guid; callers must set it explicitly so
+        // workflow callers can assign Workflow.NewGuid() (deterministic) and external callers
+        // can assign Guid.NewGuid() (non-deterministic, fine outside workflow context).
         var request = new RunRequest("test");
-        Assert.NotEmpty(request.CorrelationId);
+        Assert.Null(request.CorrelationId);
     }
 
     [Fact]
-    public void CorrelationId_IsDifferentForEachInstance()
+    public void CorrelationId_IsPreservedWhenSet()
     {
-        var r1 = new RunRequest("test1");
-        var r2 = new RunRequest("test2");
-        Assert.NotEqual(r1.CorrelationId, r2.CorrelationId);
+        var request = new RunRequest("test") { CorrelationId = "abc-123" };
+        Assert.Equal("abc-123", request.CorrelationId);
     }
 
     [Fact]
@@ -96,7 +98,7 @@ public class RunRequestTests
     [Fact]
     public void JsonRoundTrip_PreservesCorrelationId()
     {
-        var original = new RunRequest("test");
+        var original = new RunRequest("test") { CorrelationId = "round-trip-corr" };
         var json = JsonSerializer.Serialize(original);
         var deserialized = JsonSerializer.Deserialize<RunRequest>(json);
         Assert.Equal(original.CorrelationId, deserialized!.CorrelationId);

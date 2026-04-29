@@ -91,10 +91,11 @@ public sealed class TemporalAIAgent : AIAgent
 
         var request = new RunRequest([.. messages], responseFormat, enableToolCalls, enableToolNames)
         {
-            OrchestrationId = Workflow.Info.WorkflowId
+            OrchestrationId = Workflow.Info.WorkflowId,
+            CorrelationId = Workflow.NewGuid().ToString("N"),
         };
 
-        _history.Add(TemporalAgentStateRequest.FromRunRequest(request));
+        _history.Add(TemporalAgentStateRequest.FromRunRequest(request, Workflow.UtcNow));
 
         // TemporalAIAgent lives inside a workflow and creates sessions in-process,
         // so StateBag persistence across turns is handled by the workflow history itself.
@@ -110,7 +111,7 @@ public sealed class TemporalAIAgent : AIAgent
             (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
             _activityOptions);
 
-        _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId, result.Response));
+        _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
         return result.Response;
     }
 

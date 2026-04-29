@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
+using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
@@ -20,9 +21,16 @@ public record RunRequest
     /// <summary>Gets the tool names to enable. If <see langword="null"/>, all tools are enabled.</summary>
     public IList<string>? EnableToolNames { get; init; }
 
-    /// <summary>Gets the correlation ID used to match this request to its response.</summary>
+    /// <summary>
+    /// Gets the correlation ID used to match this request to its response.
+    /// </summary>
+    /// <remarks>
+    /// This value must be deterministic when the request is constructed inside a Temporal
+    /// workflow. Use <see cref="Workflow.NewGuid"/> in workflow context and
+    /// <see cref="Guid.NewGuid()"/> in external (non-workflow) context.
+    /// </remarks>
     [JsonInclude]
-    public string CorrelationId { get; init; } = Guid.NewGuid().ToString("N");
+    public string? CorrelationId { get; init; }
 
     /// <summary>Gets the ID of the orchestration or workflow that initiated this request (if any).</summary>
     [JsonInclude]
@@ -37,7 +45,7 @@ public record RunRequest
         bool enableToolCalls = true,
         IList<string>? enableToolNames = null)
         : this(
-            [new ChatMessage(role ?? ChatRole.User, message) { CreatedAt = DateTimeOffset.UtcNow }],
+            [new ChatMessage(role ?? ChatRole.User, message)],
             responseFormat,
             enableToolCalls,
             enableToolNames)

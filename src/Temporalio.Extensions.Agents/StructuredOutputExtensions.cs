@@ -131,7 +131,11 @@ public static class StructuredOutputExtensions
         {
             var currentRequest = attempt == 0
                 ? request
-                : new RunRequest(workingMessages, request.ResponseFormat, request.EnableToolCalls, request.EnableToolNames);
+                : new RunRequest(workingMessages, request.ResponseFormat, request.EnableToolCalls, request.EnableToolNames)
+                {
+                    CorrelationId = Guid.NewGuid().ToString("N"),
+                    OrchestrationId = request.OrchestrationId,
+                };
 
             var response = await client.RunAgentAsync(sessionId, currentRequest, cancellationToken);
 

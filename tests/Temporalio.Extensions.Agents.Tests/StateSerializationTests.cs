@@ -20,16 +20,16 @@ public class StateSerializationTests
     [Fact]
     public void FromRunRequest_PreservesCorrelationId()
     {
-        var request = new RunRequest("Hello");
-        var stateRequest = TemporalAgentStateRequest.FromRunRequest(request);
+        var request = new RunRequest("Hello") { CorrelationId = "test-corr" };
+        var stateRequest = TemporalAgentStateRequest.FromRunRequest(request, DateTimeOffset.UtcNow);
         Assert.Equal(request.CorrelationId, stateRequest.CorrelationId);
     }
 
     [Fact]
     public void FromRunRequest_PreservesMessageRole()
     {
-        var request = new RunRequest("Hello", role: ChatRole.User);
-        var stateRequest = TemporalAgentStateRequest.FromRunRequest(request);
+        var request = new RunRequest("Hello", role: ChatRole.User) { CorrelationId = "test-corr" };
+        var stateRequest = TemporalAgentStateRequest.FromRunRequest(request, DateTimeOffset.UtcNow);
         Assert.Single(stateRequest.Messages);
         Assert.Equal(ChatRole.User.Value, stateRequest.Messages[0].Role);
     }
@@ -37,8 +37,8 @@ public class StateSerializationTests
     [Fact]
     public void FromRunRequest_WithJsonFormat_SetsResponseType_Json()
     {
-        var request = new RunRequest("q", responseFormat: ChatResponseFormat.Json);
-        var stateRequest = TemporalAgentStateRequest.FromRunRequest(request);
+        var request = new RunRequest("q", responseFormat: ChatResponseFormat.Json) { CorrelationId = "test-corr" };
+        var stateRequest = TemporalAgentStateRequest.FromRunRequest(request, DateTimeOffset.UtcNow);
         Assert.Equal("json", stateRequest.ResponseType);
     }
 
@@ -47,8 +47,8 @@ public class StateSerializationTests
     [Fact]
     public void Request_JsonContains_TypeDiscriminator_Request()
     {
-        var request = new RunRequest("Hello");
-        var stateRequest = TemporalAgentStateRequest.FromRunRequest(request);
+        var request = new RunRequest("Hello") { CorrelationId = "test-corr" };
+        var stateRequest = TemporalAgentStateRequest.FromRunRequest(request, DateTimeOffset.UtcNow);
         var json = JsonSerializer.Serialize<TemporalAgentStateEntry>(stateRequest, s_opts);
         Assert.Contains("\"$type\":\"request\"", json);
     }
@@ -61,7 +61,7 @@ public class StateSerializationTests
             Messages = [new ChatMessage(ChatRole.Assistant, "Hi")],
             CreatedAt = DateTimeOffset.UtcNow
         };
-        var stateResponse = TemporalAgentStateResponse.FromResponse("corr-1", agentResponse);
+        var stateResponse = TemporalAgentStateResponse.FromResponse("corr-1", agentResponse, DateTimeOffset.UtcNow);
         var json = JsonSerializer.Serialize<TemporalAgentStateEntry>(stateResponse, s_opts);
         Assert.Contains("\"$type\":\"response\"", json);
     }
@@ -76,7 +76,7 @@ public class StateSerializationTests
             Messages = [new ChatMessage(ChatRole.Assistant, "Hi there")],
             CreatedAt = DateTimeOffset.UtcNow
         };
-        var stateResponse = TemporalAgentStateResponse.FromResponse("corr-1", agentResponse);
+        var stateResponse = TemporalAgentStateResponse.FromResponse("corr-1", agentResponse, DateTimeOffset.UtcNow);
         var roundTripped = stateResponse.ToResponse();
 
         Assert.Single(roundTripped.Messages);
@@ -91,7 +91,7 @@ public class StateSerializationTests
             Messages = [new ChatMessage(ChatRole.Assistant, "Round-trip me")],
             CreatedAt = DateTimeOffset.UtcNow
         };
-        var stateResponse = TemporalAgentStateResponse.FromResponse("corr-1", agentResponse);
+        var stateResponse = TemporalAgentStateResponse.FromResponse("corr-1", agentResponse, DateTimeOffset.UtcNow);
 
         var json = JsonSerializer.Serialize<TemporalAgentStateEntry>(stateResponse, s_opts);
         var deserialized = JsonSerializer.Deserialize<TemporalAgentStateEntry>(json, s_opts) as TemporalAgentStateResponse;
@@ -176,7 +176,7 @@ public class StateSerializationTests
     [Fact]
     public void EntryList_JsonRoundTrip_PreservesPolymorphism()
     {
-        var request = new RunRequest("q");
+        var request = new RunRequest("q") { CorrelationId = "test-corr" };
         var agentResponse = new AgentResponse
         {
             Messages = [new ChatMessage(ChatRole.Assistant, "a")],
@@ -185,8 +185,8 @@ public class StateSerializationTests
 
         var entries = new List<TemporalAgentStateEntry>
         {
-            TemporalAgentStateRequest.FromRunRequest(request),
-            TemporalAgentStateResponse.FromResponse(request.CorrelationId, agentResponse)
+            TemporalAgentStateRequest.FromRunRequest(request, DateTimeOffset.UtcNow),
+            TemporalAgentStateResponse.FromResponse(request.CorrelationId!, agentResponse, DateTimeOffset.UtcNow)
         };
 
         var json = JsonSerializer.Serialize<IReadOnlyList<TemporalAgentStateEntry>>(entries, s_opts);

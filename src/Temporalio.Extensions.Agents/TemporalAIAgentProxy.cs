@@ -95,7 +95,10 @@ internal class TemporalAIAgentProxy(
             responseFormat = format;
         }
 
-        var request = new RunRequest([.. messages], responseFormat, enableToolCalls, enableToolNames);
+        var request = new RunRequest([.. messages], responseFormat, enableToolCalls, enableToolNames)
+        {
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        };
         var sessionId = temporalSession.SessionId;
 
         _logger.LogProxyDispatchingRequest(sessionId.AgentName, sessionId.WorkflowId, isFireAndForget);
@@ -135,7 +138,10 @@ internal class TemporalAIAgentProxy(
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        var request = new RunRequest([.. messages]);
+        var request = new RunRequest([.. messages])
+        {
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        };
         var sessionId = session.SessionId;
 
         _logger.LogProxyDispatchingDelayedRequest(sessionId.AgentName, sessionId.WorkflowId, delay);
