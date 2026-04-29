@@ -81,6 +81,12 @@ public static class TemporalWorkerBuilderExtensions
                 sp.GetService<IAgentRouter>()));
 
         // Register a keyed AIAgent proxy singleton per declared agent name.
+        // Note: this loop also registers proxies for entries declared via AddAgentProxy(),
+        // even though their factories throw when invoked locally. This is intentional —
+        // the keyed TemporalAIAgentProxy never calls the factory; it routes RunAsync calls
+        // through Temporal updates. Registering the proxy in the worker process makes it
+        // resolvable as a keyed AIAgent (e.g., in single-process apps that use the same
+        // service container for both worker hosting and external agent invocation).
         foreach (var (name, _) in agentsOptions.GetAgentFactories())
         {
             var agentName = name;

@@ -85,7 +85,8 @@ internal sealed class AgentWorkflowWrapper(
         if (options is not ChatClientAgentRunOptions chatAgentRunOptions)
         {
             throw new NotSupportedException(
-                $"AgentWorkflowWrapper only supports null, {nameof(AgentRunOptions)}, or {nameof(ChatClientAgentRunOptions)} run options.");
+                $"AgentWorkflowWrapper only supports null, {nameof(AgentRunOptions)}, or {nameof(ChatClientAgentRunOptions)} run options. " +
+                $"Got: {options?.GetType().FullName ?? "null"}.");
         }
 
         Func<IChatClient, IChatClient>? originalFactory = chatAgentRunOptions.ChatClientFactory;

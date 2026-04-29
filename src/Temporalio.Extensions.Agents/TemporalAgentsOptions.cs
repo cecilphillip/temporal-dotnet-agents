@@ -133,6 +133,11 @@ public sealed class TemporalAgentsOptions
         }
 
         // Guard factory — if somehow invoked from a worker context it fails fast with a clear message.
+        // Note: this throw is defense-in-depth. The keyed AIAgent proxy registered for proxy-only
+        // entries (see TemporalWorkerBuilderExtensions) is fully functional in worker processes —
+        // it routes RunAsync calls through Temporal updates, never invoking this factory locally.
+        // The factory only fires if AgentActivities.ExecuteAgentAsync attempts to execute a
+        // proxy-only agent name on the worker, which is the failure mode we want to surface clearly.
         _agentFactories.Add(name, _ => throw new InvalidOperationException(
             $"Agent '{name}' was registered with AddAgentProxy() for client-only use. " +
             $"Register the real agent via AddAIAgent() or AddAIAgentFactory() in the worker process."));

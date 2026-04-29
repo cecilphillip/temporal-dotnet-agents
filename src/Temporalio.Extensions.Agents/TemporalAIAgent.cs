@@ -20,6 +20,7 @@ public sealed class TemporalAIAgent : AIAgent
     private readonly string _agentName;
     private readonly List<TemporalAgentStateEntry> _history = [];
     private readonly ActivityOptions _activityOptions;
+    private int _requestCount;
 
     internal TemporalAIAgent(string agentName, ActivityOptions? activityOptions = null)
     {
@@ -97,6 +98,7 @@ public sealed class TemporalAIAgent : AIAgent
         };
 
         _history.Add(TemporalAgentStateRequest.FromRunRequest(request, Workflow.UtcNow));
+        _requestCount++;
 
         // TemporalAIAgent lives inside a workflow and creates sessions in-process,
         // so StateBag persistence across turns is handled by the workflow history itself.
@@ -106,7 +108,7 @@ public sealed class TemporalAIAgent : AIAgent
         var sessionId = session is TemporalAgentSession ts ? ts.SessionId : (TemporalAgentSessionId?)null;
         var activityInput = new ExecuteAgentInput(_agentName, request, [.. _history], sessionId: sessionId);
 
-        Workflow.Logger.LogInWorkflowAgentDispatching(_agentName, _history.Count(e => e is TemporalAgentStateRequest));
+        Workflow.Logger.LogInWorkflowAgentDispatching(_agentName, _requestCount);
 
         var result = await Workflow.ExecuteActivityAsync(
             (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
