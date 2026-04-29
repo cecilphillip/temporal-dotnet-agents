@@ -52,13 +52,13 @@ public static class TemporalAgentTelemetry
     public const string AgentClientSendSpanName = "agent.client.send";
 
     /// <summary>Span emitted by <c>DefaultTemporalAgentClient.ScheduleAgentAsync</c> when creating a recurring schedule.</summary>
-    public const string AgentScheduleCreateSpanName = "agent.schedule.create";
+    public const string AgentScheduleCreateSpanName = "temporal.agent.schedule.create";
 
     /// <summary>Span emitted by <c>DefaultTemporalAgentClient.RunAgentDelayedAsync</c> when starting a delayed workflow.</summary>
-    public const string AgentScheduleDelayedSpanName = "agent.schedule.delayed";
+    public const string AgentScheduleDelayedSpanName = "temporal.agent.schedule.delayed";
 
     /// <summary>Span emitted by <c>ScheduleActivities.ScheduleOneTimeAgentRunAsync</c> when scheduling a one-time run.</summary>
-    public const string AgentScheduleOneTimeSpanName = "agent.schedule.one_time";
+    public const string AgentScheduleOneTimeSpanName = "temporal.agent.schedule.one_time";
 
     // ── Attribute names ────────────────────────────────────────────────────────
     // Aligned with OpenTelemetry GenAI semantic conventions (Development tier).

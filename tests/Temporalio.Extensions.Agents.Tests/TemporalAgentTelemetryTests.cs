@@ -22,9 +22,17 @@ public class TemporalAgentTelemetryTests
     {
         Assert.Equal("agent.turn", TemporalAgentTelemetry.AgentTurnSpanName);
         Assert.Equal("agent.client.send", TemporalAgentTelemetry.AgentClientSendSpanName);
-        Assert.Equal("agent.schedule.create", TemporalAgentTelemetry.AgentScheduleCreateSpanName);
-        Assert.Equal("agent.schedule.delayed", TemporalAgentTelemetry.AgentScheduleDelayedSpanName);
-        Assert.Equal("agent.schedule.one_time", TemporalAgentTelemetry.AgentScheduleOneTimeSpanName);
+        Assert.Equal("temporal.agent.schedule.create", TemporalAgentTelemetry.AgentScheduleCreateSpanName);
+        Assert.Equal("temporal.agent.schedule.delayed", TemporalAgentTelemetry.AgentScheduleDelayedSpanName);
+        Assert.Equal("temporal.agent.schedule.one_time", TemporalAgentTelemetry.AgentScheduleOneTimeSpanName);
+    }
+
+    [Fact]
+    public void SpanNames_ScheduleSpansUseTemporalPrefix()
+    {
+        Assert.Equal("temporal.agent.schedule.create", TemporalAgentTelemetry.AgentScheduleCreateSpanName);
+        Assert.Equal("temporal.agent.schedule.delayed", TemporalAgentTelemetry.AgentScheduleDelayedSpanName);
+        Assert.Equal("temporal.agent.schedule.one_time", TemporalAgentTelemetry.AgentScheduleOneTimeSpanName);
     }
 
     [Fact]

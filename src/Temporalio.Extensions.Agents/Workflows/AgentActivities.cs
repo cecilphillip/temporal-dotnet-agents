@@ -71,7 +71,7 @@ internal class AgentActivities(
         // GAP 4: emit an OpenTelemetry span for this agent turn.
         using var span = TemporalAgentTelemetry.ActivitySource.StartActivity(
             TemporalAgentTelemetry.AgentTurnSpanName,
-            ActivityKind.Internal);
+            ActivityKind.Client);
 
         span?.SetTag(TemporalAgentTelemetry.AgentNameAttribute, input.AgentName);
         span?.SetTag(TemporalAgentTelemetry.AgentSessionIdAttribute, sessionId.WorkflowId);
@@ -119,9 +119,12 @@ internal class AgentActivities(
             }
 
             // GAP 4: tag token usage onto the span.
-            span?.SetTag(TemporalAgentTelemetry.InputTokensAttribute, response.Usage?.InputTokenCount);
-            span?.SetTag(TemporalAgentTelemetry.OutputTokensAttribute, response.Usage?.OutputTokenCount);
-            span?.SetTag(TemporalAgentTelemetry.TotalTokensAttribute, response.Usage?.TotalTokenCount);
+            if (span?.IsAllDataRequested == true)
+            {
+                span.SetTag(TemporalAgentTelemetry.InputTokensAttribute, response.Usage?.InputTokenCount);
+                span.SetTag(TemporalAgentTelemetry.OutputTokensAttribute, response.Usage?.OutputTokenCount);
+                span.SetTag(TemporalAgentTelemetry.TotalTokensAttribute, response.Usage?.TotalTokenCount);
+            }
 
             _logger.LogAgentActivityCompleted(input.AgentName, sessionId.WorkflowId,
                 response.Usage?.InputTokenCount, response.Usage?.OutputTokenCount, response.Usage?.TotalTokenCount);
