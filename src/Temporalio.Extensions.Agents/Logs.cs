@@ -119,6 +119,11 @@ internal static partial class Logs
     public static partial void LogWorkflowApprovalResolved(
         this ILogger logger, string agentName, string workflowId, string requestId, bool approved);
 
+    [LoggerMessage(EventId = 25, Level = LogLevel.Warning,
+        Message = "[{AgentName}/{WorkflowId}] Fire-and-forget activity failed; orphaned history entry rolled back")]
+    public static partial void LogFireAndForgetActivityFailed(
+        this ILogger logger, string agentName, string workflowId, Exception ex);
+
     // ── Scheduling logs ────────────────────────────────────────────────────────
 
     [LoggerMessage(EventId = 20, Level = LogLevel.Debug,

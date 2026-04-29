@@ -273,6 +273,7 @@ internal class AgentWorkflow
     {
         await Workflow.WaitConditionAsync(() => !_isProcessing);
         _isProcessing = true;
+        int historyCountBefore = _history.Count;   // snapshot before add
         try
         {
             _history.Add(TemporalAgentStateRequest.FromRunRequest(request, Workflow.UtcNow));
@@ -294,7 +295,17 @@ internal class AgentWorkflow
                 });
 
             _currentStateBag = result.SerializedStateBag;
-            _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
+            _history.Add(TemporalAgentStateResponse.FromResponse(
+                request.CorrelationId!, result.Response, Workflow.UtcNow));
+        }
+        catch (Exception ex)
+        {
+            // Rollback orphaned request entry to keep history balanced across CAN.
+            while (_history.Count > historyCountBefore)
+                _history.RemoveAt(_history.Count - 1);
+            Workflow.Logger.LogFireAndForgetActivityFailed(
+                _input?.AgentName ?? "unknown", Workflow.Info.WorkflowId, ex);
+            // Swallow — fire-and-forget errors must not crash the session.
         }
         finally
         {
