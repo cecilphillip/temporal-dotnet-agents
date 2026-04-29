@@ -33,9 +33,10 @@ internal sealed class DurableFunctionActivities(
         }
 
         using var span = DurableChatTelemetry.ActivitySource.StartActivity(
-            DurableChatTelemetry.FunctionInvokeSpanName,
-            ActivityKind.Internal);
+            $"{DurableChatTelemetry.ExecuteToolOperationName} {input.FunctionName}",
+            ActivityKind.Client);
 
+        span?.SetTag(DurableChatTelemetry.OperationNameAttribute, DurableChatTelemetry.ExecuteToolOperationName);
         span?.SetTag(DurableChatTelemetry.ToolNameAttribute, input.FunctionName);
 
         _logger.LogDebug("Invoking durable function {FunctionName}", input.FunctionName);

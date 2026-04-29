@@ -13,14 +13,20 @@ public class DurableChatTelemetryTests
     [Fact]
     public void SpanNames_AreCorrect()
     {
+        // ChatSendSpanName is a Temporal-protocol span (workflow update dispatch), not an LLM call,
+        // so it retains its original name rather than following the GenAI convention.
         Assert.Equal("durable_chat.send", DurableChatTelemetry.ChatSendSpanName);
-        Assert.Equal("durable_chat.turn", DurableChatTelemetry.ChatTurnSpanName);
-        Assert.Equal("durable_function.invoke", DurableChatTelemetry.FunctionInvokeSpanName);
+
+        // LLM inference and tool spans follow OTel GenAI semantic conventions.
+        // Full span names are constructed dynamically as "{operation} {model|tool}".
+        Assert.Equal("chat", DurableChatTelemetry.ChatOperationName);
+        Assert.Equal("execute_tool", DurableChatTelemetry.ExecuteToolOperationName);
     }
 
     [Fact]
     public void AttributeNames_AreCorrect()
     {
+        Assert.Equal("gen_ai.operation.name", DurableChatTelemetry.OperationNameAttribute);
         Assert.Equal("conversation.id", DurableChatTelemetry.ConversationIdAttribute);
         Assert.Equal("gen_ai.request.model", DurableChatTelemetry.RequestModelAttribute);
         Assert.Equal("gen_ai.response.model", DurableChatTelemetry.ResponseModelAttribute);

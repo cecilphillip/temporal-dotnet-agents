@@ -9,6 +9,12 @@ namespace Temporalio.Extensions.AI;
 /// <c>.AddSource(DurableChatTelemetry.ActivitySourceName)</c>
 /// </para>
 /// </summary>
+/// <remarks>
+/// Span names for LLM inference and tool execution follow the OpenTelemetry GenAI semantic
+/// conventions at the Development stability tier
+/// (https://opentelemetry.io/docs/specs/semconv/gen-ai/).
+/// Names and attributes may change before the specification reaches Stable.
+/// </remarks>
 public static class DurableChatTelemetry
 {
     /// <summary>The name of the <see cref="ActivitySource"/> used by this library.</summary>
@@ -18,16 +24,33 @@ public static class DurableChatTelemetry
 
     // ── Span names ───────────────────────────────────────────────────────────
 
-    /// <summary>Span emitted by <see cref="DurableChatSessionClient"/> when sending a chat request.</summary>
+    /// <summary>
+    /// Span emitted by <see cref="DurableChatSessionClient"/> when sending a chat request.
+    /// This is a Temporal-protocol-level span (workflow update dispatch), not an outbound
+    /// LLM call, so it intentionally does not follow the GenAI inference span naming convention.
+    /// </summary>
     public const string ChatSendSpanName = "durable_chat.send";
 
-    /// <summary>Span emitted by <see cref="DurableChatActivities"/> for each LLM call.</summary>
-    public const string ChatTurnSpanName = "durable_chat.turn";
+    /// <summary>
+    /// GenAI operation name prefix for LLM inference spans.
+    /// The full span name is <c>"chat {modelId}"</c>, constructed dynamically at call sites
+    /// where the model ID is available. Follows the OTel GenAI semantic convention
+    /// <c>"{operation.name} {model}"</c> format.
+    /// </summary>
+    public const string ChatOperationName = "chat";
 
-    /// <summary>Span emitted by <see cref="DurableFunctionActivities"/> for each function invocation.</summary>
-    public const string FunctionInvokeSpanName = "durable_function.invoke";
+    /// <summary>
+    /// GenAI operation name prefix for tool execution spans.
+    /// The full span name is <c>"execute_tool {toolName}"</c>, constructed dynamically at
+    /// call sites. Follows the OTel GenAI semantic convention <c>"execute_tool {tool_name}"</c>
+    /// format.
+    /// </summary>
+    public const string ExecuteToolOperationName = "execute_tool";
 
     // ── Attribute names ──────────────────────────────────────────────────────
+
+    /// <summary>The GenAI operation name (e.g., <c>"chat"</c> or <c>"execute_tool"</c>).</summary>
+    public const string OperationNameAttribute = "gen_ai.operation.name";
 
     /// <summary>The conversation/session identifier.</summary>
     public const string ConversationIdAttribute = "conversation.id";

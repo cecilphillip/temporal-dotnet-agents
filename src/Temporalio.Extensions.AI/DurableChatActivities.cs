@@ -31,11 +31,14 @@ internal sealed class DurableChatActivities(
             "Executing durable chat activity for conversation {ConversationId}, turn {TurnNumber}",
             input.ConversationId, input.TurnNumber);
 
+        var modelId = input.Options?.ModelId;
         using var span = DurableChatTelemetry.ActivitySource.StartActivity(
-            DurableChatTelemetry.ChatTurnSpanName,
-            System.Diagnostics.ActivityKind.Internal);
+            $"{DurableChatTelemetry.ChatOperationName} {modelId ?? "unknown"}",
+            System.Diagnostics.ActivityKind.Client);
 
+        span?.SetTag(DurableChatTelemetry.OperationNameAttribute, DurableChatTelemetry.ChatOperationName);
         span?.SetTag(DurableChatTelemetry.ConversationIdAttribute, input.ConversationId);
+        span?.SetTag(DurableChatTelemetry.RequestModelAttribute, modelId);
 
         var chatClient = string.IsNullOrEmpty(input.ClientKey)
             ? services.GetRequiredService<IChatClient>()
