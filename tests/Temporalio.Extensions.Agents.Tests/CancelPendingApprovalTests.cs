@@ -110,9 +110,6 @@ public class CancelPendingApprovalTests
         public Task<AgentResponse> RunAgentAsync(TemporalAgentSessionId sessionId, RunRequest request, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
-        public Task<AgentResponse> RunAgentAsync(string agentName, string message, CancellationToken cancellationToken = default) =>
-            throw new NotImplementedException();
-
         public Task RunAgentFireAndForgetAsync(TemporalAgentSessionId sessionId, RunRequest request, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 

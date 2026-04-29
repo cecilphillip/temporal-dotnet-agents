@@ -83,27 +83,6 @@ internal sealed class DefaultTemporalAgentClient(
     }
 
     /// <inheritdoc/>
-    [Obsolete(
-        "This overload creates a new random session on every call — no history continuity. " +
-        "Use RunAgentAsync(TemporalAgentSessionId, RunRequest, CancellationToken) with a stable session ID instead.",
-        error: false)]
-    public Task<AgentResponse> RunAgentAsync(
-        string agentName,
-        string message,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(message);
-
-        var sessionId = TemporalAgentSessionId.WithRandomKey(agentName);
-        var request = new RunRequest(message)
-        {
-            CorrelationId = Guid.NewGuid().ToString("N"),
-        };
-        return RunAgentAsync(sessionId, request, cancellationToken);
-    }
-
-    /// <inheritdoc/>
     public async Task RunAgentFireAndForgetAsync(
         TemporalAgentSessionId sessionId,
         RunRequest request,
