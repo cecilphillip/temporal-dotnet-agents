@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using Temporalio.Common;
 using Temporalio.Extensions.Agents.Workflows;
 using Xunit;
 
@@ -111,5 +112,23 @@ public class RunRequestTests
         var json = JsonSerializer.Serialize(original);
         var deserialized = JsonSerializer.Deserialize<RunRequest>(json);
         Assert.False(deserialized!.EnableToolCalls);
+    }
+
+    [Fact]
+    public void AgentWorkflowInput_RetryPolicyRoundTrips()
+    {
+        var input = new AgentWorkflowInput
+        {
+            AgentName = "test",
+            TaskQueue = "q",
+            RetryPolicy = new RetryPolicy
+            {
+                MaximumAttempts = 3,
+                InitialInterval = TimeSpan.FromSeconds(1),
+            }
+        };
+        var json = JsonSerializer.Serialize(input);
+        var deserialized = JsonSerializer.Deserialize<AgentWorkflowInput>(json);
+        Assert.Equal(3, deserialized!.RetryPolicy!.MaximumAttempts);
     }
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Temporalio.Common;
 using Temporalio.Extensions.Agents.State;
 
 namespace Temporalio.Extensions.Agents.Workflows;
@@ -48,4 +49,10 @@ internal sealed class AgentWorkflowInput
     /// When <see langword="null"/>, the workflow falls back to a 7-day default.
     /// </summary>
     public TimeSpan? ApprovalTimeout { get; init; }
+
+    /// <summary>
+    /// Gets the retry policy applied to every agent activity invocation.
+    /// When <see langword="null"/>, Temporal SDK defaults apply (unbounded retries).
+    /// </summary>
+    public RetryPolicy? RetryPolicy { get; init; }
 }

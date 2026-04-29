@@ -1,3 +1,5 @@
+using Temporalio.Common;
+
 namespace Temporalio.Extensions.Agents.Workflows;
 
 /// <summary>
@@ -30,4 +32,10 @@ public sealed record OneTimeAgentRun
     /// If this time is already in the past when the activity executes, the run starts immediately.
     /// </summary>
     public DateTimeOffset RunAt { get; init; }
+
+    /// <summary>
+    /// Gets the retry policy applied to the agent activity invocation.
+    /// When <see langword="null"/>, Temporal SDK defaults apply (unbounded retries).
+    /// </summary>
+    public RetryPolicy? RetryPolicy { get; init; }
 }

@@ -57,7 +57,8 @@ internal class DefaultTemporalAgentClient(
                 TimeToLive = options.GetTimeToLive(sessionId.AgentName),
                 ActivityStartToCloseTimeout = options.ActivityStartToCloseTimeout,
                 ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
-                ApprovalTimeout = options.ApprovalTimeout
+                ApprovalTimeout = options.ApprovalTimeout,
+                RetryPolicy = options.RetryPolicy,
             }),
             workflowOptions).ConfigureAwait(false);
 
@@ -115,7 +116,8 @@ internal class DefaultTemporalAgentClient(
                 TimeToLive = options.GetTimeToLive(sessionId.AgentName),
                 ActivityStartToCloseTimeout = options.ActivityStartToCloseTimeout,
                 ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
-                ApprovalTimeout = options.ApprovalTimeout
+                ApprovalTimeout = options.ApprovalTimeout,
+                RetryPolicy = options.RetryPolicy,
             }),
             workflowOptions).ConfigureAwait(false);
 
@@ -231,7 +233,8 @@ internal class DefaultTemporalAgentClient(
                     TimeToLive = options.GetTimeToLive(sessionId.AgentName),
                     ActivityStartToCloseTimeout = options.ActivityStartToCloseTimeout,
                     ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
-                    ApprovalTimeout = options.ApprovalTimeout
+                    ApprovalTimeout = options.ApprovalTimeout,
+                    RetryPolicy = options.RetryPolicy,
                 }),
                 workflowOptions).ConfigureAwait(false);
         }
@@ -268,6 +271,7 @@ internal class DefaultTemporalAgentClient(
                 Request = request,
                 ActivityStartToCloseTimeout = options.ActivityStartToCloseTimeout,
                 ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
+                RetryPolicy = options.RetryPolicy,
             }),
             new WorkflowOptions(workflowId, taskQueue));
 

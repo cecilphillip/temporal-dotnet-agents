@@ -76,6 +76,7 @@ public sealed class ScheduleActivities(ITemporalClient client, string taskQueue)
                     AgentName = run.AgentName,
                     TaskQueue = taskQueue,
                     Request = run.Request,
+                    RetryPolicy = run.RetryPolicy,
                 }),
                 new WorkflowOptions(workflowId, taskQueue)
                 {

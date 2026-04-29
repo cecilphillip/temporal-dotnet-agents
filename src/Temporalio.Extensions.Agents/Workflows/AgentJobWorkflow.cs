@@ -37,6 +37,7 @@ internal sealed class AgentJobWorkflow
                 StartToCloseTimeout = input.ActivityStartToCloseTimeout ?? TimeSpan.FromMinutes(30),
                 HeartbeatTimeout = input.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5),
                 Summary = AgentActivities.BuildActivitySummary(input.AgentName),
+                RetryPolicy = input.RetryPolicy,
             });
     }
 }

@@ -1,3 +1,5 @@
+using Temporalio.Common;
+
 namespace Temporalio.Extensions.Agents.Workflows;
 
 /// <summary>
@@ -27,4 +29,10 @@ internal sealed record AgentJobInput
     /// When <see langword="null"/>, the workflow falls back to a 5-minute default.
     /// </summary>
     public TimeSpan? ActivityHeartbeatTimeout { get; init; }
+
+    /// <summary>
+    /// Gets the retry policy applied to the agent activity invocation.
+    /// When <see langword="null"/>, Temporal SDK defaults apply (unbounded retries).
+    /// </summary>
+    public RetryPolicy? RetryPolicy { get; init; }
 }

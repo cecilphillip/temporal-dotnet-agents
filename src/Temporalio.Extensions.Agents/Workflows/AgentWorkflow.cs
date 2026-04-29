@@ -93,7 +93,8 @@ internal class AgentWorkflow
                     CarriedStateBag = carriedStateBag,
                     ActivityStartToCloseTimeout = input.ActivityStartToCloseTimeout,
                     ActivityHeartbeatTimeout = input.ActivityHeartbeatTimeout,
-                    ApprovalTimeout = input.ApprovalTimeout
+                    ApprovalTimeout = input.ApprovalTimeout,
+                    RetryPolicy = input.RetryPolicy,
                 }));
         }
     }
@@ -146,6 +147,7 @@ internal class AgentWorkflow
                     StartToCloseTimeout = _input!.ActivityStartToCloseTimeout ?? TimeSpan.FromMinutes(30),
                     HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5),
                     Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
+                    RetryPolicy = _input!.RetryPolicy,
                 });
 
             // GAP 6: persist the updated StateBag for the next turn.
@@ -272,6 +274,7 @@ internal class AgentWorkflow
                     StartToCloseTimeout = _input!.ActivityStartToCloseTimeout ?? TimeSpan.FromMinutes(30),
                     HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5),
                     Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
+                    RetryPolicy = _input!.RetryPolicy,
                 });
 
             _currentStateBag = result.SerializedStateBag;

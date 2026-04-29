@@ -1,5 +1,6 @@
 using Microsoft.Agents.AI;
 using Temporalio.Client.Schedules;
+using Temporalio.Common;
 using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.Agents.Workflows;
 
@@ -59,6 +60,12 @@ public sealed class TemporalAgentsOptions
     /// returns a rejected <see cref="DurableApprovalDecision"/> with a timeout comment.
     /// </summary>
     public TimeSpan ApprovalTimeout { get; set; } = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// Activity retry policy applied at every agent activity dispatch.
+    /// When null, Temporal SDK defaults apply (unbounded retries).
+    /// </summary>
+    public RetryPolicy? RetryPolicy { get; set; }
 
     /// <summary>Adds an agent factory with an optional per-agent TTL.</summary>
     public TemporalAgentsOptions AddAIAgentFactory(string name, Func<IServiceProvider, AIAgent> factory, TimeSpan? timeToLive = null)
