@@ -16,22 +16,23 @@ The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) are defined
 
 1. [Sending Messages](#sending-messages)
 2. [Multi-Turn Conversations](#multi-turn-conversations)
-3. [Fire-and-Forget](#fire-and-forget)
-4. [Structured Output](#structured-output)
-5. [Tool Filtering](#tool-filtering)
-6. [Agent Orchestration (Inside Workflows)](#agent-orchestration-inside-workflows)
-7. [Session Identity](#session-identity)
-8. [Session TTL](#session-ttl)
-9. [Activity Timeouts](#activity-timeouts)
-10. [Accessing Temporal from Agent Tools](#accessing-temporal-from-agent-tools)
-11. [Streaming Responses](#streaming-responses)
-12. [LLM-Powered Routing](#llm-powered-routing)
-13. [Parallel Agent Execution](#parallel-agent-execution)
-14. [Human-in-the-Loop (HITL) Approval Gates](#human-in-the-loop-hitl-approval-gates)
-15. [Scheduling](#scheduling)
-16. [MCP Tool Integration](#mcp-tool-integration)
-17. [External Memory with AIContextProvider](#external-memory-with-aicontextprovider)
-18. [OpenTelemetry Integration](#opentelemetry-integration)
+3. [Reducing the LLM Context Window](#reducing-the-llm-context-window)
+4. [Fire-and-Forget](#fire-and-forget)
+5. [Structured Output](#structured-output)
+6. [Tool Filtering](#tool-filtering)
+7. [Agent Orchestration (Inside Workflows)](#agent-orchestration-inside-workflows)
+8. [Session Identity](#session-identity)
+9. [Session TTL](#session-ttl)
+10. [Activity Timeouts](#activity-timeouts)
+11. [Accessing Temporal from Agent Tools](#accessing-temporal-from-agent-tools)
+12. [Streaming Responses](#streaming-responses)
+13. [LLM-Powered Routing](#llm-powered-routing)
+14. [Parallel Agent Execution](#parallel-agent-execution)
+15. [Human-in-the-Loop (HITL) Approval Gates](#human-in-the-loop-hitl-approval-gates)
+16. [Scheduling](#scheduling)
+17. [MCP Tool Integration](#mcp-tool-integration)
+18. [External Memory with AIContextProvider](#external-memory-with-aicontextprovider)
+19. [OpenTelemetry Integration](#opentelemetry-integration)
 
 ---
 
@@ -77,6 +78,54 @@ Console.WriteLine(r1.Messages[0].Text);  // Paris
 var r2 = await agentProxy.RunAsync("What is its population?", session);
 Console.WriteLine(r2.Messages[0].Text);  // ~2.1 million (context preserved)
 ```
+
+---
+
+## Reducing the LLM Context Window
+
+For long-running agent sessions the conversation history accumulated in the
+`AgentWorkflow` can grow large enough to make each LLM call expensive.
+`Temporalio.Extensions.Agents` works with the same MEAI `IChatReducer` family
+as `Temporalio.Extensions.AI`: register a stateless reducer such as
+`MessageCountingChatReducer` on the underlying `IChatClient` that backs your
+`AIAgent`. The reducer applies a sliding window at the LLM-call boundary —
+inside `AgentActivities.ExecuteAgentAsync` — so it does not need to be replay-safe.
+
+```csharp
+var chatClient = openAiClient.GetChatClient("gpt-4o-mini")
+    .AsBuilder()
+    .UseChatReducer(new MessageCountingChatReducer(20))   // 20-message window to the LLM
+    .UseFunctionInvocation()
+    .Build();
+
+var agent = chatClient.AsAIAgent(
+    name: "MyAgent",
+    instructions: "You are a helpful assistant.");
+
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
+    .AddTemporalAgents(opts => opts.AddAIAgent(agent));
+```
+
+With this configuration:
+
+- The `AgentWorkflow`'s `_history` retains every message ever exchanged in the
+  session — that is the durable, replay-safe source of truth and survives worker
+  restarts and continue-as-new transitions.
+- The reducer passes only the most recent 20 messages to the LLM on each turn.
+- Querying `_history` (e.g., for audit) still returns the full unreduced log.
+
+> **Design rationale:** Conversation history lives on the workflow itself, where
+> it is replay-safe via Temporal event history. Reducers shape only what is sent
+> to the LLM per turn — they never own conversation state.
+
+> **Note:** `MessageCountingChatReducer` is provided by the MEAI library
+> (`Microsoft.Extensions.AI`). Any `IChatReducer` implementation works —
+> token-counting reducers, summarization reducers, etc. — as long as it is
+> stateless or scoped per call.
+
+See the equivalent guidance for `Temporalio.Extensions.AI` in
+[the MEAI usage guide](../MEAI/usage.md#reducing-the-llm-context-window).
 
 ---
 
