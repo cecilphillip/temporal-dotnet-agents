@@ -48,6 +48,7 @@ internal class DefaultTemporalAgentClient(
 
         _logger.LogClientSendingUpdate(sessionId.AgentName, sessionId.WorkflowId);
 
+        workflowOptions.Rpc = new RpcOptions { CancellationToken = cancellationToken };
         await client.StartWorkflowAsync(
             (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput
             {
@@ -64,7 +65,9 @@ internal class DefaultTemporalAgentClient(
         var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
 
         var response = await handle.ExecuteUpdateAsync<AgentWorkflow, AgentResponse>(
-            wf => wf.RunAgentAsync(request)).ConfigureAwait(false);
+            wf => wf.RunAgentAsync(request),
+            new WorkflowUpdateOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } })
+            .ConfigureAwait(false);
 
         _logger.LogClientUpdateCompleted(sessionId.AgentName, sessionId.WorkflowId);
         return response;
@@ -103,6 +106,7 @@ internal class DefaultTemporalAgentClient(
 
         _logger.LogClientFireAndForget(sessionId.AgentName, sessionId.WorkflowId);
 
+        workflowOptions.Rpc = new RpcOptions { CancellationToken = cancellationToken };
         await client.StartWorkflowAsync(
             (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput
             {
@@ -116,7 +120,10 @@ internal class DefaultTemporalAgentClient(
             workflowOptions).ConfigureAwait(false);
 
         var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
-        await handle.SignalAsync<AgentWorkflow>(wf => wf.RunAgentFireAndForgetAsync(request)).ConfigureAwait(false);
+        await handle.SignalAsync<AgentWorkflow>(
+            wf => wf.RunAgentFireAndForgetAsync(request),
+            new WorkflowSignalOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } })
+            .ConfigureAwait(false);
     }
 
     // ── GAP 2: Routing ──────────────────────────────────────────────────────
@@ -163,7 +170,9 @@ internal class DefaultTemporalAgentClient(
     {
         var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
         return await handle.QueryAsync<AgentWorkflow, DurableApprovalRequest?>(
-            wf => wf.GetPendingApproval()).ConfigureAwait(false);
+            wf => wf.GetPendingApproval(),
+            new WorkflowQueryOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } })
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -176,7 +185,9 @@ internal class DefaultTemporalAgentClient(
 
         var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
         return await handle.ExecuteUpdateAsync<AgentWorkflow, DurableApprovalDecision>(
-            wf => wf.SubmitApprovalAsync(decision)).ConfigureAwait(false);
+            wf => wf.SubmitApprovalAsync(decision),
+            new WorkflowUpdateOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } })
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -207,6 +218,8 @@ internal class DefaultTemporalAgentClient(
             IdReusePolicy = WorkflowIdReusePolicy.AllowDuplicate,
             StartDelay = delay,
         };
+
+        workflowOptions.Rpc = new RpcOptions { CancellationToken = cancellationToken };
 
         try
         {
@@ -271,7 +284,8 @@ internal class DefaultTemporalAgentClient(
         {
             return await client.CreateScheduleAsync(
                 scheduleId,
-                new Schedule(action, spec) { Policy = policy ?? new SchedulePolicy() }).ConfigureAwait(false);
+                new Schedule(action, spec) { Policy = policy ?? new SchedulePolicy() },
+                new ScheduleOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } }).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

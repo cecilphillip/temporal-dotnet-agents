@@ -127,6 +127,7 @@ public sealed class TemporalAgentContext
 
         var handle = _client.GetWorkflowHandle<AgentWorkflow>(CurrentSession.SessionId.WorkflowId);
         return await handle.ExecuteUpdateAsync<AgentWorkflow, DurableApprovalDecision>(
-            wf => wf.RequestApprovalAsync(request));
+            wf => wf.RequestApprovalAsync(request),
+            new WorkflowUpdateOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } });
     }
 }
