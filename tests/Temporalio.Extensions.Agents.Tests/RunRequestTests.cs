@@ -133,6 +133,22 @@ public class RunRequestTests
     }
 
     [Fact]
+    public void AgentWorkflowInput_EnableSearchAttributesDefaultsFalse()
+    {
+        var input = new AgentWorkflowInput { AgentName = "test", TaskQueue = "q" };
+        Assert.False(input.EnableSearchAttributes);
+    }
+
+    [Fact]
+    public void AgentWorkflowInput_EnableSearchAttributesRoundTrips()
+    {
+        var input = new AgentWorkflowInput { AgentName = "test", TaskQueue = "q", EnableSearchAttributes = true };
+        var json = JsonSerializer.Serialize(input);
+        var deserialized = JsonSerializer.Deserialize<AgentWorkflowInput>(json);
+        Assert.True(deserialized!.EnableSearchAttributes);
+    }
+
+    [Fact]
     public void AgentWorkflowInput_MaxHistorySizeDefaultIs1000()
     {
         var input = new AgentWorkflowInput { AgentName = "test", TaskQueue = "q" };

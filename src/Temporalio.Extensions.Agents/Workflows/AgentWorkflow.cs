@@ -63,11 +63,15 @@ internal class AgentWorkflow
 
         Workflow.Logger.LogWorkflowStarted(input.AgentName, Workflow.Info.WorkflowId, ttl);
 
-        // Upsert search attributes for operational queries in the Temporal UI.
-        Workflow.UpsertTypedSearchAttributes(
-            AgentNameSearchAttribute.ValueSet(input.AgentName),
-            SessionCreatedAtSearchAttribute.ValueSet(sessionCreatedAt),
-            TurnCountSearchAttribute.ValueSet(_history.Count));
+        // Opt-in: upsert search attributes only when explicitly requested.
+        // Guards against failure on servers where the attributes are not pre-registered.
+        if (input.EnableSearchAttributes)
+        {
+            Workflow.UpsertTypedSearchAttributes(
+                AgentNameSearchAttribute.ValueSet(input.AgentName),
+                SessionCreatedAtSearchAttribute.ValueSet(sessionCreatedAt),
+                TurnCountSearchAttribute.ValueSet(_history.Count));
+        }
 
         // Wait until shutdown is requested, TTL elapses, or history is large enough to warrant continue-as-new.
         bool conditionMet = await Workflow.WaitConditionAsync(
@@ -100,6 +104,7 @@ internal class AgentWorkflow
                 RetryPolicy = input.RetryPolicy,
                 MaxHistorySize = input.MaxHistorySize,
                 HistoryReducer = input.HistoryReducer,
+                EnableSearchAttributes = input.EnableSearchAttributes,
                 OriginalCreatedAt = sessionCreatedAt,
             };
             throw Workflow.CreateContinueAsNewException(
@@ -164,9 +169,12 @@ internal class AgentWorkflow
             _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
             _turnCount++;
 
-            // Update turn count for operational queries.
-            Workflow.UpsertTypedSearchAttributes(
-                TurnCountSearchAttribute.ValueSet(_turnCount));
+            // Update turn count for operational queries (opt-in only).
+            if (_input!.EnableSearchAttributes)
+            {
+                Workflow.UpsertTypedSearchAttributes(
+                    TurnCountSearchAttribute.ValueSet(_turnCount));
+            }
 
             Workflow.Logger.LogWorkflowUpdateCompleted(_input!.AgentName, Workflow.Info.WorkflowId, request.CorrelationId ?? string.Empty);
             return result.Response;

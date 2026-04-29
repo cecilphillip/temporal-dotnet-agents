@@ -69,6 +69,20 @@ public sealed class TemporalAgentsOptions
     public RetryPolicy? RetryPolicy { get; set; }
 
     /// <summary>
+    /// Default <c>false</c>. Set to <c>true</c> to opt into upserting
+    /// AgentName / SessionCreatedAt / TurnCount search attributes on the workflow.
+    /// Requires server-side pre-registration of the attribute keys.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Breaking change in this release</b>: previous versions upserted these attributes
+    /// unconditionally. To restore prior behavior, set <c>EnableSearchAttributes = true</c>
+    /// on your <c>AddTemporalAgents</c> call.
+    /// </para>
+    /// </remarks>
+    public bool EnableSearchAttributes { get; set; }
+
+    /// <summary>
     /// Maximum number of history entries before triggering continue-as-new.
     /// Default 1000. Continue-as-new also fires on Temporal SDK's own
     /// <see cref="Temporalio.Workflows.Workflow.ContinueAsNewSuggested"/> threshold, whichever comes first.

@@ -353,6 +353,23 @@ public class TemporalAgentsOptionsTests
         Assert.Equal("Pre-registered description.", descriptors[0].Description);
     }
 
+    // ─── EnableSearchAttributes ─────────────────────────────────────────────
+
+    [Fact]
+    public void EnableSearchAttributes_DefaultsFalse()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.False(options.EnableSearchAttributes);
+    }
+
+    [Fact]
+    public void EnableSearchAttributes_CanBeSetToTrue()
+    {
+        var options = new TemporalAgentsOptions();
+        options.EnableSearchAttributes = true;
+        Assert.True(options.EnableSearchAttributes);
+    }
+
     // ─── MaxHistorySize ─────────────────────────────────────────────────────
 
     [Fact]

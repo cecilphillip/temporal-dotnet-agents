@@ -61,6 +61,7 @@ internal class DefaultTemporalAgentClient(
                 RetryPolicy = options.RetryPolicy,
                 MaxHistorySize = options.MaxHistorySize,
                 HistoryReducer = options.HistoryReducer,
+                EnableSearchAttributes = options.EnableSearchAttributes,
                 // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
             }),
             workflowOptions).ConfigureAwait(false);
@@ -123,6 +124,7 @@ internal class DefaultTemporalAgentClient(
                 RetryPolicy = options.RetryPolicy,
                 MaxHistorySize = options.MaxHistorySize,
                 HistoryReducer = options.HistoryReducer,
+                EnableSearchAttributes = options.EnableSearchAttributes,
                 // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
             }),
             workflowOptions).ConfigureAwait(false);
@@ -243,6 +245,7 @@ internal class DefaultTemporalAgentClient(
                     RetryPolicy = options.RetryPolicy,
                     MaxHistorySize = options.MaxHistorySize,
                     HistoryReducer = options.HistoryReducer,
+                    EnableSearchAttributes = options.EnableSearchAttributes,
                     // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
                 }),
                 workflowOptions).ConfigureAwait(false);

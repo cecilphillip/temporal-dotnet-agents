@@ -57,6 +57,9 @@ internal sealed record AgentWorkflowInput
     /// </summary>
     public RetryPolicy? RetryPolicy { get; init; }
 
+    /// <summary>Default false. Opt-in to search attribute upserts.</summary>
+    public bool EnableSearchAttributes { get; init; }
+
     /// <summary>Default 1000. Workflow triggers continue-as-new when history reaches this count.</summary>
     public int MaxHistorySize { get; init; } = 1000;
 
