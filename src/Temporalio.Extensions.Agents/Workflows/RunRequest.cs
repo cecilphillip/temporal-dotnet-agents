@@ -22,12 +22,12 @@ public record RunRequest
 
     /// <summary>Gets the correlation ID used to match this request to its response.</summary>
     [JsonInclude]
-    internal string CorrelationId { get; set; } = Guid.NewGuid().ToString("N");
+    public string CorrelationId { get; init; } = Guid.NewGuid().ToString("N");
 
     /// <summary>Gets the ID of the orchestration or workflow that initiated this request (if any).</summary>
     [JsonInclude]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    internal string? OrchestrationId { get; set; }
+    public string? OrchestrationId { get; init; }
 
     /// <summary>Initializes a new <see cref="RunRequest"/> for a single text message.</summary>
     public RunRequest(
