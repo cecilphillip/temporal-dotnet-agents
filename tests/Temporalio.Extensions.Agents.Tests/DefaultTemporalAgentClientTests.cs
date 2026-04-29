@@ -18,8 +18,8 @@ public class DefaultTemporalAgentClientTests
     private readonly TemporalAgentsOptions _options = new();
     private const string TaskQueue = "test-queue";
 
-    private DefaultTemporalAgentClient CreateClient(IAgentRouter? router = null) =>
-        new(_fakeClient, _options, TaskQueue, logger: null, router: router);
+    private DefaultTemporalAgentClient CreateClient() =>
+        new(_fakeClient, _options, TaskQueue, logger: null);
 
     // ─── RunAgentAsync ───────────────────────────────────────────────────────
 
@@ -43,59 +43,6 @@ public class DefaultTemporalAgentClientTests
 
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
             client.RunAgentFireAndForgetAsync(sessionId, null!));
-    }
-
-    // ─── RouteAsync ──────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task RouteAsync_NullSessionKey_ThrowsArgumentException()
-    {
-        var client = CreateClient();
-
-        await Assert.ThrowsAsync<ArgumentNullException>(() =>
-            client.RouteAsync(null!, new RunRequest("test")));
-    }
-
-    [Fact]
-    public async Task RouteAsync_WhitespaceSessionKey_ThrowsArgumentException()
-    {
-        var client = CreateClient();
-
-        await Assert.ThrowsAsync<ArgumentException>(() =>
-            client.RouteAsync("   ", new RunRequest("test")));
-    }
-
-    [Fact]
-    public async Task RouteAsync_NullRequest_ThrowsArgumentNullException()
-    {
-        var client = CreateClient();
-
-        await Assert.ThrowsAsync<ArgumentNullException>(() =>
-            client.RouteAsync("session-key", null!));
-    }
-
-    [Fact]
-    public async Task RouteAsync_NoRouter_ThrowsInvalidOperationException()
-    {
-        var client = CreateClient(router: null);
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            client.RouteAsync("session-key", new RunRequest("test")));
-
-        Assert.Contains("No IAgentRouter is configured", ex.Message);
-    }
-
-    [Fact]
-    public async Task RouteAsync_NoDescriptors_ThrowsInvalidOperationException()
-    {
-        var fakeRouter = A.Fake<IAgentRouter>();
-        var client = CreateClient(router: fakeRouter);
-        // _options has no descriptors added
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            client.RouteAsync("session-key", new RunRequest("test")));
-
-        Assert.Contains("No agent descriptors are registered", ex.Message);
     }
 
     // ─── SubmitApprovalAsync ─────────────────────────────────────────────────

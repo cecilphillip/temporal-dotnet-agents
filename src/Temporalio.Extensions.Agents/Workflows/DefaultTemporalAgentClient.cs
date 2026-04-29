@@ -19,14 +19,10 @@ internal sealed class DefaultTemporalAgentClient(
     ITemporalClient client,
     TemporalAgentsOptions options,
     string taskQueue,
-    ILogger<DefaultTemporalAgentClient>? logger = null,
-    IAgentRouter? router = null) : ITemporalAgentClient
+    ILogger<DefaultTemporalAgentClient>? logger = null) : ITemporalAgentClient
 {
     private readonly ILogger<DefaultTemporalAgentClient> _logger =
         logger ?? NullLogger<DefaultTemporalAgentClient>.Instance;
-
-    // Cached at construction — the descriptor registry is immutable after AddTemporalAgents completes.
-    private readonly IReadOnlyList<AgentDescriptor> _agentDescriptors = options.GetAgentDescriptors();
 
     /// <inheritdoc/>
     public async Task<AgentResponse> RunAgentAsync(
@@ -121,41 +117,6 @@ internal sealed class DefaultTemporalAgentClient(
             wf => wf.RunAgentFireAndForgetAsync(request),
             new WorkflowSignalOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } })
             .ConfigureAwait(false);
-    }
-
-    // ── GAP 2: Routing ──────────────────────────────────────────────────────
-
-    /// <inheritdoc/>
-    public async Task<AgentResponse> RouteAsync(
-        string sessionKey,
-        RunRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sessionKey);
-        ArgumentNullException.ThrowIfNull(request);
-
-        if (router is null)
-        {
-            throw new InvalidOperationException(
-                "No IAgentRouter is configured. Call SetRouterAgent() on TemporalAgentsOptions to enable LLM routing.");
-        }
-
-        var descriptors = _agentDescriptors;
-        if (descriptors.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "No agent descriptors are registered. Call AddAgentDescriptor() on TemporalAgentsOptions for each routable agent.");
-        }
-
-        var chosenAgentName = await router
-            .RouteAsync(request.Messages, descriptors, cancellationToken)
-            .ConfigureAwait(false);
-
-        var routedSessionId = new TemporalAgentSessionId(chosenAgentName, sessionKey);
-
-        _logger.LogClientRouting(chosenAgentName, routedSessionId.WorkflowId);
-
-        return await RunAgentAsync(routedSessionId, request, cancellationToken).ConfigureAwait(false);
     }
 
     // ── GAP 3: Human-in-the-Loop ────────────────────────────────────────────

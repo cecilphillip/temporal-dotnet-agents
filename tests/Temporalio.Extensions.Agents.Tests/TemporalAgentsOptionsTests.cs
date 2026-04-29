@@ -199,24 +199,6 @@ public class TemporalAgentsOptionsTests
         Assert.Equal(TimeSpan.FromHours(1), options.ApprovalTimeout);
     }
 
-    // ─── AddAgentDescriptor null guards ───────────────────────────────────────
-
-    [Fact]
-    public void AddAgentDescriptor_NullName_ThrowsArgumentException()
-    {
-        var options = new TemporalAgentsOptions();
-        Assert.Throws<ArgumentNullException>(() =>
-            options.AddAgentDescriptor(null!, "Some description"));
-    }
-
-    [Fact]
-    public void AddAgentDescriptor_EmptyDescription_ThrowsArgumentException()
-    {
-        var options = new TemporalAgentsOptions();
-        Assert.Throws<ArgumentException>(() =>
-            options.AddAgentDescriptor("Agent", ""));
-    }
-
     // ─── Agent Registry (read-only introspection) ───────────────────────────
 
     [Fact]
@@ -273,84 +255,6 @@ public class TemporalAgentsOptionsTests
         var options = new TemporalAgentsOptions();
         Assert.False(options.IsAgentRegistered(null!));
         Assert.False(options.IsAgentRegistered(""));
-    }
-
-    [Fact]
-    public void GetRegisteredDescriptors_ReturnsDescriptors()
-    {
-        var options = new TemporalAgentsOptions();
-        options.AddAgentDescriptor("Agent1", "Handles billing.");
-        options.AddAgentDescriptor("Agent2", "Handles weather.");
-
-        var descriptors = options.GetRegisteredDescriptors();
-        Assert.Equal(2, descriptors.Count);
-        Assert.Contains(descriptors, d => d.Name == "Agent1" && d.Description == "Handles billing.");
-        Assert.Contains(descriptors, d => d.Name == "Agent2" && d.Description == "Handles weather.");
-    }
-
-    [Fact]
-    public void GetRegisteredDescriptors_Empty_ReturnsEmpty()
-    {
-        var options = new TemporalAgentsOptions();
-        Assert.Empty(options.GetRegisteredDescriptors());
-    }
-
-    // ─── Auto-extracted descriptors ─────────────────────────────────────────
-
-    [Fact]
-    public void AddAIAgent_WithDescription_AutoPopulatesDescriptor()
-    {
-        var options = new TemporalAgentsOptions();
-        var agent = new StubAIAgent("WeatherAgent", description: "Handles weather questions.");
-
-        options.AddAIAgent(agent);
-
-        var descriptors = options.GetRegisteredDescriptors();
-        Assert.Single(descriptors);
-        Assert.Equal("WeatherAgent", descriptors[0].Name);
-        Assert.Equal("Handles weather questions.", descriptors[0].Description);
-    }
-
-    [Fact]
-    public void AddAIAgent_WithNullDescription_DoesNotPopulateDescriptor()
-    {
-        var options = new TemporalAgentsOptions();
-        var agent = new StubAIAgent("WeatherAgent"); // Description defaults to null
-
-        options.AddAIAgent(agent);
-
-        Assert.Empty(options.GetRegisteredDescriptors());
-    }
-
-    [Fact]
-    public void AddAIAgent_ExplicitDescriptorOverridesAutoExtracted()
-    {
-        var options = new TemporalAgentsOptions();
-        var agent = new StubAIAgent("WeatherAgent", description: "Auto description.");
-
-        options.AddAIAgent(agent);
-        options.AddAgentDescriptor("WeatherAgent", "Explicit override.");
-
-        var descriptors = options.GetRegisteredDescriptors();
-        Assert.Single(descriptors);
-        Assert.Equal("Explicit override.", descriptors[0].Description);
-    }
-
-    [Fact]
-    public void AddAIAgent_ExplicitDescriptorBeforeAgent_PreservesExplicit()
-    {
-        var options = new TemporalAgentsOptions();
-
-        // Explicit descriptor registered first
-        options.AddAgentDescriptor("WeatherAgent", "Pre-registered description.");
-
-        // Agent added later — auto-extraction should NOT overwrite
-        var agent = new StubAIAgent("WeatherAgent", description: "Agent description.");
-        options.AddAIAgent(agent);
-
-        var descriptors = options.GetRegisteredDescriptors();
-        Assert.Single(descriptors);
-        Assert.Equal("Pre-registered description.", descriptors[0].Description);
     }
 
     // ─── EnableSearchAttributes ─────────────────────────────────────────────

@@ -1,8 +1,17 @@
 // MultiAgentRouting sample — demonstrates:
-//   1. LLM-powered routing via SetRouterAgent + ITemporalAgentClient.RouteAsync
+//   1. Workflow-based routing: the routing decision runs inside a Temporal activity,
+//      making it durable, auditable, and visible in workflow event history.
 //   2. Parallel agent execution via TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync
 //   3. OpenTelemetry configured with TracingInterceptor (Temporalio.Extensions.OpenTelemetry)
 //      AND TemporalAgentTelemetry.ActivitySourceName
+//
+// Why workflow-based routing?
+// ───────────────────────────
+// The previous approach used IAgentRouter + RouteAsync, which ran an LLM call outside
+// Temporal. This meant the routing decision was non-durable: a worker crash between
+// routing and dispatch would lose the routing result entirely, and the decision was
+// invisible in workflow history. Workflow-based routing records the routing decision
+// as an activity result in the event log — it is durable, retryable, and fully auditable.
 //
 // Prerequisites
 // ─────────────
@@ -10,7 +19,7 @@
 //   (The dev server starts on localhost:7233 with the "default" namespace.)
 // • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/MultiAgentRouting
 //
-// Run:  dotnet run --project samples/MultiAgentRouting/MultiAgentRouting.csproj
+// Run:  dotnet run --project samples/MAF/MultiAgentRouting/MultiAgentRouting.csproj
 
 using System.ClientModel;
 using Microsoft.Extensions.Configuration;
@@ -24,7 +33,6 @@ using OpenTelemetry;
 using OpenTelemetry.Trace;
 using Temporalio.Client;
 using Temporalio.Extensions.Agents;
-using Temporalio.Extensions.Agents.Workflows;
 using Temporalio.Extensions.Hosting;
 using Temporalio.Extensions.OpenTelemetry;
 
@@ -73,7 +81,6 @@ var weatherAgent = openAiClient
     .GetChatClient(model)
     .AsAIAgent(
         name: "WeatherAgent",
-        description: "Handles questions about weather conditions, forecasts, climate, and meteorology.",
         instructions:
             "You are a weather specialist. Answer questions about weather conditions, forecasts, " +
             "climate patterns, and meteorological phenomena. Keep responses concise and informative.");
@@ -82,7 +89,6 @@ var billingAgent = openAiClient
     .GetChatClient(model)
     .AsAIAgent(
         name: "BillingAgent",
-        description: "Handles questions about invoices, charges, payment methods, refunds, and account billing.",
         instructions:
             "You are a billing and payments specialist. Answer questions about invoices, charges, " +
             "payment methods, refunds, and account billing. Keep responses concise and informative.");
@@ -91,25 +97,12 @@ var techSupportAgent = openAiClient
     .GetChatClient(model)
     .AsAIAgent(
         name: "TechSupportAgent",
-        description: "Handles questions about software issues, hardware problems, troubleshooting, and technical configurations.",
         instructions:
             "You are a technical support specialist. Answer questions about software issues, " +
             "hardware problems, troubleshooting steps, and technical configurations. " +
             "Keep responses concise and informative.");
 
-// ── Step 5: Create the router agent ──────────────────────────────────────────
-// The router is a lightweight LLM agent whose sole job is to classify each incoming
-// request and respond with exactly the name of the best-matching specialist agent.
-var routerAgent = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "__router__",
-        instructions:
-            "You are a routing agent. Given a user query, respond with ONLY the name of the " +
-            "most appropriate specialist agent from the available options. Do not include any " +
-            "explanation or punctuation — only the agent name.");
-
-// ── Step 6: Register ITemporalClient with TracingInterceptor ─────────────────
+// ── Step 5: Register ITemporalClient with TracingInterceptor ─────────────────
 // The TracingInterceptor propagates OTel context across Temporal calls.
 builder.Services.AddTemporalClient(opts =>
 {
@@ -118,74 +111,78 @@ builder.Services.AddTemporalClient(opts =>
     opts.Interceptors = new[] { new TracingInterceptor() };
 });
 
-// ── Step 7: Register the hosted worker with all agents ────────────────────────
+// ── Step 6: Register the hosted worker with all agents ────────────────────────
 builder.Services
     .AddHostedTemporalWorker("agents")
     .AddTemporalAgents(opts =>
     {
-        // Register the three specialist agents — descriptions are auto-extracted
-        // from AsAIAgent(description: ...) into the descriptor registry for routing.
         opts.AddAIAgent(weatherAgent, timeToLive: TimeSpan.FromHours(1));
         opts.AddAIAgent(billingAgent, timeToLive: TimeSpan.FromHours(1));
         opts.AddAIAgent(techSupportAgent, timeToLive: TimeSpan.FromHours(1));
-
-        // SetRouterAgent registers an AIAgentRouter that automatically picks the right agent
-        opts.SetRouterAgent(routerAgent);
     })
-    .AddWorkflow<RoutingWorkflow>();
+    .AddWorkflow<RoutingWorkflow>()
+    .AddWorkflow<ParallelAgentWorkflow>()
+    .AddSingletonActivities<RoutingActivities>();
 
-// ── Step 8: Start the host ────────────────────────────────────────────────────
+// ── Step 7: Start the host ────────────────────────────────────────────────────
 var host = builder.Build();
 await host.StartAsync();
 
 Console.WriteLine("Worker started.\n");
 
-// ── Step 9: Demonstrate LLM-powered routing ───────────────────────────────────
-// Resolve ITemporalAgentClient from DI and call RouteAsync.
-// The router automatically picks the best specialist for each question.
-var agentClient = host.Services.GetRequiredService<ITemporalAgentClient>();
+// ── Step 8: Demonstrate workflow-based routing ────────────────────────────────
+// Each question is dispatched to a RoutingWorkflow. The routing decision runs
+// inside a RoutingActivities.ClassifyRequest activity — it is recorded in the
+// workflow event history and is fully durable.
+var client = host.Services.GetRequiredService<ITemporalClient>();
 
-Console.WriteLine("── Demonstrating LLM-powered routing ───────────────────────");
+Console.WriteLine("── Demonstrating workflow-based routing ────────────────────");
 
 var routingExamples = new[]
 {
-    (Key: "session-weather-001", Question: "Will it rain in Seattle tomorrow?"),
-    (Key: "session-billing-001", Question: "Why was I charged twice on my last invoice?"),
-    (Key: "session-tech-001",    Question: "My application keeps crashing with a null reference exception."),
+    (Id: "session-weather-001", Question: "Will it rain in Seattle tomorrow?"),
+    (Id: "session-billing-001", Question: "Why was I charged twice on my last invoice?"),
+    (Id: "session-tech-001",    Question: "My application keeps crashing with a null reference exception."),
 };
 
-foreach (var (sessionKey, question) in routingExamples)
+foreach (var (sessionId, question) in routingExamples)
 {
     Console.WriteLine($"\nUser: {question}");
-    var routedResponse = await agentClient.RouteAsync(
-        sessionKey,
-        new RunRequest(question));
-    Console.WriteLine($"Agent: {routedResponse.Text}");
+
+    var workflowId = $"routing-{sessionId}-{Guid.NewGuid():N}";
+    var handle = await client.StartWorkflowAsync(
+        (RoutingWorkflow wf) => wf.RunAsync(question),
+        new WorkflowOptions { Id = workflowId, TaskQueue = "agents" });
+
+    try
+    {
+        var result = await handle.GetResultAsync();
+        Console.WriteLine($"Agent: {result}");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Workflow failed: {ex.Message}");
+    }
 }
 
-// ── Step 10: Demonstrate parallel execution via workflow ──────────────────────
+// ── Step 9: Demonstrate parallel execution ────────────────────────────────────
 Console.WriteLine("\n── Demonstrating parallel agent execution ──────────────────");
 
 var parallelQuery = "Briefly introduce yourself and what you can help with.";
 Console.WriteLine($"\nFan-out query (sent to all 3 agents simultaneously): \"{parallelQuery}\"\n");
 
-var client = host.Services.GetRequiredService<ITemporalClient>();
-var workflowId = $"multi-agent-routing-{Guid.NewGuid():N}";
+var parallelWorkflowId = $"multi-agent-parallel-{Guid.NewGuid():N}";
 
-var handle = await client.StartWorkflowAsync(
-    (RoutingWorkflow wf) => wf.RunAsync(parallelQuery),
-    new WorkflowOptions
-    {
-        Id = workflowId,
-        TaskQueue = "agents"
-    });
+var parallelHandle = await client.StartWorkflowAsync(
+    (ParallelAgentWorkflow wf) => wf.RunAsync(parallelQuery),
+    new WorkflowOptions { Id = parallelWorkflowId, TaskQueue = "agents" });
 
-Console.WriteLine($"Parallel workflow started: {workflowId}");
+Console.WriteLine($"Parallel workflow started: {parallelWorkflowId}");
 
 string[] parallelResults;
 try
 {
-    parallelResults = await handle.GetResultAsync();
+    parallelResults = await parallelHandle.GetResultAsync();
 }
 catch (Exception ex)
 {
@@ -201,7 +198,7 @@ for (var i = 0; i < parallelResults.Length; i++)
     Console.WriteLine($"\n[{agentNames[i]}]: {parallelResults[i]}");
 }
 
-// ── Step 11: Graceful shutdown ────────────────────────────────────────────────
+// ── Step 10: Graceful shutdown ────────────────────────────────────────────────
 // TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException on shutdown.
 try { await host.StopAsync(); } catch (OperationCanceledException) { }
 tracerProvider?.ForceFlush();

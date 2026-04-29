@@ -19,12 +19,7 @@ public sealed class TemporalAgentsOptions
     private readonly Dictionary<string, TimeSpan?> _agentTimeToLive =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private readonly Dictionary<string, string> _agentDescriptors =
-        new(StringComparer.OrdinalIgnoreCase);
-
     private readonly List<ScheduleAgentRegistration> _scheduledRuns = [];
-
-    private AIAgent? _routerAgent;
 
     internal TemporalAgentsOptions()
     {
@@ -155,13 +150,6 @@ public sealed class TemporalAgentsOptions
             _agentTimeToLive[agent.Name] = timeToLive;
         }
 
-        // Auto-populate descriptor from agent metadata if available.
-        // Explicit AddAgentDescriptor() calls still override this.
-        if (!string.IsNullOrWhiteSpace(agent.Description) && !_agentDescriptors.ContainsKey(agent.Name))
-        {
-            _agentDescriptors[agent.Name] = agent.Description;
-        }
-
         return this;
     }
 
@@ -229,37 +217,6 @@ public sealed class TemporalAgentsOptions
         return AddAIAgentFactory(name, sp => asyncFactory(sp).GetAwaiter().GetResult(), timeToLive);
     }
 
-    // ── Routing support (GAP 2) ──────────────────────────────────────────────
-
-    /// <summary>
-    /// Registers a human-readable description for the named agent, used by
-    /// <see cref="IAgentRouter"/> to build routing prompts.
-    /// Multiple agents should each have a descriptor for routing to work correctly.
-    /// </summary>
-    public TemporalAgentsOptions AddAgentDescriptor(string name, string description)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ArgumentException.ThrowIfNullOrWhiteSpace(description);
-        _agentDescriptors[name] = description;
-        return this;
-    }
-
-    /// <summary>
-    /// Sets the <see cref="AIAgent"/> used by <see cref="AIAgentRouter"/> to classify
-    /// incoming messages. When set, <see cref="AIAgentRouter"/> is automatically registered
-    /// in the DI container by <c>AddTemporalAgents()</c>.
-    /// </summary>
-    /// <remarks>
-    /// The router agent should be a lightweight chat agent whose system prompt instructs it
-    /// to respond with only the target agent name. Its output is consumed programmatically.
-    /// </remarks>
-    public TemporalAgentsOptions SetRouterAgent(AIAgent agent)
-    {
-        ArgumentNullException.ThrowIfNull(agent);
-        _routerAgent = agent;
-        return this;
-    }
-
     /// <summary>
     /// Registers a scheduled agent run that is created with Temporal at worker startup.
     /// </summary>
@@ -306,12 +263,6 @@ public sealed class TemporalAgentsOptions
         _agentFactories.Keys.ToList().AsReadOnly();
 
     /// <summary>
-    /// Returns all registered <see cref="AgentDescriptor"/>s (used by routing).
-    /// </summary>
-    public IReadOnlyList<AgentDescriptor> GetRegisteredDescriptors() =>
-        GetAgentDescriptors();
-
-    /// <summary>
     /// Returns <see langword="true"/> if an agent with the given name is registered.
     /// The check is case-insensitive.
     /// </summary>
@@ -325,13 +276,4 @@ public sealed class TemporalAgentsOptions
     /// <summary>Gets the TTL for a specific agent, falling back to <see cref="DefaultTimeToLive"/>.</summary>
     internal TimeSpan? GetTimeToLive(string agentName) =>
         _agentTimeToLive.GetValueOrDefault(agentName, DefaultTimeToLive);
-
-    /// <summary>Gets all registered agent descriptors for use by <see cref="IAgentRouter"/>.</summary>
-    internal IReadOnlyList<AgentDescriptor> GetAgentDescriptors() =>
-        _agentDescriptors
-            .Select(kv => new AgentDescriptor(kv.Key, kv.Value))
-            .ToList();
-
-    /// <summary>Gets the router agent, or <see langword="null"/> if not configured.</summary>
-    internal AIAgent? GetRouterAgent() => _routerAgent;
 }

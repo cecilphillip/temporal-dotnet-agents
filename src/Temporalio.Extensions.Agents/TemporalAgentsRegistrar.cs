@@ -22,7 +22,7 @@ internal static class TemporalAgentsRegistrar
 {
     /// <summary>
     /// Performs DI registration for temporal agents: options, factory dictionary,
-    /// router, agent client, keyed proxies, workflow, activities, and DurableAIDataConverter
+    /// agent client, keyed proxies, workflow, activities, and DurableAIDataConverter
     /// auto-wiring.
     /// </summary>
     /// <param name="services">The service collection (always required).</param>
@@ -47,13 +47,6 @@ internal static class TemporalAgentsRegistrar
         // Options singleton — consumed by DefaultTemporalAgentClient for per-agent TTL resolution.
         services.TryAddSingleton(agentsOptions);
 
-        // Register AIAgentRouter when a router agent has been configured.
-        if (agentsOptions.GetRouterAgent() is { } routerAgent)
-        {
-            services.TryAddSingleton<IAgentRouter>(sp =>
-                new AIAgentRouter(routerAgent, sp.GetService<ILogger<AIAgentRouter>>()));
-        }
-
         // ITemporalAgentClient — uses WorkflowUpdate for synchronous request/response semantics.
         // TryAddSingleton allows callers to pre-register a custom implementation (e.g. a test double).
         services.TryAddSingleton<ITemporalAgentClient>(sp =>
@@ -61,8 +54,7 @@ internal static class TemporalAgentsRegistrar
                 sp.GetRequiredService<ITemporalClient>(),
                 agentsOptions,
                 taskQueue,
-                sp.GetService<ILogger<DefaultTemporalAgentClient>>(),
-                sp.GetService<IAgentRouter>()));
+                sp.GetService<ILogger<DefaultTemporalAgentClient>>()));
 
         // Register a keyed AIAgent proxy singleton per declared agent name.
         foreach (var (name, _) in agentsOptions.GetAgentFactories())

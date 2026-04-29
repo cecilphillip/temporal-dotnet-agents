@@ -30,28 +30,6 @@ public interface ITemporalAgentClient
         RunRequest request,
         CancellationToken cancellationToken = default);
 
-    // ── Routing (GAP 2) ──────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Uses the registered <see cref="IAgentRouter"/> to classify the request messages,
-    /// picks the best-matching registered agent, and runs it — all in one call.
-    /// </summary>
-    /// <param name="sessionKey">
-    /// The session key used to build the routed session ID.
-    /// A <see cref="TemporalAgentSessionId"/> is constructed from the chosen agent name
-    /// and this key.
-    /// </param>
-    /// <param name="request">The request to dispatch to the chosen agent.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The response from the chosen agent.</returns>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when no <see cref="IAgentRouter"/> is registered or no descriptors exist.
-    /// </exception>
-    Task<AgentResponse> RouteAsync(
-        string sessionKey,
-        RunRequest request,
-        CancellationToken cancellationToken = default);
-
     // ── Human-in-the-Loop (GAP 3) ────────────────────────────────────────────
 
     /// <summary>

@@ -11,20 +11,33 @@ namespace WorkflowRouting;
 public class RoutingActivities(TemporalAgentsOptions options)
 {
     /// <summary>
-    /// Returns all registered agent descriptors (name + description) as a serializable array.
+    /// Returns information about all registered agents.
     /// The workflow uses these to build a context-aware routing prompt for the Classifier.
     /// </summary>
     /// <remarks>
     /// This is safe inside an activity because the result is recorded in Temporal's event
     /// history. On replay, the cached list is returned — the registry is never re-queried.
     /// Even if agents are added or removed between the original execution and a replay,
-    /// the workflow sees the same descriptor list it saw originally.
+    /// the workflow sees the same agent list it saw originally.
     /// </remarks>
     [Activity("WorkflowRouting.GetAvailableAgents")]
     public AgentInfo[] GetAvailableAgents()
     {
-        return options.GetRegisteredDescriptors()
-            .Select(d => new AgentInfo(d.Name, d.Description))
+        // Map registered agent names to their descriptions.
+        // Descriptions are declared here alongside the names — they are not stored in
+        // TemporalAgentsOptions because routing metadata is a concern of the routing
+        // activity, not the core agent registry.
+        var descriptions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["OrdersAgent"]     = "Handles order tracking, returns, shipping status, and purchase questions.",
+            ["TechSupportAgent"] = "Handles technical issues, app crashes, error messages, and troubleshooting.",
+            ["GeneralAgent"]    = "Handles greetings, general inquiries, and anything else.",
+        };
+
+        return options.GetRegisteredAgentNames()
+            .Select(name => new AgentInfo(
+                name,
+                descriptions.GetValueOrDefault(name, $"Agent: {name}")))
             .ToArray();
     }
 
