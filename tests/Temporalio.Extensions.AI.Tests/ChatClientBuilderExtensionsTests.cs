@@ -29,12 +29,22 @@ public class ChatClientBuilderExtensionsTests
     }
 
     [Fact]
-    public void UseDurableExecution_WorksWithNullConfigure()
+    public void UseDurableExecution_WorksWithNullConfigure_ThrowsWithoutTaskQueue()
+    {
+        // UseDurableExecution calls Validate(), which requires TaskQueue.
+        var innerClient = A.Fake<IChatClient>();
+        var builder = new ChatClientBuilder(innerClient);
+
+        Assert.Throws<InvalidOperationException>(() => builder.UseDurableExecution());
+    }
+
+    [Fact]
+    public void UseDurableExecution_WithTaskQueue_Succeeds()
     {
         var innerClient = A.Fake<IChatClient>();
         var builder = new ChatClientBuilder(innerClient);
 
-        builder.UseDurableExecution();
+        builder.UseDurableExecution(opts => opts.TaskQueue = "test-queue");
         var pipeline = builder.Build();
 
         var durableOptions = pipeline.GetService<DurableExecutionOptions>();

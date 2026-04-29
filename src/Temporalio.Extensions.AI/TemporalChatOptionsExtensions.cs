@@ -26,7 +26,7 @@ public static class TemporalChatOptionsExtensions
     public const string HeartbeatTimeoutKey = "temporal.heartbeat.timeout";
 
     /// <summary>Key for per-request keyed DI service key for <see cref="IChatClient"/> resolution.</summary>
-    public const string ChatClientKeyKey = "temporal.chatClientKey";
+    public const string ChatClientKeySettingKey = "temporal.chatClientKey";
 
     /// <summary>
     /// Sets a per-request activity timeout that overrides <see cref="DurableExecutionOptions.ActivityTimeout"/>.
@@ -84,9 +84,8 @@ public static class TemporalChatOptionsExtensions
     /// </remarks>
     public static ChatOptions WithChatClientKey(this ChatOptions options, string key)
     {
-        if (string.IsNullOrEmpty(key))
-            throw new ArgumentException("Key must not be null or empty.", nameof(key));
-        (options.AdditionalProperties ??= new())[ChatClientKeyKey] = key;
+        ArgumentException.ThrowIfNullOrEmpty(key, nameof(key));
+        (options.AdditionalProperties ??= new())[ChatClientKeySettingKey] = key;
         return options;
     }
 
@@ -122,7 +121,7 @@ public static class TemporalChatOptionsExtensions
     /// Tries to read a per-request chat client key from <see cref="ChatOptions.AdditionalProperties"/>.
     /// </summary>
     internal static string? GetChatClientKey(this ChatOptions? options) =>
-        options?.AdditionalProperties?.TryGetValue(ChatClientKeyKey, out var v) == true
+        options?.AdditionalProperties?.TryGetValue(ChatClientKeySettingKey, out var v) == true
             ? v as string
             : null;
 

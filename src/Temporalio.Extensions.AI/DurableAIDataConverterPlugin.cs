@@ -17,10 +17,10 @@ internal sealed class DurableAIDataConverterPlugin : ITemporalClientPlugin
     public DurableAIDataConverterPlugin(ILogger? logger = null) => _logger = logger;
 
     /// <summary>
-    /// The plugin name. Exposed as a constant so other registrars can dedupe
-    /// without hard-coding the string in multiple places.
+    /// The plugin name. Exposed as a constant so other registrars and users building
+    /// custom plugin-list dedup logic can reference it without hard-coding the string.
     /// </summary>
-    internal const string PluginName = "Temporalio.Extensions.AI.DataConverter";
+    public const string PluginName = "Temporalio.Extensions.AI.DataConverter";
 
     public string Name => PluginName;
 

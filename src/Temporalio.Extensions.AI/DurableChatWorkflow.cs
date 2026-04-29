@@ -21,9 +21,10 @@ internal sealed class DurableChatWorkflow : DurableChatWorkflowBase<DurableChatO
     [WorkflowUpdateValidator(nameof(ChatAsync))]
     public void ValidateChat(DurableChatInput input)
     {
+        ArgumentNullException.ThrowIfNull(input);
         if (IsShutdownRequested)
             throw new InvalidOperationException("Session has been shut down.");
-        if (input?.Messages is null || input.Messages.Count == 0)
+        if (input.Messages is null || input.Messages.Count == 0)
             throw new ArgumentException("At least one message is required.");
     }
 

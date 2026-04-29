@@ -226,7 +226,7 @@ public abstract class DurableChatWorkflowBase<TOutput>
     public Task<DurableApprovalDecision> RequestApprovalAsync(DurableApprovalRequest request) =>
         _approval.RequestApprovalAsync(
             request,
-            approvalTimeout: Input?.ApprovalTimeout ?? TimeSpan.FromDays(7),
+            approvalTimeout: Input!.ApprovalTimeout,
             onRequested: req => Workflow.Logger.LogInformation(
                 "[{ConversationId}] Approval requested (RequestId: {RequestId}, Description: {Description})",
                 Workflow.Info.WorkflowId, req.RequestId, req.Description ?? req.RequestId),

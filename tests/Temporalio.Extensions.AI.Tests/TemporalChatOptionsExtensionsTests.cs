@@ -115,8 +115,8 @@ public class TemporalChatOptionsExtensionsTests
         options.WithChatClientKey("my-client");
 
         Assert.NotNull(options.AdditionalProperties);
-        Assert.True(options.AdditionalProperties.ContainsKey(TemporalChatOptionsExtensions.ChatClientKeyKey));
-        Assert.Equal("my-client", options.AdditionalProperties[TemporalChatOptionsExtensions.ChatClientKeyKey]);
+        Assert.True(options.AdditionalProperties.ContainsKey(TemporalChatOptionsExtensions.ChatClientKeySettingKey));
+        Assert.Equal("my-client", options.AdditionalProperties[TemporalChatOptionsExtensions.ChatClientKeySettingKey]);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class TemporalChatOptionsExtensionsTests
     public void WithChatClientKey_ThrowsOnNullKey()
     {
         var options = new ChatOptions();
-        Assert.Throws<ArgumentException>(() => options.WithChatClientKey(null!));
+        Assert.Throws<ArgumentNullException>(() => options.WithChatClientKey(null!));
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public class TemporalChatOptionsExtensionsTests
         await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], options);
 
         Assert.NotNull(captured?.AdditionalProperties);
-        Assert.False(captured!.AdditionalProperties!.ContainsKey(TemporalChatOptionsExtensions.ChatClientKeyKey));
+        Assert.False(captured!.AdditionalProperties!.ContainsKey(TemporalChatOptionsExtensions.ChatClientKeySettingKey));
         Assert.False(captured.AdditionalProperties.ContainsKey(TemporalChatOptionsExtensions.ActivityTimeoutKey));
         Assert.True(captured.AdditionalProperties.ContainsKey("user.custom"));
     }

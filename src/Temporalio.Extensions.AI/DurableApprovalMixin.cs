@@ -96,9 +96,6 @@ internal sealed class DurableApprovalMixin
 
         if (!conditionMet)
         {
-            _pendingApproval = null;
-            _approvalDecision = null;
-
             var timedOutDecision = new DurableApprovalDecision
             {
                 RequestId = request.RequestId,
@@ -106,15 +103,17 @@ internal sealed class DurableApprovalMixin
                 Reason = $"Approval timed out after {approvalTimeout.TotalHours:F0} hours with no human response.",
             };
 
-            onResolved?.Invoke(timedOutDecision);
+            onResolved?.Invoke(timedOutDecision);   // callback first
+            _pendingApproval = null;                // then clear state
+            _approvalDecision = null;
             return timedOutDecision;
         }
 
         var decision = _approvalDecision!;
-        _pendingApproval = null;
-        _approvalDecision = null;
 
-        onResolved?.Invoke(decision);
+        onResolved?.Invoke(decision);   // callback first
+        _pendingApproval = null;        // then clear state
+        _approvalDecision = null;
         return decision;
     }
 

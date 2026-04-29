@@ -136,15 +136,6 @@ public sealed class DurableAIPlugin : ITemporalWorkerPlugin
         return continuation(replayer, cancellationToken);
     }
 
-    private static bool ContainsWorkflow(IList<WorkflowDefinition> workflows, Type type)
-    {
-        for (var i = 0; i < workflows.Count; i++)
-        {
-            if (workflows[i].Type == type)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
+    private static bool ContainsWorkflow(IList<WorkflowDefinition> workflows, Type type) =>
+        workflows.Any(w => w.Type == type);
 }

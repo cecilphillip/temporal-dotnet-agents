@@ -149,7 +149,7 @@ public class DurableChatClientTests
 
         // ChatClientKey must not leak to the inner client.
         Assert.NotNull(capturedOptions?.AdditionalProperties);
-        Assert.False(capturedOptions!.AdditionalProperties!.ContainsKey(TemporalChatOptionsExtensions.ChatClientKeyKey));
+        Assert.False(capturedOptions!.AdditionalProperties!.ContainsKey(TemporalChatOptionsExtensions.ChatClientKeySettingKey));
         // Non-Temporal key must be preserved.
         Assert.True(capturedOptions.AdditionalProperties.ContainsKey("custom-key"));
         Assert.Equal("custom-value", capturedOptions.AdditionalProperties["custom-key"]);
