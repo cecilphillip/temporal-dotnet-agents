@@ -237,4 +237,33 @@ public class TemporalWorkerBuilderExtensionsTests
         var workerOptions = provider.GetRequiredService<IOptions<TemporalWorkerServiceOptions>>();
         Assert.NotNull(workerOptions);
     }
+
+#pragma warning disable TA001
+    [Fact]
+    public void TemporalAgentsPlugin_NameMatchesPluginNameConstant()
+    {
+        var plugin = new TemporalAgentsPlugin();
+        Assert.Equal(TemporalAgentsPlugin.PluginName, plugin.Name);
+    }
+
+    [Fact]
+    public void AddWorkerPlugin_RegistersEquivalentServicesToAddTemporalAgents()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var fakeClient = A.Fake<ITemporalClient>();
+        services.AddSingleton(fakeClient);
+        var builder = services.AddHostedTemporalWorker("test-task-queue");
+        var plugin = new TemporalAgentsPlugin(opts => opts.AddAIAgent(new StubAIAgent("plugin-agent")));
+
+        // Act
+        builder.AddWorkerPlugin(plugin);
+
+        // Assert — ITemporalAgentClient should be registered after AddWorkerPlugin
+        var provider = services.BuildServiceProvider();
+        var client = provider.GetService<ITemporalAgentClient>();
+        Assert.NotNull(client);
+        Assert.IsType<DefaultTemporalAgentClient>(client);
+    }
+#pragma warning restore TA001
 }
