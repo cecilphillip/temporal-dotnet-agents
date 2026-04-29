@@ -13,6 +13,11 @@ namespace Temporalio.Extensions.Agents;
 /// Delegates to <see cref="ITemporalAgentClient"/> which communicates with <see cref="AgentWorkflow"/>
 /// via Temporal workflow updates — no polling needed.
 /// </summary>
+/// <remarks>
+/// Use from external/host code (API servers, CLIs, console apps) to interact with
+/// a Temporal-hosted agent. For workflow-internal sub-agent calls, use
+/// <see cref="TemporalAIAgent"/> via <see cref="TemporalWorkflowExtensions.GetAgent"/>.
+/// </remarks>
 internal class TemporalAIAgentProxy(
     string name,
     ITemporalAgentClient agentClient,

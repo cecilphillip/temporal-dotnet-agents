@@ -61,6 +61,12 @@ public sealed class TemporalAgentSession : AgentSession
         TemporalAgentSessionId sessionId,
         JsonElement? serializedStateBag)
     {
+        // Note: a JsonElement default-initialized in C# has ValueKind == Undefined,
+        // whereas an explicit JSON null has ValueKind == Null. After round-tripping
+        // through Temporal's payload converter, an absent bag may surface as either
+        // a C# null on the JsonElement? wrapper or as a JsonElement whose ValueKind
+        // is Undefined or Null. The pattern below covers all cases by treating
+        // anything other than a real value as "no bag" and returning a fresh session.
         if (serializedStateBag is { ValueKind: not JsonValueKind.Undefined and not JsonValueKind.Null } bagEl)
         {
             return new TemporalAgentSession(sessionId, AgentSessionStateBag.Deserialize(bagEl));

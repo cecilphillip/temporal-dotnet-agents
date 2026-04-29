@@ -15,6 +15,12 @@ namespace Temporalio.Extensions.Agents;
 /// <see cref="Workflow.ExecuteActivityAsync{TActivityInstance, TResult}"/>.
 /// Maintains conversation history as workflow state (replayed from event history).
 /// </summary>
+/// <remarks>
+/// Use this type only from inside a Temporal workflow (e.g., via
+/// <see cref="TemporalWorkflowExtensions.GetAgent"/>). For external/host code
+/// (API servers, CLIs, console apps), resolve a Temporal agent proxy via
+/// <see cref="ServiceCollectionExtensions.GetTemporalAgentProxy"/>.
+/// </remarks>
 public sealed class TemporalAIAgent : AIAgent
 {
     private readonly string _agentName;

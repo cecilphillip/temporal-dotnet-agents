@@ -11,6 +11,10 @@ namespace Temporalio.Extensions.Agents;
 /// Wraps the real <see cref="AIAgent"/> inside a Temporal activity, applying request-specific
 /// settings (response format, tool filtering). Equivalent to <c>EntityAgentWrapper</c>.
 /// </summary>
+/// <remarks>
+/// Internal adapter used inside <see cref="AgentActivities.ExecuteAgentAsync"/>.
+/// Not part of the public contract; do not construct directly.
+/// </remarks>
 internal sealed class AgentWorkflowWrapper(
     AIAgent innerAgent,
     RunRequest runRequest,
