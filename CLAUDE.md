@@ -297,12 +297,42 @@ Each middleware class has an `internal static BuildActivitySummary(...)` helper.
 
 ### 1. Registration API
 
+Two equivalent paths register the agent workflow, activities, proxies, and `DurableAIDataConverter` auto-wiring. They produce identical DI state — pick whichever fits your composition style.
+
 ```csharp
+// Path A — DI extension (primary, recommended)
 services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .AddTemporalAgents(opts => opts.AddAIAgent(agent));
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddAIAgent(agent);
+        opts.EnableSearchAttributes = true;  // opt in to AgentName / SessionCreatedAt / TurnCount
+    });
+
+// Path B — Worker plugin ([Experimental("TA001")])
+#pragma warning disable TA001
+services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
+    .AddWorkerPlugin(new TemporalAgentsPlugin(opts =>
+    {
+        opts.AddAIAgent(agent);
+        opts.EnableSearchAttributes = true;
+    }));
+#pragma warning restore TA001
 ```
 
+`TemporalAgentsPlugin : ITemporalWorkerPlugin`. Constructors: `()`, `(Action<TemporalAgentsOptions>)`. Gated by `[Experimental("TA001")]`. Mixing `AddTemporalAgents()` and `AddWorkerPlugin(new TemporalAgentsPlugin())` on the same builder is idempotent.
+
 Composes with other worker configuration (e.g., `.ConfigureOptions(opts => opts.MaxConcurrentActivities = 20)`).
+
+#### New configuration knobs (since last release)
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `EnableSearchAttributes` | `bool` | `false` | Opt in to upsert `AgentName`, `SessionCreatedAt`, `TurnCount` on each run |
+| `MaxHistorySize` | `int?` | `null` | Maximum number of history entries before triggering continue-as-new |
+| `HistoryReducer` | `IHistoryReducer?` | `null` | Custom strategy for trimming history at continue-as-new boundaries |
+| `RetryPolicy` | `RetryPolicy?` | `null` | Override the default Temporal retry policy for agent activities |
+
+`EnableSearchAttributes = false` is the default and is a **breaking change** from the previous release — workflows that relied on search attributes being upserted unconditionally must now set this flag.
 
 ---
 
@@ -479,7 +509,7 @@ When a worker crashes:
 
 ### Integration Tests (58 total — 51 Agents + 7 AI)
 - Both test suites use `WorkflowEnvironment.StartLocalAsync()` (embedded server — no external process needed)
-- Agents tests use `TestEnvironmentHelper.StartLocalAsync()`, a thin wrapper that passes `--search-attribute` CLI args to pre-register the three custom search attributes (`AgentName`, `SessionCreatedAt`, `TurnCount`) required by `AgentWorkflow.UpsertTypedSearchAttributes`. Without pre-registration, the workflow fails with an opaque "unexpected workflow task failure" at runtime.
+- Agents tests use `TestEnvironmentHelper.StartLocalAsync()`, a thin wrapper that passes `--search-attribute` CLI args to pre-register the three custom search attributes (`AgentName`, `SessionCreatedAt`, `TurnCount`). This pre-registration is only required when `EnableSearchAttributes = true` — if your test fixture leaves search attributes disabled (the default), bare `WorkflowEnvironment.StartLocalAsync()` works fine for Agents tests too.
 - AI tests use a bare `WorkflowEnvironment.StartLocalAsync()` — `DurableChatWorkflow` uses no custom search attributes.
 - Location: `tests/Temporalio.Extensions.Agents.IntegrationTests/` and `tests/Temporalio.Extensions.AI.IntegrationTests/`
 
@@ -591,7 +621,7 @@ just test-filter "FullyQualifiedName~Router"  # Run tests matching a filter expr
 ```
 
 > Both integration test suites use the embedded Temporal server and require no external process.
-> Agents tests use `TestEnvironmentHelper.StartLocalAsync()` to pre-register custom search attributes.
+> Agents tests use `TestEnvironmentHelper.StartLocalAsync()` to pre-register custom search attributes — only necessary when `EnableSearchAttributes = true`.
 
 ### Packaging
 
@@ -736,6 +766,8 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 | "Activity timeout" | Increase `ActivityStartToCloseTimeout` — especially for HITL (needs human review time) |
 | OTel spans missing | Ensure all 4 `ActivitySource` names are registered with the tracer provider |
 | "Worker won't start" | Verify `temporal server start-dev` is running on `localhost:7233` |
+| Search attributes not appearing in UI | Set `opts.EnableSearchAttributes = true` — upsert is opt-in (default: `false`); also pre-register the attributes on production clusters |
+| "Unexpected workflow task failure" in integration tests | Set `EnableSearchAttributes = true` in the fixture AND use `TestEnvironmentHelper.StartLocalAsync()` to pre-register the attributes; or leave search attributes disabled |
 
 ---
 

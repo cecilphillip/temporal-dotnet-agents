@@ -28,7 +28,7 @@ Key benefits over in-memory agent frameworks:
 - MCP tool integration via async agent factory
 - External memory with `AIContextProvider` and `AgentSessionStateBag` persistence
 - Streaming responses via `IAgentResponseHandler`
-- OpenTelemetry distributed tracing (two-layer span hierarchy + search attributes)
+- OpenTelemetry distributed tracing (two-layer span hierarchy; search attributes opt-in via `EnableSearchAttributes`)
 - Plugin composition — `.AddWorkerPlugin()` / `.AddClientPlugin()` available via the `Temporalio.Extensions.AI` dependency (same worker builder, chains after `.AddTemporalAgents()`)
 
 ## How It Works
@@ -68,6 +68,8 @@ dotnet add package Temporalio.Extensions.Agents
 
 ### 1. Register an Agent
 
+Two equivalent entry points register the agent workflow, activities, proxies, and `DurableAIDataConverter` auto-wiring:
+
 ```csharp
 using Microsoft.Agents.AI;
 using Temporalio.Extensions.Agents;
@@ -80,12 +82,25 @@ var chatAgent = new ChatClientAgent(chatClient, "MyAgent")
     Instructions = "You are a helpful assistant."
 };
 
+// Path A — DI extension (primary, recommended)
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
         opts.AddAIAgent(chatAgent, timeToLive: TimeSpan.FromHours(24));
+        opts.EnableSearchAttributes = true;  // opt in to search attribute upserts
     });
+
+// Path B — Worker plugin ([Experimental("TA001")])
+#pragma warning disable TA001
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
+    .AddWorkerPlugin(new TemporalAgentsPlugin(opts =>
+    {
+        opts.AddAIAgent(chatAgent, timeToLive: TimeSpan.FromHours(24));
+        opts.EnableSearchAttributes = true;
+    }));
+#pragma warning restore TA001
 ```
 
 ### 2. Send a Message
@@ -110,6 +125,19 @@ temporal server start-dev --namespace default
 # Run a sample
 dotnet run --project samples/MAF/BasicAgent/BasicAgent.csproj
 ```
+
+## Configuration
+
+Key options on `TemporalAgentsOptions` (accessed via the `AddTemporalAgents(opts => ...)` delegate):
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `EnableSearchAttributes` | `bool` | `false` | Opt in to upsert `AgentName`, `SessionCreatedAt`, `TurnCount` on each workflow run |
+| `MaxHistorySize` | `int?` | `null` | Cap on history entries before triggering continue-as-new |
+| `HistoryReducer` | `IHistoryReducer?` | `null` | Custom strategy for trimming history at continue-as-new boundaries |
+| `RetryPolicy` | `RetryPolicy?` | `null` | Override the default retry policy for agent activities |
+
+`EnableSearchAttributes` defaults to `false`. Enabling it requires the three search attributes to be pre-registered on the Temporal server. With `temporal server start-dev` this happens automatically; on production clusters run the CLI commands in the [Observability guide](../../docs/how-to/MAF/observability.md#search-attributes).
 
 ## Samples
 

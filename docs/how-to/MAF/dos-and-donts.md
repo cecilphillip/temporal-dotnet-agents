@@ -245,7 +245,15 @@ builder.AddSource(
 
 **Why:** Each source emits a different layer of the trace hierarchy. Missing one creates gaps in your distributed traces. See [Observability](./observability.md) for the full setup.
 
-### Do register search attributes on production clusters
+### Do opt in to search attributes when you need them
+
+Search attribute upserts are disabled by default. Set `EnableSearchAttributes = true` in `TemporalAgentsOptions` to enable them:
+
+```csharp
+opts.EnableSearchAttributes = true;
+```
+
+When enabled, register the three attributes on production clusters before starting the worker:
 
 ```bash
 temporal operator search-attribute create --name AgentName --type Keyword
@@ -253,7 +261,7 @@ temporal operator search-attribute create --name SessionCreatedAt --type Datetim
 temporal operator search-attribute create --name TurnCount --type Int
 ```
 
-With `temporal server start-dev` these are auto-created, but production clusters require explicit registration.
+With `temporal server start-dev` these are auto-created when present, but production clusters require explicit registration. If you enable `EnableSearchAttributes` without pre-registering the attributes, the workflow fails with an opaque "unexpected workflow task failure".
 
 ---
 
@@ -279,13 +287,9 @@ Assert.Throws<ArgumentException>(() => Foo(""));
 var env = await TestEnvironmentHelper.StartLocalAsync();
 ```
 
-`AgentWorkflow` calls `UpsertTypedSearchAttributes` with three custom attributes (`AgentName`, `SessionCreatedAt`,
-`TurnCount`). These must be pre-registered when the embedded server starts, or the workflow fails with an opaque
-"unexpected workflow task failure" at runtime. `TestEnvironmentHelper.StartLocalAsync()` passes the required
-`--search-attribute` CLI args to `WorkflowEnvironment.StartLocalAsync()` automatically.
+`AgentWorkflow` calls `UpsertTypedSearchAttributes` only when `EnableSearchAttributes = true`. If search attributes are enabled in your test fixture, the three custom attributes (`AgentName`, `SessionCreatedAt`, `TurnCount`) must be pre-registered when the embedded server starts — otherwise the workflow fails with an opaque "unexpected workflow task failure". `TestEnvironmentHelper.StartLocalAsync()` passes the required `--search-attribute` CLI args to `WorkflowEnvironment.StartLocalAsync()` automatically.
 
-Bare `WorkflowEnvironment.StartLocalAsync()` is appropriate only for `Temporalio.Extensions.AI` integration tests,
-which use `DurableChatWorkflow` and do not require any custom search attributes:
+If `EnableSearchAttributes` is left at its default (`false`), bare `WorkflowEnvironment.StartLocalAsync()` works fine for Agents integration tests too. It is always appropriate for `Temporalio.Extensions.AI` integration tests, which use `DurableChatWorkflow` and never require custom search attributes:
 
 ```csharp
 // Temporalio.Extensions.AI integration tests only — no custom search attributes needed

@@ -178,7 +178,7 @@ foreach (var entry in history.OfType<TemporalAgentStateResponse>())
 
 ### Aggregate: Search Attributes
 
-The `TurnCount` search attribute lets you find high-activity sessions in the Temporal UI:
+When `EnableSearchAttributes = true`, the `TurnCount` search attribute lets you find high-activity sessions in the Temporal UI:
 
 ```
 AgentName = "ResearchAgent" AND TurnCount > 20
@@ -250,10 +250,36 @@ For tasks that don't need conversational context, use a fresh session per reques
 
 ```csharp
 // Each call starts fresh — no history accumulation
-var response = await client.RunAgentAsync("AnalystAgent", "Analyze this data: ...");
+var session = new TemporalAgentSessionId("AnalystAgent", Guid.NewGuid().ToString("N"));
+var response = await client.RunAgentAsync(session, new RunRequest("Analyze this data: ..."));
 ```
 
 Or use `AgentJobWorkflow` via scheduling, which always starts with empty history.
+
+> **Note:** The `RunAgentAsync(string agentName, string message)` convenience overload is deprecated. Use `RunAgentAsync(TemporalAgentSessionId, RunRequest)` directly.
+
+### 5b. Cap History at a Fixed Size with MaxHistorySize
+
+`TemporalAgentsOptions.MaxHistorySize` sets a hard cap on the number of history entries kept in the workflow. When the cap is reached, the workflow triggers continue-as-new, discarding the oldest entries:
+
+```csharp
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddAIAgent(agent);
+        opts.MaxHistorySize = 50;  // keep at most 50 entries across continue-as-new
+    });
+```
+
+Pair with a `HistoryReducer` to control which entries are retained at the boundary:
+
+```csharp
+opts.MaxHistorySize = 50;
+opts.HistoryReducer = new SummarizingHistoryReducer(summarizerAgent);
+```
+
+`HistoryReducer` is called with the full history immediately before continue-as-new. The returned subset becomes the initial history for the new run. A `null` reducer (the default) retains all entries up to `MaxHistorySize`, dropping the oldest.
 
 ### 5. Use ResponseFormat to Get Structured Output
 

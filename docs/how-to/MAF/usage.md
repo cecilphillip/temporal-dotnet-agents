@@ -55,15 +55,17 @@ session across calls routes all messages to the same `AgentWorkflow` instance, p
 
 ### Quick One-Shot Call
 
-For simple one-off requests where you don't need to manage sessions, use the string-based convenience overload on
-`ITemporalAgentClient`:
+For simple one-off requests where you don't need to manage sessions, create an explicit session with a well-known key or use a randomly-keyed session:
 
 ```csharp
 ITemporalAgentClient client = // resolved from DI
 
-// Creates a new session automatically
-AgentResponse response = await client.RunAgentAsync("MyAgent", "What is the capital of France?");
+// Explicit session — recommended pattern
+var session = new TemporalAgentSessionId("MyAgent", Guid.NewGuid().ToString("N"));
+AgentResponse response = await client.RunAgentAsync(session, new RunRequest("What is the capital of France?"));
 ```
+
+> **Note:** The `RunAgentAsync(string agentName, string message)` string convenience overload is deprecated (`[Obsolete]`). Prefer constructing a `TemporalAgentSessionId` and calling `RunAgentAsync(sessionId, request)` directly so you retain a handle to the session for follow-up turns.
 
 ---
 
@@ -388,9 +390,6 @@ public class MyStreamingHandler : IAgentResponseHandler
             // Push each chunk to the client (e.g., via SignalR or SSE)
         }
     }
-
-    public ValueTask OnAgentResponseAsync(AgentResponse message, CancellationToken ct)
-        => ValueTask.CompletedTask;
 }
 ```
 
@@ -854,7 +853,19 @@ TemporalAgentTelemetry.AgentClientSendSpanName // "agent.client.send"
 
 ### Search Attributes
 
-`AgentWorkflow` automatically upserts three [custom search attributes](https://docs.temporal.io/visibility#custom-search-attributes)
+Search attribute upserts are **opt-in** — set `EnableSearchAttributes = true` in `TemporalAgentsOptions` to enable them:
+
+```csharp
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddAIAgent(agent);
+        opts.EnableSearchAttributes = true;
+    });
+```
+
+When enabled, `AgentWorkflow` upserts three [custom search attributes](https://docs.temporal.io/visibility#custom-search-attributes)
 on each workflow, enabling operational queries in the Temporal Web UI and via `ListWorkflowsAsync`:
 
 | Attribute          | Type           | Description                                            |

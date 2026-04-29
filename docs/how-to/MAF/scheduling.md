@@ -272,9 +272,9 @@ Three OTel spans cover scheduling operations:
 
 | Span | Emitted By | Key Attributes |
 |------|-----------|---------------|
-| `agent.schedule.create` | `ScheduleAgentAsync` | `agent.name`, `schedule.id` |
-| `agent.schedule.delayed` | `RunAgentDelayedAsync` | `agent.name`, `agent.session_id`, `schedule.delay` |
-| `agent.schedule.one_time` | `ScheduleOneTimeAgentRunAsync` | `agent.name`, `schedule.job_id`, `schedule.delay` |
+| `temporal.agent.schedule.create` | `ScheduleAgentAsync` | `agent.name`, `schedule.id` |
+| `temporal.agent.schedule.delayed` | `RunAgentDelayedAsync` | `agent.name`, `agent.session_id`, `schedule.delay` |
+| `temporal.agent.schedule.one_time` | `ScheduleOneTimeAgentRunAsync` | `agent.name`, `schedule.job_id`, `schedule.delay` |
 
 Once the scheduled workflow executes, the standard `agent.turn` span fires inside `AgentActivities.ExecuteAgentAsync` — the same code path as interactive sessions. This means scheduled runs are fully visible in your tracing backend alongside interactive sessions.
 
