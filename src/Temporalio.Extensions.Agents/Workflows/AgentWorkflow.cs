@@ -56,6 +56,9 @@ internal class AgentWorkflow
         // Restore StateBag carried across continue-as-new.
         _currentStateBag = input.CarriedStateBag;
 
+        // Capture the original creation time on the first run; carry it forward on CAN transitions.
+        var sessionCreatedAt = input.OriginalCreatedAt ?? Workflow.UtcNow;
+
         TimeSpan ttl = input.TimeToLive ?? TimeSpan.FromDays(14);
 
         Workflow.Logger.LogWorkflowStarted(input.AgentName, Workflow.Info.WorkflowId, ttl);
@@ -63,12 +66,12 @@ internal class AgentWorkflow
         // Upsert search attributes for operational queries in the Temporal UI.
         Workflow.UpsertTypedSearchAttributes(
             AgentNameSearchAttribute.ValueSet(input.AgentName),
-            SessionCreatedAtSearchAttribute.ValueSet(Workflow.UtcNow),
+            SessionCreatedAtSearchAttribute.ValueSet(sessionCreatedAt),
             TurnCountSearchAttribute.ValueSet(_history.Count));
 
         // Wait until shutdown is requested, TTL elapses, or history is large enough to warrant continue-as-new.
         bool conditionMet = await Workflow.WaitConditionAsync(
-            () => _shutdownRequested || (!_isProcessing && Workflow.ContinueAsNewSuggested),
+            () => _shutdownRequested || (!_isProcessing && (Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxHistorySize)),
             timeout: ttl);
 
         if (!conditionMet)
@@ -76,26 +79,31 @@ internal class AgentWorkflow
             // TTL elapsed without condition being met — session complete.
             Workflow.Logger.LogWorkflowTTLExpired(input.AgentName, Workflow.Info.WorkflowId);
         }
-        else if (Workflow.ContinueAsNewSuggested && !_shutdownRequested)
+        else if ((Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxHistorySize) && !_shutdownRequested)
         {
             Workflow.Logger.LogWorkflowContinueAsNew(input.AgentName, Workflow.Info.WorkflowId, _history.Count);
 
-            // Transfer history and StateBag to a fresh workflow run.
-            var carriedHistory = _history.ToList();
+            // Apply the optional history reducer before carrying history forward.
+            IReadOnlyList<TemporalAgentStateEntry> carriedHistory =
+                input.HistoryReducer?.Invoke(_history.ToList()).ToList() ?? _history.ToList();
             var carriedStateBag = _currentStateBag;
+            var canInput = new AgentWorkflowInput
+            {
+                AgentName = input.AgentName,
+                TaskQueue = input.TaskQueue,
+                TimeToLive = input.TimeToLive,
+                CarriedHistory = carriedHistory,
+                CarriedStateBag = carriedStateBag,
+                ActivityStartToCloseTimeout = input.ActivityStartToCloseTimeout,
+                ActivityHeartbeatTimeout = input.ActivityHeartbeatTimeout,
+                ApprovalTimeout = input.ApprovalTimeout,
+                RetryPolicy = input.RetryPolicy,
+                MaxHistorySize = input.MaxHistorySize,
+                HistoryReducer = input.HistoryReducer,
+                OriginalCreatedAt = sessionCreatedAt,
+            };
             throw Workflow.CreateContinueAsNewException(
-                (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput
-                {
-                    AgentName = input.AgentName,
-                    TaskQueue = input.TaskQueue,
-                    TimeToLive = input.TimeToLive,
-                    CarriedHistory = carriedHistory,
-                    CarriedStateBag = carriedStateBag,
-                    ActivityStartToCloseTimeout = input.ActivityStartToCloseTimeout,
-                    ActivityHeartbeatTimeout = input.ActivityHeartbeatTimeout,
-                    ApprovalTimeout = input.ApprovalTimeout,
-                    RetryPolicy = input.RetryPolicy,
-                }));
+                (AgentWorkflow wf) => wf.RunAsync(canInput));
         }
     }
 

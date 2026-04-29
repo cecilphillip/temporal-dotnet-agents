@@ -3,7 +3,7 @@ using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
-internal sealed class TemporalAgentStateErrorContent : TemporalAgentStateContent
+public sealed class TemporalAgentStateErrorContent : TemporalAgentStateContent
 {
     [JsonPropertyName("message")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

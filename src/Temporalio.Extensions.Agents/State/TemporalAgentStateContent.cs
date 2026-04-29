@@ -16,7 +16,8 @@ namespace Temporalio.Extensions.Agents.State;
 [JsonDerivedType(typeof(TemporalAgentStateUriContent), "uri")]
 [JsonDerivedType(typeof(TemporalAgentStateUsageContent), "usage")]
 [JsonDerivedType(typeof(TemporalAgentStateUnknownContent), "unknown")]
-internal abstract class TemporalAgentStateContent
+/// <summary>Wire shape for agent conversation history entries. Additive changes only.</summary>
+public abstract class TemporalAgentStateContent
 {
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }

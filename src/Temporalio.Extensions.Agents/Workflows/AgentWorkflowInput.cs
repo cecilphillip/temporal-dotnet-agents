@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Temporalio.Common;
@@ -8,7 +9,7 @@ namespace Temporalio.Extensions.Agents.Workflows;
 /// <summary>
 /// Input passed to <see cref="AgentWorkflow"/> when starting a new run.
 /// </summary>
-internal sealed class AgentWorkflowInput
+internal sealed record AgentWorkflowInput
 {
     /// <summary>Gets the name of the agent that this workflow manages.</summary>
     public required string AgentName { get; init; }
@@ -55,4 +56,20 @@ internal sealed class AgentWorkflowInput
     /// When <see langword="null"/>, Temporal SDK defaults apply (unbounded retries).
     /// </summary>
     public RetryPolicy? RetryPolicy { get; init; }
+
+    /// <summary>Default 1000. Workflow triggers continue-as-new when history reaches this count.</summary>
+    public int MaxHistorySize { get; init; } = 1000;
+
+    /// <summary>
+    /// Not serialized. Re-supplied on each <c>StartWorkflowAsync</c> call.
+    /// The library carries it in memory across continue-as-new on the same worker.
+    /// </summary>
+    [JsonIgnore]
+    public Func<IList<TemporalAgentStateEntry>, IList<TemporalAgentStateEntry>>? HistoryReducer { get; init; }
+
+    /// <summary>
+    /// Null on the first run. Set to the original session start time on continue-as-new
+    /// so <c>SessionCreatedAt</c> does not drift across transitions.
+    /// </summary>
+    public DateTimeOffset? OriginalCreatedAt { get; init; }
 }

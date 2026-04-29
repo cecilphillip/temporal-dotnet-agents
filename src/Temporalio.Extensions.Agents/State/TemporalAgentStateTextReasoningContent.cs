@@ -3,7 +3,7 @@ using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
-internal sealed class TemporalAgentStateTextReasoningContent : TemporalAgentStateContent
+public sealed class TemporalAgentStateTextReasoningContent : TemporalAgentStateContent
 {
     [JsonPropertyName("text")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

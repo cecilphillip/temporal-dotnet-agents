@@ -3,7 +3,7 @@ using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
-internal sealed class TemporalAgentStateUriContent : TemporalAgentStateContent
+public sealed class TemporalAgentStateUriContent : TemporalAgentStateContent
 {
     [JsonPropertyName("uri")]
     public required Uri Uri { get; init; }

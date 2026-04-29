@@ -5,7 +5,8 @@ using Temporalio.Extensions.Agents.Workflows;
 
 namespace Temporalio.Extensions.Agents.State;
 
-internal sealed class TemporalAgentStateRequest : TemporalAgentStateEntry
+/// <summary>Wire shape for agent conversation history entries. Additive changes only.</summary>
+public sealed class TemporalAgentStateRequest : TemporalAgentStateEntry
 {
     [JsonPropertyName("orchestrationId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

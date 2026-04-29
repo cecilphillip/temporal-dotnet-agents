@@ -352,4 +352,28 @@ public class TemporalAgentsOptionsTests
         Assert.Single(descriptors);
         Assert.Equal("Pre-registered description.", descriptors[0].Description);
     }
+
+    // ─── MaxHistorySize ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void MaxHistorySize_DefaultIs1000()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Equal(1000, options.MaxHistorySize);
+    }
+
+    [Fact]
+    public void MaxHistorySize_CanBeCustomized()
+    {
+        var options = new TemporalAgentsOptions();
+        options.MaxHistorySize = 500;
+        Assert.Equal(500, options.MaxHistorySize);
+    }
+
+    [Fact]
+    public void HistoryReducer_DefaultsToNull()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Null(options.HistoryReducer);
+    }
 }

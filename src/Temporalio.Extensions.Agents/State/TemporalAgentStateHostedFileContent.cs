@@ -3,7 +3,7 @@ using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
-internal sealed class TemporalAgentStateHostedFileContent : TemporalAgentStateContent
+public sealed class TemporalAgentStateHostedFileContent : TemporalAgentStateContent
 {
     [JsonPropertyName("fileId")]
     public required string FileId { get; init; }

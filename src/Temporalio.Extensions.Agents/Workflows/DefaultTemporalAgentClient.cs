@@ -59,6 +59,9 @@ internal class DefaultTemporalAgentClient(
                 ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
                 ApprovalTimeout = options.ApprovalTimeout,
                 RetryPolicy = options.RetryPolicy,
+                MaxHistorySize = options.MaxHistorySize,
+                HistoryReducer = options.HistoryReducer,
+                // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
             }),
             workflowOptions).ConfigureAwait(false);
 
@@ -118,6 +121,9 @@ internal class DefaultTemporalAgentClient(
                 ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
                 ApprovalTimeout = options.ApprovalTimeout,
                 RetryPolicy = options.RetryPolicy,
+                MaxHistorySize = options.MaxHistorySize,
+                HistoryReducer = options.HistoryReducer,
+                // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
             }),
             workflowOptions).ConfigureAwait(false);
 
@@ -235,6 +241,9 @@ internal class DefaultTemporalAgentClient(
                     ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
                     ApprovalTimeout = options.ApprovalTimeout,
                     RetryPolicy = options.RetryPolicy,
+                    MaxHistorySize = options.MaxHistorySize,
+                    HistoryReducer = options.HistoryReducer,
+                    // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
                 }),
                 workflowOptions).ConfigureAwait(false);
         }

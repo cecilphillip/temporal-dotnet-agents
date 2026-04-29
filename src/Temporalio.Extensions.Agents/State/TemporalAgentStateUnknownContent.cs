@@ -4,7 +4,7 @@ using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
-internal sealed class TemporalAgentStateUnknownContent : TemporalAgentStateContent
+public sealed class TemporalAgentStateUnknownContent : TemporalAgentStateContent
 {
     [JsonPropertyName("content")]
     public required JsonElement Content { get; init; }

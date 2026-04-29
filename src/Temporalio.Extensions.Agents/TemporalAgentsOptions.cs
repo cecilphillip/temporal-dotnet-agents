@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Microsoft.Agents.AI;
 using Temporalio.Client.Schedules;
 using Temporalio.Common;
@@ -66,6 +67,30 @@ public sealed class TemporalAgentsOptions
     /// When null, Temporal SDK defaults apply (unbounded retries).
     /// </summary>
     public RetryPolicy? RetryPolicy { get; set; }
+
+    /// <summary>
+    /// Maximum number of history entries before triggering continue-as-new.
+    /// Default 1000. Continue-as-new also fires on Temporal SDK's own
+    /// <see cref="Temporalio.Workflows.Workflow.ContinueAsNewSuggested"/> threshold, whichever comes first.
+    /// </summary>
+    public int MaxHistorySize { get; set; } = 1000;
+
+    /// <summary>
+    /// Optional pure-function reducer applied to the carried history before continue-as-new.
+    /// Runs in workflow context — must be deterministic.
+    /// When null, full history is carried forward verbatim.
+    /// </summary>
+    /// <remarks>
+    /// The reducer receives the full history list and returns the list to carry forward.
+    /// Prefer LINQ projections over mutating the input list. The library may add fields
+    /// to <see cref="State.TemporalAgentStateEntry"/> in future versions — design reducers
+    /// to be tolerant of unknown subtypes.
+    /// <para>
+    /// WARNING: This delegate is not serialized. Re-supply it on every StartWorkflowAsync call
+    /// (on the same worker, in-memory carry-forward across continue-as-new is fine).
+    /// </para>
+    /// </remarks>
+    public Func<IList<TemporalAgentStateEntry>, IList<TemporalAgentStateEntry>>? HistoryReducer { get; set; }
 
     /// <summary>Adds an agent factory with an optional per-agent TTL.</summary>
     public TemporalAgentsOptions AddAIAgentFactory(string name, Func<IServiceProvider, AIAgent> factory, TimeSpan? timeToLive = null)

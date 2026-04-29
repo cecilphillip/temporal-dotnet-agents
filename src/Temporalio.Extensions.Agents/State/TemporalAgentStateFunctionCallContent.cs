@@ -4,7 +4,7 @@ using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
-internal sealed class TemporalAgentStateFunctionCallContent : TemporalAgentStateContent
+public sealed class TemporalAgentStateFunctionCallContent : TemporalAgentStateContent
 {
     [JsonPropertyName("arguments")]
     public required IReadOnlyDictionary<string, object?> Arguments { get; init; } =

@@ -3,7 +3,7 @@ using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
-internal sealed class TemporalAgentStateUsageContent : TemporalAgentStateContent
+public sealed class TemporalAgentStateUsageContent : TemporalAgentStateContent
 {
     [JsonPropertyName("usage")]
     public TemporalAgentStateUsage Usage { get; init; } = new();

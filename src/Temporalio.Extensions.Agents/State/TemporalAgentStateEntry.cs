@@ -6,7 +6,8 @@ namespace Temporalio.Extensions.Agents.State;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
 [JsonDerivedType(typeof(TemporalAgentStateRequest), "request")]
 [JsonDerivedType(typeof(TemporalAgentStateResponse), "response")]
-internal abstract class TemporalAgentStateEntry
+/// <summary>Wire shape for agent conversation history entries. Additive changes only.</summary>
+public abstract class TemporalAgentStateEntry
 {
     [JsonPropertyName("correlationId")]
     public required string CorrelationId { get; init; }

@@ -3,7 +3,8 @@ using Microsoft.Agents.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
-internal sealed class TemporalAgentStateResponse : TemporalAgentStateEntry
+/// <summary>Wire shape for agent conversation history entries. Additive changes only.</summary>
+public sealed class TemporalAgentStateResponse : TemporalAgentStateEntry
 {
     [JsonPropertyName("usage")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
