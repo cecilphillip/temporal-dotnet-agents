@@ -13,7 +13,7 @@ namespace Temporalio.Extensions.Agents.Workflows;
 /// Temporal activities that perform the actual AI inference for agent sessions.
 /// All AI inference must run inside an activity to preserve workflow determinism.
 /// </summary>
-internal class AgentActivities(
+internal sealed class AgentActivities(
     IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>> factories,
     IServiceProvider services,
     IAgentResponseHandler? responseHandler = null,

@@ -14,7 +14,7 @@ namespace Temporalio.Extensions.Agents.Workflows;
 /// Default implementation of <see cref="ITemporalAgentClient"/> that communicates with
 /// <see cref="AgentWorkflow"/> via Temporal workflow updates (no polling).
 /// </summary>
-internal class DefaultTemporalAgentClient(
+internal sealed class DefaultTemporalAgentClient(
     ITemporalClient client,
     TemporalAgentsOptions options,
     string taskQueue,
@@ -79,6 +79,10 @@ internal class DefaultTemporalAgentClient(
     }
 
     /// <inheritdoc/>
+    [Obsolete(
+        "This overload creates a new random session on every call — no history continuity. " +
+        "Use RunAgentAsync(TemporalAgentSessionId, RunRequest, CancellationToken) with a stable session ID instead.",
+        error: false)]
     public Task<AgentResponse> RunAgentAsync(
         string agentName,
         string message,

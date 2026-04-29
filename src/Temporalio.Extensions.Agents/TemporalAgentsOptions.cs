@@ -111,6 +111,8 @@ public sealed class TemporalAgentsOptions
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(factory);
+        if (_agentFactories.ContainsKey(name))
+            throw new ArgumentException($"An agent factory with name '{name}' has already been registered.", nameof(name));
         _agentFactories.Add(name, factory);
         if (timeToLive.HasValue)
         {

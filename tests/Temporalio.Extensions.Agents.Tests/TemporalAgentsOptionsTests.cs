@@ -393,4 +393,19 @@ public class TemporalAgentsOptionsTests
         var options = new TemporalAgentsOptions();
         Assert.Null(options.HistoryReducer);
     }
+
+    // ─── AddAIAgentFactory duplicate guard ──────────────────────────────────
+
+    [Fact]
+    public void AddAIAgentFactory_DuplicateNameThrowsWithAgentName()
+    {
+        var options = new TemporalAgentsOptions();
+        options.AddAIAgentFactory("DuplicateAgent", _ => new StubAIAgent("DuplicateAgent"));
+
+        var ex = Assert.Throws<ArgumentException>(() =>
+            options.AddAIAgentFactory("DuplicateAgent", _ => new StubAIAgent("DuplicateAgent")));
+
+        Assert.Contains("DuplicateAgent", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("name", ex.ParamName);
+    }
 }

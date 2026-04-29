@@ -28,6 +28,10 @@ public interface ITemporalAgentClient
     /// <param name="message">The user message text.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The agent's response.</returns>
+    [Obsolete(
+        "This overload creates a new random session on every call — no history continuity. " +
+        "Use RunAgentAsync(TemporalAgentSessionId, RunRequest, CancellationToken) with a stable session ID instead.",
+        error: false)]
     Task<AgentResponse> RunAgentAsync(
         string agentName,
         string message,

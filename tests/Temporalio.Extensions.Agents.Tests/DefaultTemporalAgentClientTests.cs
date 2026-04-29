@@ -35,6 +35,7 @@ public class DefaultTemporalAgentClientTests
 
     // ─── RunAgentAsync (string overload) ────────────────────────────────────
 
+#pragma warning disable CS0618 // These tests validate the obsolete string overload's guard clauses
     [Fact]
     public async Task RunAgentAsync_StringOverload_NullAgentName_ThrowsArgumentException()
     {
@@ -66,6 +67,7 @@ public class DefaultTemporalAgentClientTests
         await Assert.ThrowsAsync<ArgumentException>(() =>
             client.RunAgentAsync(agentName: "Agent", message: "   "));
     }
+#pragma warning restore CS0618
 
     // ─── RunAgentFireAndForgetAsync ──────────────────────────────────────────
 

@@ -11,9 +11,4 @@ public interface IAgentResponseHandler
     ValueTask OnStreamingResponseUpdateAsync(
         IAsyncEnumerable<AgentResponseUpdate> messageStream,
         CancellationToken cancellationToken);
-
-    /// <summary>Handles a discrete (non-streaming) response from the agent.</summary>
-    ValueTask OnAgentResponseAsync(
-        AgentResponse message,
-        CancellationToken cancellationToken);
 }
