@@ -86,6 +86,36 @@ public interface ITemporalAgentClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Cancels the pending approval request (if any) by submitting a rejected
+    /// <see cref="DurableApprovalDecision"/> on behalf of an external system.
+    /// No-op when no approval is pending.
+    /// </summary>
+    /// <param name="sessionId">The agent session ID.</param>
+    /// <param name="reason">Optional reason recorded on the rejection. Defaults to <c>"Cancelled externally."</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    async Task CancelPendingApprovalAsync(
+        TemporalAgentSessionId sessionId,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        var pending = await GetPendingApprovalAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        if (pending is null)
+        {
+            return;
+        }
+
+        await SubmitApprovalAsync(
+            sessionId,
+            new DurableApprovalDecision
+            {
+                RequestId = pending.RequestId,
+                Approved = false,
+                Reason = reason ?? "Cancelled externally.",
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Starts a new agent session with a deferred start time.
     /// The agent workflow is created immediately but does not begin executing until
     /// <paramref name="delay"/> has elapsed.
