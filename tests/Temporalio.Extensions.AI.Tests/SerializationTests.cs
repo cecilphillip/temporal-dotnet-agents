@@ -104,7 +104,6 @@ public class SerializationTests
         {
             FunctionName = "get_weather",
             Arguments = new Dictionary<string, object?> { ["city"] = "Seattle" },
-            CallId = "call-42",
         };
 
         var json = JsonSerializer.Serialize(input, Options);
@@ -112,7 +111,6 @@ public class SerializationTests
 
         Assert.NotNull(deserialized);
         Assert.Equal("get_weather", deserialized!.FunctionName);
-        Assert.Equal("call-42", deserialized.CallId);
         Assert.NotNull(deserialized.Arguments);
     }
 

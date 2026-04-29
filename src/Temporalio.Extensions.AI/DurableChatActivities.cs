@@ -43,9 +43,6 @@ internal sealed class DurableChatActivities(
 
         try
         {
-            // Heartbeat periodically for long-running LLM calls.
-            ctx?.Heartbeat($"turn-{input.TurnNumber}");
-
             var response = await chatClient.GetResponseAsync(
                 input.Messages,
                 input.Options,

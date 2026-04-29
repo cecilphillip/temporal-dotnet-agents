@@ -126,28 +126,6 @@ public class DurableAIPluginTests
     }
 
     [Fact]
-    public void ConfigureWorker_TaskQueueEmpty_PopulatedFromOptions()
-    {
-        var plugin = new DurableAIPlugin(opts => opts.TaskQueue = "from-options");
-        var opts = new TemporalWorkerOptions(); // empty TaskQueue
-
-        plugin.ConfigureWorker(opts);
-
-        Assert.Equal("from-options", opts.TaskQueue);
-    }
-
-    [Fact]
-    public void ConfigureWorker_TaskQueueAlreadySet_NotOverwritten()
-    {
-        var plugin = new DurableAIPlugin(opts => opts.TaskQueue = "from-options");
-        var opts = new TemporalWorkerOptions { TaskQueue = "preset" };
-
-        plugin.ConfigureWorker(opts);
-
-        Assert.Equal("preset", opts.TaskQueue);
-    }
-
-    [Fact]
     public void ConfigureWorker_NullOptions_Throws()
     {
         var plugin = new DurableAIPlugin();

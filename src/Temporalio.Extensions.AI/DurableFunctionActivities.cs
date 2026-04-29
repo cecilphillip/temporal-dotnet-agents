@@ -37,10 +37,8 @@ internal sealed class DurableFunctionActivities(
             ActivityKind.Internal);
 
         span?.SetTag(DurableChatTelemetry.ToolNameAttribute, input.FunctionName);
-        span?.SetTag(DurableChatTelemetry.ToolCallIdAttribute, input.CallId);
 
-        _logger.LogDebug("Invoking durable function {FunctionName}, callId={CallId}",
-            input.FunctionName, input.CallId);
+        _logger.LogDebug("Invoking durable function {FunctionName}", input.FunctionName);
 
         try
         {

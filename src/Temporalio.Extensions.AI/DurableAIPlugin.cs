@@ -81,12 +81,6 @@ public sealed class DurableAIPlugin : ITemporalWorkerPlugin
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        // Set TaskQueue from options if not already set on the worker.
-        if (string.IsNullOrEmpty(options.TaskQueue) && !string.IsNullOrEmpty(Options.TaskQueue))
-        {
-            options.TaskQueue = Options.TaskQueue;
-        }
-
         // Register the default workflow if enabled and not already present.
         if (Options.RegisterDefaultWorkflow
             && !ContainsWorkflow(options.Workflows, typeof(DurableChatWorkflow)))

@@ -27,8 +27,6 @@ internal sealed class DurableEmbeddingActivities(
 
         _logger.LogDebug("Executing durable embedding activity for {Count} inputs", input.Values.Count);
 
-        ctx.Heartbeat($"embedding-{input.Values.Count}");
-
         var embeddings = await generator.GenerateAsync(
             input.Values,
             input.Options,

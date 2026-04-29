@@ -15,8 +15,4 @@ internal sealed class DurableFunctionInput
     /// </summary>
     public IDictionary<string, object?>? Arguments { get; init; }
 
-    /// <summary>
-    /// The tool call ID for correlation with the LLM's function call request.
-    /// </summary>
-    public string? CallId { get; init; }
 }

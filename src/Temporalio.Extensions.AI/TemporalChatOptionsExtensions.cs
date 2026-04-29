@@ -6,6 +6,14 @@ namespace Temporalio.Extensions.AI;
 /// Extension methods for setting Temporal-specific metadata on <see cref="ChatOptions"/>
 /// via <see cref="ChatOptions.AdditionalProperties"/>.
 /// </summary>
+/// <remarks>
+/// All <c>With*</c> methods on this class mutate <see cref="ChatOptions.AdditionalProperties"/>
+/// on the provided instance in-place and return the same instance for call chaining. If you
+/// need to preserve the original options unchanged, clone it first:
+/// <code>
+/// var opts = new ChatOptions(existingOptions).WithActivityTimeout(TimeSpan.FromMinutes(10));
+/// </code>
+/// </remarks>
 public static class TemporalChatOptionsExtensions
 {
     /// <summary>Key for per-request activity timeout override.</summary>
@@ -23,6 +31,10 @@ public static class TemporalChatOptionsExtensions
     /// <summary>
     /// Sets a per-request activity timeout that overrides <see cref="DurableExecutionOptions.ActivityTimeout"/>.
     /// </summary>
+    /// <remarks>
+    /// Mutates <see cref="ChatOptions.AdditionalProperties"/> on <paramref name="options"/> in-place
+    /// and returns the same instance. Clone first if the original must be preserved.
+    /// </remarks>
     public static ChatOptions WithActivityTimeout(this ChatOptions options, TimeSpan timeout)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -34,6 +46,10 @@ public static class TemporalChatOptionsExtensions
     /// <summary>
     /// Sets a per-request maximum retry attempts that overrides the default retry policy.
     /// </summary>
+    /// <remarks>
+    /// Mutates <see cref="ChatOptions.AdditionalProperties"/> on <paramref name="options"/> in-place
+    /// and returns the same instance. Clone first if the original must be preserved.
+    /// </remarks>
     public static ChatOptions WithMaxRetryAttempts(this ChatOptions options, int maxAttempts)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -45,6 +61,10 @@ public static class TemporalChatOptionsExtensions
     /// <summary>
     /// Sets a per-request heartbeat timeout that overrides <see cref="DurableExecutionOptions.HeartbeatTimeout"/>.
     /// </summary>
+    /// <remarks>
+    /// Mutates <see cref="ChatOptions.AdditionalProperties"/> on <paramref name="options"/> in-place
+    /// and returns the same instance. Clone first if the original must be preserved.
+    /// </remarks>
     public static ChatOptions WithHeartbeatTimeout(this ChatOptions options, TimeSpan timeout)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -58,6 +78,10 @@ public static class TemporalChatOptionsExtensions
     /// Takes precedence over <see cref="DurableExecutionOptions.DefaultChatClientKey"/>.
     /// Overriding back to the unkeyed client is not supported; omit this call to use the worker default.
     /// </summary>
+    /// <remarks>
+    /// Mutates <see cref="ChatOptions.AdditionalProperties"/> on <paramref name="options"/> in-place
+    /// and returns the same instance. Clone first if the original must be preserved.
+    /// </remarks>
     public static ChatOptions WithChatClientKey(this ChatOptions options, string key)
     {
         if (string.IsNullOrEmpty(key))

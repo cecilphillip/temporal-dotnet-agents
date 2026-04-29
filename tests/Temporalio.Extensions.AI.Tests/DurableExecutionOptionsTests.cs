@@ -81,4 +81,49 @@ public class DurableExecutionOptionsTests
         var options = new DurableExecutionOptions { DefaultChatClientKey = "gpt-4o" };
         Assert.Equal("gpt-4o", options.DefaultChatClientKey);
     }
+
+    [Fact]
+    public void Validate_ThrowsWhenActivityTimeoutIsZero()
+    {
+        var options = new DurableExecutionOptions { TaskQueue = "q", ActivityTimeout = TimeSpan.Zero };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
+        Assert.Contains("ActivityTimeout", ex.Message);
+    }
+
+    [Fact]
+    public void Validate_ThrowsWhenActivityTimeoutIsNegative()
+    {
+        var options = new DurableExecutionOptions { TaskQueue = "q", ActivityTimeout = TimeSpan.FromSeconds(-1) };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
+        Assert.Contains("ActivityTimeout", ex.Message);
+    }
+
+    [Fact]
+    public void Validate_ThrowsWhenHeartbeatTimeoutIsZero()
+    {
+        var options = new DurableExecutionOptions { TaskQueue = "q", HeartbeatTimeout = TimeSpan.Zero };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
+        Assert.Contains("HeartbeatTimeout", ex.Message);
+    }
+
+    [Fact]
+    public void Validate_ThrowsWhenSessionTimeToLiveIsZero()
+    {
+        var options = new DurableExecutionOptions { TaskQueue = "q", SessionTimeToLive = TimeSpan.Zero };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
+        Assert.Contains("SessionTimeToLive", ex.Message);
+    }
+
+    [Fact]
+    public void Validate_ThrowsWhenApprovalTimeoutIsZero()
+    {
+        var options = new DurableExecutionOptions { TaskQueue = "q", ApprovalTimeout = TimeSpan.Zero };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
+        Assert.Contains("ApprovalTimeout", ex.Message);
+    }
 }

@@ -27,7 +27,7 @@ public class DurableChatTelemetryTests
         Assert.Equal("gen_ai.usage.input_tokens", DurableChatTelemetry.InputTokensAttribute);
         Assert.Equal("gen_ai.usage.output_tokens", DurableChatTelemetry.OutputTokensAttribute);
         Assert.Equal("gen_ai.tool.name", DurableChatTelemetry.ToolNameAttribute);
-        Assert.Equal("gen_ai.tool.call_id", DurableChatTelemetry.ToolCallIdAttribute);
+        Assert.Equal("gen_ai.tool.call.id", DurableChatTelemetry.ToolCallIdAttribute);
     }
 
     [Fact]

@@ -48,5 +48,5 @@ public static class DurableChatTelemetry
     public const string ToolNameAttribute = "gen_ai.tool.name";
 
     /// <summary>The call ID of the tool invocation.</summary>
-    public const string ToolCallIdAttribute = "gen_ai.tool.call_id";
+    public const string ToolCallIdAttribute = "gen_ai.tool.call.id";
 }

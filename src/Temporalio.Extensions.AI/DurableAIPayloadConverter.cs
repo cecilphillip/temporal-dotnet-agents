@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Temporalio.Converters;
 
@@ -40,13 +39,6 @@ public static class DurableAIDataConverter
     /// which correctly handles polymorphic <see cref="AIContent"/> types.
     /// </summary>
     public static DataConverter Instance { get; } = new(
-        new DefaultPayloadConverter(CreateOptions()),
+        new DefaultPayloadConverter(AIJsonUtilities.DefaultOptions),
         new DefaultFailureConverter());
-
-    private static JsonSerializerOptions CreateOptions()
-    {
-        // Clone AIJsonUtilities.DefaultOptions which includes polymorphic AIContent support.
-        var options = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions);
-        return options;
-    }
 }
