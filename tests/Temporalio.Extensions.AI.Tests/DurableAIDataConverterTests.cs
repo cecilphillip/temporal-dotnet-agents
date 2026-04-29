@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Microsoft.Extensions.AI;
 using Temporalio.Converters;
 using Xunit;
@@ -6,6 +7,35 @@ namespace Temporalio.Extensions.AI.Tests;
 
 public class DurableAIDataConverterTests
 {
+    public static TheoryData<AIContent> NewContentTypes => new()
+    {
+        new TextReasoningContent("thinking step"),
+        new McpServerToolCallContent("call-1", "my_tool", "my-mcp-server"),
+        new McpServerToolResultContent("call-1"),
+        new ToolApprovalRequestContent("req-1", new FunctionCallContent("call-2", "approve_fn")),
+        new ToolApprovalResponseContent("req-1", true, new FunctionCallContent("call-2", "approve_fn")),
+        new ImageGenerationToolCallContent("call-3"),
+        new ImageGenerationToolResultContent("call-3"),
+        new CodeInterpreterToolCallContent("call-4"),
+        new CodeInterpreterToolResultContent("call-4"),
+        new WebSearchToolCallContent("call-5"),
+        new WebSearchToolResultContent("call-5"),
+        new HostedVectorStoreContent("vs-abc"),
+        new HostedFileContent("file-xyz"),
+    };
+
+    [Theory]
+    [MemberData(nameof(NewContentTypes))]
+    public void RoundTrip_PreservesConcreteType(AIContent content)
+    {
+        var converter = DurableAIDataConverter.Instance.PayloadConverter;
+
+        var payload = converter.ToPayload(content);
+        var deserialized = converter.ToValue(payload, typeof(AIContent));
+
+        Assert.IsType(content.GetType(), deserialized);
+    }
+
     [Fact]
     public void Instance_IsNotNull()
     {
