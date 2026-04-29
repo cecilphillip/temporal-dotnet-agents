@@ -1,3 +1,4 @@
+using Microsoft.Extensions.AI;
 using Temporalio.Common;
 
 namespace Temporalio.Extensions.AI;
@@ -38,11 +39,34 @@ public sealed class DurableExecutionOptions
     /// When false, the middleware only wraps individual calls as activities.
     /// Defaults to false.
     /// </summary>
+    /// <remarks>
+    /// Reserved for future use. This property currently has no effect — the session client and
+    /// default workflow registration are controlled by <see cref="RegisterDefaultWorkflow"/>, not
+    /// by this flag. To suppress the default workflow and session client, set
+    /// <see cref="RegisterDefaultWorkflow"/> to <see langword="false"/> instead.
+    /// </remarks>
     public bool EnableSessionManagement { get; set; }
 
     /// <summary>
     /// Gets or sets the activity heartbeat timeout. Defaults to 2 minutes.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The library does not currently send periodic heartbeats during long-running LLM or
+    /// embedding inference. Set this value to be safely longer than the worst-case LLM response
+    /// time for your workload, or leave it at its default to rely on the
+    /// <see cref="ActivityTimeout"/> start-to-close deadline alone.
+    /// </para>
+    /// <para>
+    /// Setting a heartbeat timeout that is shorter than the LLM call latency will cause the
+    /// activity to be force-failed mid-execution by the Temporal server, even if the LLM
+    /// eventually responds successfully.
+    /// </para>
+    /// <para>
+    /// Per-request overrides are available via
+    /// <see cref="TemporalChatOptionsExtensions.WithHeartbeatTimeout"/>.
+    /// </para>
+    /// </remarks>
     public TimeSpan HeartbeatTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
@@ -88,12 +112,62 @@ public sealed class DurableExecutionOptions
     /// </remarks>
     public bool RegisterDefaultWorkflow { get; set; } = true;
 
+    /// <summary>
+    /// Gets or sets the maximum number of messages in the conversation history before a
+    /// continue-as-new transition is triggered. Defaults to 1000.
+    /// </summary>
+    /// <remarks>
+    /// The workflow also continues-as-new when the Temporal SDK's internal event history
+    /// threshold is reached (<c>Workflow.ContinueAsNewSuggested</c>), whichever comes first.
+    /// Reduce this value to limit payload size on long-running sessions.
+    /// </remarks>
+    public int MaxHistorySize { get; set; } = 1000;
+
+    /// <summary>
+    /// Optional strategy to reduce conversation history before a continue-as-new transition.
+    /// Invoked with the current history when the list reaches <see cref="MaxHistorySize"/>
+    /// or the Temporal SDK suggests continue-as-new.
+    /// Return a trimmed or summarized list. Defaults to <c>null</c> (no reduction — full history
+    /// is carried forward).
+    /// </summary>
+    /// <remarks>
+    /// The reducer runs in workflow context. It must be a pure, deterministic function.
+    /// Do not call async APIs, random number generators, or wall-clock time inside a reducer.
+    /// </remarks>
+    public Func<IList<ChatMessage>, IList<ChatMessage>>? HistoryReducer { get; set; }
+
     internal void Validate()
     {
         if (string.IsNullOrEmpty(TaskQueue))
         {
             throw new InvalidOperationException(
                 $"{nameof(TaskQueue)} must be set in {nameof(DurableExecutionOptions)}.");
+        }
+
+        if (ActivityTimeout <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException("ActivityTimeout must be a positive duration.");
+        }
+
+        if (HeartbeatTimeout <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException("HeartbeatTimeout must be a positive duration.");
+        }
+
+        if (SessionTimeToLive <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException("SessionTimeToLive must be a positive duration.");
+        }
+
+        if (ApprovalTimeout <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException("ApprovalTimeout must be a positive duration.");
+        }
+
+        if (MaxHistorySize <= 0)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(MaxHistorySize)} must be greater than zero in {nameof(DurableExecutionOptions)}.");
         }
     }
 }

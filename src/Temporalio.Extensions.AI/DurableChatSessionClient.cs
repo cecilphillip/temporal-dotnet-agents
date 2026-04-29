@@ -64,6 +64,8 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
         _logger.LogDebug("Sending chat to session {WorkflowId}", workflowId);
 
         // Start the workflow if it doesn't exist, or reuse the existing one.
+        // OriginalCreatedAt is intentionally omitted here — the workflow sets it to
+        // Workflow.UtcNow on the first run and carries it forward through CAN transitions.
         await _client.StartWorkflowAsync(
             (DurableChatWorkflow wf) => wf.RunAsync(new DurableChatWorkflowInput
             {
@@ -72,10 +74,13 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
                 HeartbeatTimeout = _options.HeartbeatTimeout,
                 ApprovalTimeout = _options.ApprovalTimeout,
                 SearchAttributes = _options.EnableSearchAttributes ? new DurableSessionAttributes() : null,
+                MaxHistorySize = _options.MaxHistorySize,
+                HistoryReducer = _options.HistoryReducer,
             }),
             new WorkflowOptions(workflowId, _options.TaskQueue!)
             {
                 IdConflictPolicy = WorkflowIdConflictPolicy.UseExisting,
+                Rpc = new RpcOptions { CancellationToken = cancellationToken },
             });
 
         // Use a handle WITHOUT a pinned RunId so updates follow the continue-as-new chain.
@@ -94,7 +99,8 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
         };
 
         var output = await handle.ExecuteUpdateAsync<DurableChatWorkflow, DurableChatOutput>(
-            wf => wf.ChatAsync(input));
+            wf => wf.ChatAsync(input),
+            new WorkflowUpdateOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } });
 
         span?.SetTag(DurableChatTelemetry.ResponseModelAttribute, output.Response.ModelId);
         span?.SetTag(DurableChatTelemetry.InputTokensAttribute, output.Response.Usage?.InputTokenCount);
@@ -116,7 +122,8 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
         var handle = _client.GetWorkflowHandle<DurableChatWorkflow>(workflowId);
 
         return await handle.QueryAsync<DurableChatWorkflow, IReadOnlyList<ChatMessage>>(
-            wf => wf.GetHistory());
+            wf => wf.GetHistory(),
+            new WorkflowQueryOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } });
     }
 
     // ── HITL: Tool Approval ─────────────────────────────────────────────
@@ -132,7 +139,8 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
 
         var handle = _client.GetWorkflowHandle<DurableChatWorkflow>(GetWorkflowId(conversationId));
         return await handle.QueryAsync<DurableChatWorkflow, DurableApprovalRequest?>(
-            wf => wf.GetPendingApproval());
+            wf => wf.GetPendingApproval(),
+            new WorkflowQueryOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } });
     }
 
     /// <summary>
@@ -149,7 +157,8 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
 
         var handle = _client.GetWorkflowHandle<DurableChatWorkflow>(GetWorkflowId(conversationId));
         return await handle.ExecuteUpdateAsync<DurableChatWorkflow, DurableApprovalDecision>(
-            wf => wf.SubmitApprovalAsync(decision));
+            wf => wf.SubmitApprovalAsync(decision),
+            new WorkflowUpdateOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } });
     }
 
     /// <summary>

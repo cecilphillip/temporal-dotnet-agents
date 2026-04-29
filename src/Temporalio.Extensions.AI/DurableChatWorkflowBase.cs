@@ -74,18 +74,23 @@ public abstract class DurableChatWorkflowBase<TOutput>
             _history.AddRange(input.CarriedHistory);
         }
 
+        // Capture the original creation time on the first run; carry it forward on CAN transitions.
+        var sessionCreatedAt = input.OriginalCreatedAt ?? Workflow.UtcNow;
+
         // Opt-in: upsert search attributes only when explicitly requested.
         // Guards against failure on servers where the attributes are not pre-registered.
         if (input.SearchAttributes is not null)
         {
             Workflow.UpsertTypedSearchAttributes(
-                DurableSessionAttributes.SessionCreatedAt.ValueSet(Workflow.UtcNow),
+                DurableSessionAttributes.SessionCreatedAt.ValueSet(sessionCreatedAt),
                 DurableSessionAttributes.TurnCount.ValueSet(_turnCount));
         }
 
-        // Wait until shutdown or history grows large enough for continue-as-new.
+        // Wait until shutdown, SDK-suggested CAN, or history has grown to MaxHistorySize.
         bool conditionMet = await Workflow.WaitConditionAsync(
-            () => _shutdownRequested || (!_isProcessing && Workflow.ContinueAsNewSuggested),
+            () => _shutdownRequested
+                  || (!_isProcessing && Workflow.ContinueAsNewSuggested)
+                  || (!_isProcessing && _history.Count >= input.MaxHistorySize),
             timeout: input.TimeToLive);
 
         if (!conditionMet)
@@ -94,17 +99,22 @@ public abstract class DurableChatWorkflowBase<TOutput>
             return;
         }
 
-        if (Workflow.ContinueAsNewSuggested && !_shutdownRequested)
+        if ((Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxHistorySize) && !_shutdownRequested)
         {
-            var carriedHistory = _history.ToList();
+            // Apply the optional history reducer before carrying history forward.
+            var historyToCarry = input.HistoryReducer?.Invoke(_history) ?? _history;
+
             var carriedInput = new DurableChatWorkflowInput
             {
                 TimeToLive = input.TimeToLive,
-                CarriedHistory = carriedHistory,
+                CarriedHistory = historyToCarry.ToList(),
                 ActivityTimeout = input.ActivityTimeout,
                 HeartbeatTimeout = input.HeartbeatTimeout,
                 ApprovalTimeout = input.ApprovalTimeout,
                 SearchAttributes = input.SearchAttributes,
+                MaxHistorySize = input.MaxHistorySize,
+                HistoryReducer = input.HistoryReducer,
+                OriginalCreatedAt = sessionCreatedAt,
             };
             throw CreateContinueAsNewException(carriedInput);
         }
@@ -122,6 +132,11 @@ public abstract class DurableChatWorkflowBase<TOutput>
         string? clientKey = null)
     {
         // Serialize: wait for any in-progress turn to finish.
+        // Safety note: after WaitConditionAsync returns, the workflow is in a synchronous
+        // execution window. Temporal's single-threaded scheduler cannot interleave another
+        // update handler until the next await point. Setting _isProcessing = true immediately
+        // after the condition is therefore atomic — no concurrent handler can observe
+        // _isProcessing == false and enter this section between these two lines.
         await Workflow.WaitConditionAsync(() => !_isProcessing);
         _isProcessing = true;
 

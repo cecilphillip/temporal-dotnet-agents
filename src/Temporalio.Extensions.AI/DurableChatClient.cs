@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
-using Temporalio.Activities;
 using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.AI;
@@ -19,6 +18,17 @@ namespace Temporalio.Extensions.AI;
 /// </list>
 /// </para>
 /// <para>
+/// <b>Streaming inside a Temporal workflow is buffered.</b> When
+/// <see cref="GetStreamingResponseAsync"/> is called from workflow context, the implementation
+/// executes the non-streaming activity and replays the complete response as a sequence of
+/// synthetic <see cref="ChatResponseUpdate"/> chunks. True token-by-token streaming is not
+/// possible across the workflow/activity boundary because Temporal activities return a single
+/// serialized result. If per-token latency is not a requirement, prefer
+/// <see cref="GetResponseAsync"/> in workflow context — it is semantically equivalent and
+/// avoids the overhead of converting a <see cref="ChatResponse"/> to updates. Outside a
+/// workflow the real streaming path is preserved.
+/// </para>
+/// <para>
 /// <b>Limitation:</b> <see cref="ChatOptions.RawRepresentationFactory"/> is not serializable and
 /// will not be available on the worker side when invoked as an activity.
 /// </para>
@@ -26,7 +36,6 @@ namespace Temporalio.Extensions.AI;
 public sealed class DurableChatClient : DelegatingChatClient
 {
     private readonly DurableExecutionOptions _options;
-    private int _turnCounter;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DurableChatClient"/> class.
@@ -65,6 +74,18 @@ public sealed class DurableChatClient : DelegatingChatClient
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// <b>Inside a Temporal workflow, streaming is buffered.</b> The activity is executed as a
+    /// non-streaming call and the complete <see cref="ChatResponse"/> is then converted to a
+    /// sequence of <see cref="ChatResponseUpdate"/> objects. Callers will observe a deferred
+    /// batch — all updates arrive together after the activity completes — rather than
+    /// token-by-token updates. This is an inherent constraint of the Temporal activity model,
+    /// which serializes a single result value across the workflow/activity boundary.
+    /// <para>
+    /// Outside a workflow the real streaming path is preserved and updates are forwarded
+    /// directly from the inner <see cref="IChatClient"/>.
+    /// </para>
+    /// </remarks>
     public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -72,8 +93,8 @@ public sealed class DurableChatClient : DelegatingChatClient
     {
         if (!Workflow.InWorkflow)
         {
-            // Outside a workflow — pass through directly, stripping Temporal-internal keys
-            // that the inner client does not understand.
+            // Outside a workflow — real streaming is preserved. Pass through directly,
+            // stripping Temporal-internal keys that the inner client does not understand.
             await foreach (var update in base.GetStreamingResponseAsync(messages, StripTemporalOptions(options), cancellationToken)
                 .ConfigureAwait(false))
             {
@@ -82,9 +103,10 @@ public sealed class DurableChatClient : DelegatingChatClient
             yield break;
         }
 
-        // Inside a workflow — buffer strategy: execute as activity, then yield updates.
-        // Temporal activities return a single result, so we collect the full response
-        // and convert to ChatResponseUpdate sequence.
+        // Inside a workflow — buffered strategy: execute as a non-streaming activity, then
+        // replay the full response as a synthetic ChatResponseUpdate sequence.
+        // Temporal activities return a single serialized result; true token-by-token streaming
+        // across the workflow/activity boundary is not supported.
         var input = CreateInput(messages, options);
 
         var output = await Workflow.ExecuteActivityAsync(
@@ -111,14 +133,16 @@ public sealed class DurableChatClient : DelegatingChatClient
 
     private DurableChatInput CreateInput(IEnumerable<ChatMessage> messages, ChatOptions? options)
     {
-        var turnNumber = Interlocked.Increment(ref _turnCounter);
-
+        // TurnNumber is omitted (defaults to 0) in the middleware path: DurableChatClient is a
+        // DI singleton shared across all workflow instances, so a per-instance counter would
+        // aggregate across unrelated sessions and be meaningless. In the managed session path
+        // (DurableChatWorkflowBase.RunTurnAsync), the per-session _turnCount is passed directly
+        // into DurableChatInput when constructing the activity input inside the workflow.
         return new DurableChatInput
         {
             Messages = messages as IList<ChatMessage> ?? messages.ToList(),
             Options = StripNonSerializableOptions(options),
             ConversationId = Workflow.Info.WorkflowId,
-            TurnNumber = turnNumber,
             ClientKey = options.GetChatClientKey() ?? _options.DefaultChatClientKey,
         };
     }
