@@ -142,7 +142,8 @@ internal class AgentWorkflow
                 new ActivityOptions
                 {
                     StartToCloseTimeout = _input!.ActivityStartToCloseTimeout ?? TimeSpan.FromMinutes(30),
-                    HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5)
+                    HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5),
+                    Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
                 });
 
             // GAP 6: persist the updated StateBag for the next turn.
@@ -267,7 +268,8 @@ internal class AgentWorkflow
                 new ActivityOptions
                 {
                     StartToCloseTimeout = _input!.ActivityStartToCloseTimeout ?? TimeSpan.FromMinutes(30),
-                    HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5)
+                    HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5),
+                    Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
                 });
 
             _currentStateBag = result.SerializedStateBag;

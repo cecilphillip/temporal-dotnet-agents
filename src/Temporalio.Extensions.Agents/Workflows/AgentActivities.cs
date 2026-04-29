@@ -23,6 +23,13 @@ internal class AgentActivities(
     private readonly ConcurrentDictionary<string, AIAgent> _agentCache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Builds the activity summary value (visible in the Temporal Web UI activity list).
+    /// Uses the agent name when available; returns null otherwise so the SDK omits the field.
+    /// </summary>
+    internal static string? BuildActivitySummary(string? agentName) =>
+        string.IsNullOrWhiteSpace(agentName) ? null : agentName;
+
+    /// <summary>
     /// Executes the agent with the given input and returns the response plus updated StateBag.
     /// </summary>
     [Activity("Temporalio.Extensions.Agents.ExecuteAgent")]

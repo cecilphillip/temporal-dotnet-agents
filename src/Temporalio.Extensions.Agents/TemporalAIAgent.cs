@@ -27,7 +27,8 @@ public sealed class TemporalAIAgent : AIAgent
         _activityOptions = activityOptions ?? new ActivityOptions
         {
             StartToCloseTimeout = TimeSpan.FromMinutes(30),
-            HeartbeatTimeout = TimeSpan.FromMinutes(5)
+            HeartbeatTimeout = TimeSpan.FromMinutes(5),
+            Summary = AgentActivities.BuildActivitySummary(_agentName),
         };
     }
 
