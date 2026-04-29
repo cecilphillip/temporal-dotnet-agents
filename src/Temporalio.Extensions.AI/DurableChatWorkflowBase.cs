@@ -96,7 +96,9 @@ public abstract class DurableChatWorkflowBase<TOutput>
 
         if (Workflow.ContinueAsNewSuggested && !_shutdownRequested)
         {
-            var carriedHistory = _history.ToList();
+            var carriedHistory = input.HistoryReducer is not null
+                ? (await input.HistoryReducer.ReduceAsync(_history, CancellationToken.None)).ToList()
+                : _history.ToList();
             var carriedInput = new DurableChatWorkflowInput
             {
                 TimeToLive = input.TimeToLive,
@@ -105,6 +107,7 @@ public abstract class DurableChatWorkflowBase<TOutput>
                 HeartbeatTimeout = input.HeartbeatTimeout,
                 ApprovalTimeout = input.ApprovalTimeout,
                 SearchAttributes = input.SearchAttributes,
+                HistoryReducer = input.HistoryReducer,
             };
             throw CreateContinueAsNewException(carriedInput);
         }

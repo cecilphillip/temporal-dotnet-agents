@@ -1,3 +1,4 @@
+using Microsoft.Extensions.AI;
 using Xunit;
 
 namespace Temporalio.Extensions.AI.Tests;
@@ -80,5 +81,53 @@ public class DurableExecutionOptionsTests
     {
         var options = new DurableExecutionOptions { DefaultChatClientKey = "gpt-4o" };
         Assert.Equal("gpt-4o", options.DefaultChatClientKey);
+    }
+
+    [Fact]
+    public void HistoryReducer_IsNullByDefault()
+    {
+        var options = new DurableExecutionOptions();
+        Assert.Null(options.HistoryReducer);
+    }
+
+    [Fact]
+    public void HistoryReducer_CanBeSetWithFuncChatReducer()
+    {
+        var reducer = new FuncChatReducer(msgs => msgs.TakeLast(10).ToList());
+        var options = new DurableExecutionOptions { HistoryReducer = reducer };
+
+        Assert.Same(reducer, options.HistoryReducer);
+        Assert.IsType<FuncChatReducer>(options.HistoryReducer);
+    }
+
+    [Fact]
+    public async Task FuncChatReducer_AppliesDelegateToMessages()
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, "msg1"),
+            new(ChatRole.User, "msg2"),
+            new(ChatRole.User, "msg3"),
+        };
+        var reducer = new FuncChatReducer(msgs => msgs.TakeLast(2).ToList());
+
+        var result = (await reducer.ReduceAsync(messages, CancellationToken.None)).ToList();
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("msg2", result[0].Text);
+        Assert.Equal("msg3", result[1].Text);
+    }
+
+    [Fact]
+    public async Task FuncChatReducer_CompletesInline()
+    {
+        var reducer = new FuncChatReducer(msgs => msgs.ToList());
+        var messages = new List<ChatMessage> { new(ChatRole.User, "hello") };
+
+        var task = reducer.ReduceAsync(messages, CancellationToken.None);
+
+        Assert.True(task.IsCompletedSuccessfully);
+        var result = await task;
+        Assert.Single(result);
     }
 }

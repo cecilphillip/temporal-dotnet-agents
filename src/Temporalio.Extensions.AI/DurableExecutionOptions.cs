@@ -1,3 +1,4 @@
+using Microsoft.Extensions.AI;
 using Temporalio.Common;
 
 namespace Temporalio.Extensions.AI;
@@ -68,6 +69,25 @@ public sealed class DurableExecutionOptions
     /// Per-call overrides via <see cref="TemporalChatOptionsExtensions.WithChatClientKey"/> take precedence.
     /// </summary>
     public string? DefaultChatClientKey { get; set; }
+
+    /// <summary>
+    /// Gets or sets a reducer applied to conversation history before a continue-as-new transition.
+    /// When null (default), the full history is carried forward.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Use this to trim or summarize history when the workflow is about to continue-as-new,
+    /// preventing the carried history from growing unbounded across runs.
+    /// </para>
+    /// <para>
+    /// <b>Workflow determinism:</b> the reducer runs inside the workflow task scheduler.
+    /// <see cref="IChatReducer.ReduceAsync"/> must complete synchronously — do not perform
+    /// async I/O, call LLM APIs, or use <c>Task.Delay</c>. Return <c>Task.FromResult(...)</c>
+    /// from your implementation. To adapt an existing lambda, use
+    /// <c>new FuncChatReducer(msgs => ...)</c>.
+    /// </para>
+    /// </remarks>
+    public IChatReducer? HistoryReducer { get; set; }
 
     /// <summary>
     /// Gets or sets whether to register the default <see cref="DurableChatWorkflow"/> and

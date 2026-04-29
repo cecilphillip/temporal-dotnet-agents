@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.AI;
@@ -39,4 +40,11 @@ public sealed class DurableChatWorkflowInput
     /// Requires pre-registration of these attributes with the Temporal server.
     /// </summary>
     public DurableSessionAttributes? SearchAttributes { get; init; }
+
+    /// <summary>
+    /// Optional reducer applied to conversation history before a continue-as-new transition.
+    /// Not serialized — the session client re-supplies this on each workflow start.
+    /// </summary>
+    [JsonIgnore]
+    public IChatReducer? HistoryReducer { get; init; }
 }
