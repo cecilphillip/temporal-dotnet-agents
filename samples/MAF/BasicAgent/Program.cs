@@ -1,13 +1,6 @@
-// BasicAgent sample — demonstrates how to configure a Temporal worker and send messages
-// to a durable agent session backed by Temporalio.Extensions.Agents.
+// BasicAgent — single durable agent session via Temporalio.Extensions.Agents.
 //
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-//   (The dev server starts on localhost:7233 with the "default" namespace.)
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/BasicAgent
-//
-// Run:  dotnet run --project samples/BasicAgent/BasicAgent.csproj
+// Run:  dotnet run --project samples/MAF/BasicAgent/BasicAgent.csproj
 
 using System.ClientModel;
 using Microsoft.Extensions.AI;

@@ -1,15 +1,7 @@
-// SplitWorkerClient — Worker
+// SplitWorkerClient / Worker — owns the Temporal worker (AgentWorkflow + AgentActivities).
+// Start this before running the Client in a separate terminal.
 //
-// This process owns the Temporal worker: it hosts AgentWorkflow + AgentActivities and
-// runs the real AI inference. It has no knowledge of callers.
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/SplitWorkerClient/Worker
-//
-// Run this first, then start the Client in a separate terminal:
-//   dotnet run --project samples/SplitWorkerClient/Worker/Worker.csproj
+// Run:  dotnet run --project samples/MAF/SplitWorkerClient/Worker/Worker.csproj
 
 using System.ClientModel;
 using Microsoft.Extensions.AI;

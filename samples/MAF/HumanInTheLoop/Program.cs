@@ -1,32 +1,7 @@
-// Copyright (c) Microsoft. All rights reserved.
-
-// Human-in-the-Loop (HITL) Sample
-// =================================
-// Demonstrates how an agent tool can pause execution, surface a structured approval
-// request to a human reviewer, and then resume or cancel based on that decision —
-// all transparently within a single proxy.RunAsync call.
+// HumanInTheLoop — an agent tool that suspends execution via RequestApprovalAsync
+// and resumes only after a human approves or rejects via console input.
 //
-// Scenario: An email assistant that can draft emails freely but requires a human
-// to approve before any email is actually sent.
-//
-// How the approval flow works:
-//
-//   1. User: "Send a welcome email to alice@example.com"
-//   2. Agent decides to call the send_email tool
-//   3. send_email tool calls TemporalAgentContext.RequestApprovalAsync(...)
-//      └─ sends a [WorkflowUpdate] to AgentWorkflow.RequestApprovalAsync
-//         └─ workflow stores the DurableApprovalRequest and blocks on WaitConditionAsync
-//            (the activity — and therefore proxy.RunAsync — stays suspended here)
-//   4. This console polls GetPendingApprovalAsync() every second ([WorkflowQuery])
-//   5. When a request appears, the human types "approve" or "reject"
-//   6. SubmitApprovalAsync sends a [WorkflowUpdate] that sets _approvalDecision
-//      └─ WaitConditionAsync unblocks
-//      └─ RequestApprovalAsync returns a DurableApprovalDecision to the tool
-//   7. Tool either completes the action or returns a cancellation message
-//   8. Agent generates a final response — proxy.RunAsync finally returns
-//
-// Key configuration: ActivityStartToCloseTimeout must exceed your expected review
-// time. This sample uses 24 hours. Adjust for your SLA.
+// Run:  dotnet run --project samples/MAF/HumanInTheLoop/HumanInTheLoop.csproj
 
 using System.ClientModel;
 using System.ComponentModel;

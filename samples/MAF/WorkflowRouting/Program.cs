@@ -1,20 +1,7 @@
-// WorkflowRouting sample — demonstrates routing entirely inside a Temporal workflow.
+// WorkflowRouting — routes user requests to specialist agents entirely inside a Temporal
+// workflow, keeping every routing decision durable and visible in event history.
 //
-// Unlike the MultiAgentRouting sample (which uses IAgentRouter + RouteAsync), this sample
-// keeps all routing logic in the workflow itself:
-//   1. A lightweight Classifier agent determines the user's intent category.
-//   2. A switch statement dispatches to the correct specialist agent.
-//   3. The specialist's response is returned as the workflow result.
-//
-// This gives you full programmatic control — if/else, fallback chains, multi-step
-// classification — while Temporal guarantees durability of every routing decision.
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/WorkflowRouting
-//
-// Run:  dotnet run --project samples/WorkflowRouting/WorkflowRouting.csproj
+// Run:  dotnet run --project samples/MAF/WorkflowRouting/WorkflowRouting.csproj
 
 using System.ClientModel;
 using Microsoft.Extensions.Configuration;

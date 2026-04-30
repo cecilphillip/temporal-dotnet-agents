@@ -1,27 +1,7 @@
-// DurableChat sample — demonstrates how to make any IChatClient durable using
-// Temporalio.Extensions.AI — no Microsoft Agent Framework required.
+// DurableChat — demonstrates multi-turn durable chat via DurableChatSessionClient,
+// including tool calls (UseFunctionInvocation) and history retrieval (GetHistoryAsync).
 //
-// Demos
-// ─────
-//   1. Multi-turn conversation  — history is preserved across turns in the workflow
-//   2. Tool call                — ChatOptions.Tools + UseFunctionInvocation()
-//   3. History query            — GetHistoryAsync returns the full persisted log
-//
-// How this differs from the Agents library
-// ─────────────────────────────────────────
-// • No AIAgent, AgentWorkflow, or AgentActivities — pure IChatClient + MEAI.
-// • DurableChatSessionClient.ChatAsync replaces TemporalAIAgentProxy.RunAsync.
-// • DurableChatWorkflow (internal) manages history; you never reference it directly.
-// • DurableAIDataConverter is mandatory — MEAI uses a $type discriminator for
-//   AIContent polymorphism that the default Temporal JSON converter does not handle.
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-//   (The dev server starts on localhost:7233 with the "default" namespace.)
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/DurableChat
-//
-// Run:  dotnet run --project samples/DurableChat/DurableChat.csproj
+// Run:  dotnet run --project samples/MEAI/DurableChat/DurableChat.csproj
 
 using System.ClientModel;
 using Microsoft.Extensions.AI;

@@ -1,26 +1,7 @@
-// AmbientAgent sample — demonstrates ambient (background) agent patterns with Temporal.
+// AmbientAgent — a background monitoring workflow that ingests health-check signals,
+// calls an LLM to detect anomalies, and cross-signals an alert workflow on findings.
 //
-// An ambient agent operates continuously in the background, monitoring data streams and
-// triggering actions without direct user prompts. This sample simulates a system health
-// monitor that:
-//   • Ingests health-check readings via workflow signals (fire-and-forget)
-//   • Periodically calls an LLM AnalysisAgent to assess trends
-//   • Proactively signals a separate AlertWorkflow when anomalies are detected
-//   • Supports continue-as-new for indefinite monitoring
-//
-// Key patterns demonstrated:
-//   1. Custom [WorkflowSignal] for event ingestion (ambient data stream)
-//   2. Proactive LLM analysis without user prompts
-//   3. Agent-to-agent communication via cross-workflow signaling
-//   4. [WorkflowQuery] for external observability
-//   5. Continue-as-new with carried state for long-lived operation
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/AmbientAgent
-//
-// Run:  dotnet run --project samples/AmbientAgent/AmbientAgent.csproj
+// Run:  dotnet run --project samples/MAF/AmbientAgent/AmbientAgent.csproj
 
 using System.ClientModel;
 using AmbientAgent;

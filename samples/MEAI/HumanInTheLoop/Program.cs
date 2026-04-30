@@ -1,51 +1,5 @@
-// Human-in-the-Loop (HITL) Sample — Temporalio.Extensions.AI
-// ============================================================
-// Demonstrates how a tool can pause a durable chat session and wait for a human
-// to approve or reject an operation before proceeding — using only IChatClient and
-// Temporalio.Extensions.AI (no Microsoft Agent Framework required).
-//
-// Scenario: A data management assistant that can query records freely but requires
-// explicit human approval before performing any destructive delete operation.
-//
-// How the approval flow works
-// ──────────────────────────
-//   1. User:  "Delete all records older than 30 days"
-//   2. LLM decides to call the delete_records tool
-//   3. delete_records tool calls RequestApprovalAsync on the workflow handle:
-//      └─ sends a [WorkflowUpdate("RequestApproval")] to DurableChatWorkflow
-//         └─ workflow stores DurableApprovalRequest and blocks on WaitConditionAsync
-//            (DurableChatActivities.GetResponseAsync — and therefore ChatAsync — stays
-//             suspended here; the Temporal activity keeps its heartbeat going)
-//   4. The main loop polls GetPendingApprovalAsync() every second ([WorkflowQuery])
-//   5. When a request appears, it is printed to the console
-//   6. The sample auto-approves (simulating a human reviewer)
-//      └─ SubmitApprovalAsync sends a [WorkflowUpdate("SubmitApproval")]
-//         └─ WaitConditionAsync in RequestApprovalAsync unblocks
-//         └─ RequestApprovalAsync returns DurableApprovalDecision to the tool
-//   7. Tool either performs the delete and returns success, or returns a rejection message
-//   8. LLM generates a final response — ChatAsync finally returns
-//
-// Integration with real approval systems
-// ───────────────────────────────────────
-// Replace the auto-approval logic below with any external mechanism:
-//   • REST webhook: POST the DurableApprovalRequest to a review service;
-//     the service calls SubmitApprovalAsync when the reviewer clicks Approve/Reject.
-//   • Slack: Send a message with action buttons; the Slack handler calls SubmitApprovalAsync.
-//   • PagerDuty / Jira: Create a ticket and poll the ticket state.
-//   • Email: Send an email with a signed approval URL that hits your API.
-// The workflow will wait up to ApprovalTimeout (default: 7 days). On timeout it
-// auto-rejects with a descriptive reason so the tool can handle it gracefully.
-//
-// Key configuration note
-// ──────────────────────
-// The delete_records tool suspends inside an activity. The activity's
-// StartToCloseTimeout must cover the full expected review window. This sample
-// uses 24 hours. For production, set ApprovalTimeout (workflow-side) to match.
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/HumanInTheLoop
+// HumanInTheLoop — demonstrates a HITL approval gate where a tool suspends the durable
+// chat session via RequestApprovalAsync and resumes only after SubmitApprovalAsync is called.
 //
 // Run:  dotnet run --project samples/MEAI/HumanInTheLoop/HumanInTheLoop.csproj
 

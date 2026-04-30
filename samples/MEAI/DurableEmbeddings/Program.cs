@@ -1,43 +1,6 @@
-// DurableEmbeddings sample — demonstrates IEmbeddingGenerator<string, Embedding<float>>
-// wrapped with UseDurableExecution() inside a Temporal workflow.
-//
-// What this shows
-// ───────────────
-// When GenerateAsync is called inside a Temporal workflow, the DurableEmbeddingGenerator
-// middleware detects Workflow.InWorkflow == true and dispatches each call as a separate
-// Temporal activity via DurableEmbeddingActivities. This means:
-//
-//   • Each embedding is independently retried on transient failures (e.g., rate limits,
-//     network timeouts) without re-running chunks that already completed.
-//
-//   • If the worker crashes mid-batch, Temporal replays workflow history on restart —
-//     completed embedding activities are replayed from history, not re-sent to the API.
-//
-//   • Outside a workflow (Workflow.InWorkflow == false), GenerateAsync passes through
-//     to the inner IEmbeddingGenerator unchanged — no Temporal overhead.
-//
-// Scenario: DocumentIndexingWorkflow — a realistic RAG indexing job
-// ─────────────────────────────────────────────────────────────────
-// The workflow receives a list of text chunks (e.g., paragraphs from a document) and
-// generates an embedding for each one as a separate activity. In production you would
-// persist the returned vectors to a vector database (Qdrant, pgvector, Azure AI Search).
-// Here we print the embedding dimensions and the dot-product similarity between the
-// first two chunks to confirm the vectors capture different semantic content.
-//
-// How Workflow.InWorkflow dispatching works
-// ─────────────────────────────────────────
-// DocumentIndexingWorkflow creates a DurableEmbeddingGenerator directly in workflow
-// code with a NullEmbeddingGenerator as the inner generator. The null inner is never
-// called because Workflow.InWorkflow == true routes every GenerateAsync call to
-// DurableEmbeddingActivities instead. On the worker side, DurableEmbeddingActivities
-// resolves the real IEmbeddingGenerator<string, Embedding<float>> from DI and calls
-// the actual OpenAI embeddings endpoint.
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-//   (The dev server starts on localhost:7233 with the "default" namespace.)
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/DurableEmbeddings
+// DurableEmbeddings — demonstrates IEmbeddingGenerator wrapped with UseDurableExecution(),
+// dispatching each GenerateAsync call as an independent Temporal activity for fault-tolerant
+// RAG indexing. Includes sequential and parallel fan-out workflow variants.
 //
 // Run:  dotnet run --project samples/MEAI/DurableEmbeddings/DurableEmbeddings.csproj
 

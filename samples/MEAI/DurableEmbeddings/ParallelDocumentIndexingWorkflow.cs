@@ -1,42 +1,5 @@
-// ParallelDocumentIndexingWorkflow.cs
-//
-// A parallel variant of DocumentIndexingWorkflow that fans out all embedding
-// activities concurrently using Workflow.WhenAllAsync, rather than awaiting
-// each one in sequence.
-//
-// HOW PARALLEL DISPATCH WORKS
-// ────────────────────────────
-// Inside a Temporal workflow, DurableEmbeddingGenerator.GenerateAsync dispatches
-// to Workflow.ExecuteActivityAsync, which returns a Task. The Task is created
-// immediately — before any await. Collecting all Tasks via LINQ and passing them
-// to Workflow.WhenAllAsync causes Temporal to schedule every activity at the same
-// time, letting the worker (and the external API) process them concurrently rather
-// than waiting for each to finish before starting the next.
-//
-// WHY Workflow.WhenAllAsync AND NOT Task.WhenAll
-// ───────────────────────────────────────────────
-// Temporal .NET workflows use a custom TaskScheduler. Task.WhenAll bypasses this
-// scheduler, which breaks determinism during history replay — Temporal may fail
-// with a non-determinism error on worker restart. Workflow.WhenAllAsync is the
-// workflow-safe equivalent that works correctly with Temporal's replay mechanism.
-//
-// SEQUENTIAL vs PARALLEL
-// ──────────────────────
-//  Sequential (DocumentIndexingWorkflow):
-//    embed chunk[0] → wait → embed chunk[1] → wait → ... → embed chunk[N-1]
-//    Elapsed ≈ N × per-activity-time
-//
-//  Parallel (ParallelDocumentIndexingWorkflow):
-//    emit all N activities at once → wait for all to complete
-//    Elapsed ≈ max(per-activity-time) — often much faster for large batches
-//
-// DURABILITY GUARANTEES ARE PRESERVED
-// ─────────────────────────────────────
-// Even with parallel dispatch, Temporal's durability contract is fully intact:
-//   • Each embedding activity is independently retried on transient failure.
-//   • If the worker crashes mid-run, completed activities replay from history;
-//     only in-flight activities are re-scheduled.
-//   • The result order matches the input chunk order (task list preserves order).
+// ParallelDocumentIndexingWorkflow — fans out all embedding activities concurrently
+// using Workflow.WhenAllAsync rather than awaiting each one in sequence.
 
 using Microsoft.Extensions.AI;
 using Temporalio.Extensions.AI;

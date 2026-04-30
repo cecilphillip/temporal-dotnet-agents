@@ -1,23 +1,5 @@
-// MultiAgentRouting sample — demonstrates:
-//   1. Workflow-based routing: the routing decision runs inside a Temporal activity,
-//      making it durable, auditable, and visible in workflow event history.
-//   2. Parallel agent execution via TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync
-//   3. OpenTelemetry configured with TracingInterceptor (Temporalio.Extensions.OpenTelemetry)
-//      AND TemporalAgentTelemetry.ActivitySourceName
-//
-// Why workflow-based routing?
-// ───────────────────────────
-// The previous approach used IAgentRouter + RouteAsync, which ran an LLM call outside
-// Temporal. This meant the routing decision was non-durable: a worker crash between
-// routing and dispatch would lose the routing result entirely, and the decision was
-// invisible in workflow history. Workflow-based routing records the routing decision
-// as an activity result in the event log — it is durable, retryable, and fully auditable.
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-//   (The dev server starts on localhost:7233 with the "default" namespace.)
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/MultiAgentRouting
+// MultiAgentRouting — demonstrates workflow-based routing (durable routing decision via
+// activity) and parallel agent fan-out via ExecuteAgentsInParallelAsync, with OTel tracing.
 //
 // Run:  dotnet run --project samples/MAF/MultiAgentRouting/MultiAgentRouting.csproj
 

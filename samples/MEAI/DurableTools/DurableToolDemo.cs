@@ -1,9 +1,4 @@
-// DurableToolDemo — runs the AsDurable() demo for a given city
-//
-// Starts a WeatherReportWorkflow which calls durableWeather.InvokeAsync() internally.
-// That call is intercepted by DurableAIFunction and dispatched to DurableFunctionActivities
-// as a separate Temporal activity — each tool call gets its own retry policy, timeout,
-// and event history entry independent of any chat activity.
+// DurableToolDemo — starts WeatherReportWorkflow and prints the durable tool result.
 
 using Temporalio.Client;
 

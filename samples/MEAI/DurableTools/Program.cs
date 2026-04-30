@@ -1,35 +1,5 @@
-// DurableTools sample — demonstrates the AsDurable() pattern from Temporalio.Extensions.AI
-//
-// Each tool call inside a Temporal workflow is dispatched as its own independent
-// Temporal activity via DurableFunctionActivities — no Agent Framework required.
-//
-// How it works
-// ────────────
-// • AIFunctionFactory.Create(...).AsDurable() wraps a tool so that calling
-//   InvokeAsync() inside a workflow dispatches to DurableFunctionActivities
-//   instead of executing the lambda directly.
-// • AddDurableTools() registers the real implementation in DurableFunctionRegistry
-//   so the activity can look it up by name and invoke it.
-// • The workflow stub lambda (the inner function passed to AIFunctionFactory.Create)
-//   is never called inside the workflow — it exists only as a passthrough for
-//   non-workflow contexts (Workflow.InWorkflow == false).
-//
-// How this differs from UseFunctionInvocation() (DurableChat Demo 2)
-// ──────────────────────────────────────────────────────────────────
-//   Demo 2 path: DurableChatActivities (one activity)
-//                  └─► UseFunctionInvocation handles tool loop inside that activity
-//
-//   This sample:  WeatherReportWorkflow (workflow)
-//                   └─► durableWeather.InvokeAsync()   [dispatches when InWorkflow = true]
-//                         └─► DurableFunctionActivities (separate activity per tool call)
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-//   (The dev server starts on localhost:7233 with the "default" namespace.)
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/DurableTools
-//   Note: this sample does not call the LLM — the workflow invokes the tool
-//   directly, so an API key is not strictly needed for the demo to run.
+// DurableTools — demonstrates AsDurable(), which dispatches each tool call as its own
+// Temporal activity (DurableFunctionActivities) rather than running the function inline.
 //
 // Run:  dotnet run --project samples/MEAI/DurableTools/DurableTools.csproj
 

@@ -1,23 +1,5 @@
-// WeatherReportWorkflow — demonstrates the AsDurable() pattern
-//
-// Each tool invocation inside this workflow is dispatched as its own independent
-// Temporal activity via DurableFunctionActivities, rather than running inline.
-//
-// How AsDurable() differs from UseFunctionInvocation() inside a chat activity:
-//
-//   UseFunctionInvocation() path (DurableChat Demo 2):
-//     DurableChatActivities (one activity)
-//       └─► UseFunctionInvocation handles the tool call loop inside that single activity
-//
-//   AsDurable() path (this sample):
-//     WeatherReportWorkflow (workflow)
-//       └─► durableWeather.InvokeAsync()              [Workflow.InWorkflow = true]
-//             └─► DurableFunctionActivities (separate activity per tool call)
-//                   └─► registry["get_current_weather"] → real GetCurrentWeather function
-//
-// AsDurable() is context-aware: when Workflow.InWorkflow is false it passes through
-// to the inner function directly, so the same wrapped AIFunction works both inside
-// and outside workflow code without changes.
+// WeatherReportWorkflow — invokes a durable tool via AsDurable(), dispatching it as
+// a separate Temporal activity rather than executing the lambda inline.
 
 using Microsoft.Extensions.AI;
 using Temporalio.Extensions.AI;

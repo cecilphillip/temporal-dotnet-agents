@@ -1,27 +1,5 @@
-// CustomWorkflow sample — demonstrates subclassing DurableChatWorkflowBase<TOutput>
-// to return domain-specific data from a Temporal workflow Update handler.
-//
-// What this sample shows
-// ──────────────────────
-// • DurableChatWorkflowBase<TOutput> lets you define a custom typed output for
-//   each Update — here ShoppingTurnOutput carries both the ChatResponse and a
-//   list of CartAction records collected from tool calls during the LLM turn.
-// • ShoppingAssistantWorkflow extends the base class and overrides three abstract
-//   members to dispatch to ShoppingActivities (its own activity class).
-// • The session loop, history persistence, HITL support, continue-as-new, and
-//   search attribute upserts are all inherited from the base class.
-//
-// How it differs from DurableChatSessionClient
-// ─────────────────────────────────────────────
-// • DurableChatSessionClient wraps DurableChatWorkflow and returns ChatResponse.
-//   It cannot return custom types from the Update without a custom workflow.
-// • Here we bypass DurableChatSessionClient and call ExecuteUpdateAsync directly
-//   on the workflow handle, using the typed ShoppingTurnOutput as the result.
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/CustomWorkflow
+// CustomWorkflow — demonstrates subclassing DurableChatWorkflowBase<TOutput> to return
+// domain-specific typed output (ShoppingTurnOutput) from a workflow Update handler.
 //
 // Run:  dotnet run --project samples/MEAI/CustomWorkflow/CustomWorkflow.csproj
 

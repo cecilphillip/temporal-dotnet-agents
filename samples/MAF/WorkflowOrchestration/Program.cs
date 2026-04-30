@@ -1,16 +1,7 @@
-// WorkflowOrchestration sample — demonstrates how a Temporal workflow can orchestrate
-// (call) an AI agent as a sub-agent, using the new fluent AddTemporalAgents() API.
+// WorkflowOrchestration — a Temporal workflow that calls an AI agent as a sub-agent
+// via TemporalWorkflowExtensions.GetAgent().
 //
-// Key differences from BasicAgent:
-// • Demonstrates a workflow that internally calls an agent via TemporalAIAgent
-// • Shows how agent calls flow through Temporal activities for determinism
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-//   (The dev server starts on localhost:7233 with the "default" namespace.)
-//
-// Run:  dotnet run --project samples/WorkflowOrchestration/WorkflowOrchestration.csproj
+// Run:  dotnet run --project samples/MAF/WorkflowOrchestration/WorkflowOrchestration.csproj
 
 using System.ClientModel;
 using Microsoft.Extensions.AI;

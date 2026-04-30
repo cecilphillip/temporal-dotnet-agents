@@ -1,24 +1,5 @@
-// DocumentIndexingWorkflow.cs
-//
-// Demonstrates DurableEmbeddingGenerator inside a Temporal workflow.
-//
-// HOW IT WORKS
-// ────────────
-// DurableEmbeddingGenerator is a DelegatingEmbeddingGenerator<string, Embedding<float>>
-// that checks Workflow.InWorkflow on every GenerateAsync call:
-//
-//   • Workflow.InWorkflow == true  → dispatches Workflow.ExecuteActivityAsync to
-//                                    DurableEmbeddingActivities, which resolves the
-//                                    real IEmbeddingGenerator from DI on the worker.
-//
-//   • Workflow.InWorkflow == false → passes through to the inner generator unchanged.
-//
-// This means workflow code never calls the model directly — each GenerateAsync call
-// becomes an independently retried Temporal activity. If the worker crashes
-// mid-batch, only unfinished embeddings re-run; completed ones replay from history.
-//
-// The inner generator passed to DurableEmbeddingGenerator in the workflow constructor
-// is a no-op stub — it is never invoked when Workflow.InWorkflow == true.
+// DocumentIndexingWorkflow — sequential embedding of text chunks via DurableEmbeddingGenerator,
+// where each GenerateAsync call becomes an independently retried Temporal activity.
 
 using Microsoft.Extensions.AI;
 using Temporalio.Extensions.AI;

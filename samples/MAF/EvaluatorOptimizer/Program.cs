@@ -1,19 +1,7 @@
-// EvaluatorOptimizer sample — demonstrates the Evaluator-Optimizer multi-agent pattern.
+// EvaluatorOptimizer — Generator and Evaluator agents collaborate in a durable loop
+// until the draft is approved or the iteration limit is reached.
 //
-// Two agents collaborate in a loop inside a single durable Temporal workflow:
-//   • Generator — produces a draft in response to a writing task or revision request.
-//   • Evaluator — reviews the draft and either approves it ("APPROVED") or gives feedback.
-//
-// The workflow repeats up to `maxIterations` times. Because each generation/evaluation
-// turn runs as a durable Temporal activity, the process is fault-tolerant: a worker
-// crash simply replays from the last committed turn with no duplicate LLM calls.
-//
-// Prerequisites
-// ─────────────
-// • A local Temporal server:  temporal server start-dev
-// • OPENAI_API_KEY: dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/EvaluatorOptimizer
-//
-// Run:  dotnet run --project samples/EvaluatorOptimizer/EvaluatorOptimizer.csproj
+// Run:  dotnet run --project samples/MAF/EvaluatorOptimizer/EvaluatorOptimizer.csproj
 
 using System.ClientModel;
 using EvaluatorOptimizer;

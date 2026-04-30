@@ -1,15 +1,7 @@
-// SplitWorkerClient — Client
+// SplitWorkerClient / Client — sends messages to agent sessions running in the Worker.
+// Has no IChatClient or worker registrations; requires only a Temporal connection.
 //
-// This process sends messages to agent sessions running in the Worker process.
-// It has no IChatClient, no workflow/activity registrations, and no AI dependencies —
-// it only needs a connection to the same Temporal server.
-//
-// Prerequisites
-// ─────────────
-// • Temporal server running:  temporal server start-dev
-// • Worker running in a separate terminal (start Worker first)
-//
-// Run:  dotnet run --project samples/SplitWorkerClient/Client/Client.csproj
+// Run:  dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
