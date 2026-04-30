@@ -71,7 +71,7 @@ To use a non-default Temporal address, add it to `appsettings.json`:
 ### 3. Run the sample
 
 ```bash
-dotnet run --project samples/WorkflowRouting/WorkflowRouting.csproj
+dotnet run --project samples/MAF/WorkflowRouting/WorkflowRouting.csproj
 ```
 
 ### Expected Output
@@ -121,7 +121,7 @@ Each question is classified by the Classifier agent, then routed to the appropri
 | **TechSupportAgent** | Tech specialist | Software issues, crashes, error messages, troubleshooting |
 | **GeneralAgent** | Catch-all | Greetings, general inquiries, company information |
 
-## Key Design Decisions
+## Highlights
 
 1. **Workflow as router.** All routing logic lives in `CustomerServiceWorkflow.RunAsync` as a plain `switch` expression. No framework abstractions to learn or configure.
 

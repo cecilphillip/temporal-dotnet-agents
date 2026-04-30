@@ -66,7 +66,7 @@ dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/AmbientA
 ### Run
 
 ```bash
-dotnet run --project samples/AmbientAgent/AmbientAgent.csproj
+dotnet run --project samples/MAF/AmbientAgent/AmbientAgent.csproj
 ```
 
 ### Expected Output
@@ -76,7 +76,7 @@ The sample sends 20 health readings with a spike window at readings 13-15. You s
 - An anomaly detection during the spike window
 - An alert notification composed by the AlertAgent
 
-## Key Design Decisions
+## Highlights
 
 1. **Custom workflows, not AgentWorkflow.** `AgentWorkflow` is designed for conversational sessions with history/HITL. The monitor needs signal-driven data ingestion + periodic batch analysis — a fundamentally different loop structure.
 
