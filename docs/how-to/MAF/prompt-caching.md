@@ -21,9 +21,9 @@ How conversation history grows in TemporalAgents, how the framework manages it a
 
 Every agent session in TemporalAgents maintains a conversation history — the full sequence of user messages, assistant responses, tool calls, and tool results. This history is:
 
-1. **Stored in workflow state** (`AgentWorkflow._history`) as a `List<TemporalAgentStateEntry>`
+1. **Stored in workflow state** (`AgentWorkflow._history`) as a `List<TemporalAgentStateEntry>`, where each entry's `Messages` is `IReadOnlyList<ChatMessage>` (MEAI type, stored directly)
 2. **Passed to the activity** on every turn as part of `ExecuteAgentInput.ConversationHistory`
-3. **Rebuilt into `ChatMessage` objects** inside `AgentActivities.ExecuteAgentAsync` and sent to the LLM
+3. **Flattened into a single `List<ChatMessage>`** inside `AgentActivities.ExecuteAgentAsync` and sent to the LLM
 4. **Carried across continue-as-new boundaries** via `AgentWorkflowInput.CarriedHistory`
 
 This means that by default, the LLM sees the **complete conversation** on every turn. For long-running sessions, this can lead to significant token costs and eventually hit context window limits.
@@ -53,8 +53,10 @@ foreach (var entry in input.ConversationHistory)
 var allMessages = new List<ChatMessage>(messageCount);
 foreach (var entry in input.ConversationHistory)
     foreach (var msg in entry.Messages)
-        allMessages.Add(msg.ToChatMessage());
+        allMessages.Add(msg);
 ```
+
+`entry.Messages` is `IReadOnlyList<ChatMessage>` (MEAI types stored directly), so no per-message conversion step is needed — each `msg` is already a `ChatMessage`.
 
 **Token cost grows quadratically** with turn count: turn N sends all N previous exchanges plus the new message. A 20-turn conversation sends ~40 messages to the LLM on the final turn.
 
@@ -62,7 +64,7 @@ foreach (var entry in input.ConversationHistory)
 
 ## History Serialization Format
 
-History entries use a polymorphic JSON format with a `$type` discriminator:
+History entries use a polymorphic JSON format with a `$type` discriminator at the entry layer (`request` / `response`). Within each entry's `messages`, individual `AIContent` items carry MEAI's own `$type` discriminator (e.g., `text`, `functionCall`, `functionResult`) emitted by `AIJsonUtilities.DefaultOptions`:
 
 ```json
 [
@@ -96,7 +98,7 @@ History entries use a polymorphic JSON format with a `$type` discriminator:
 ]
 ```
 
-The serialization captures all content types: text, function calls, function results, data, reasoning, errors, and more. Token usage is preserved per-response for monitoring.
+The serialization captures all MEAI `AIContent` subtypes — `TextContent`, `FunctionCallContent`, `FunctionResultContent`, `DataContent`, `ErrorContent`, `UsageContent`, `TextReasoningContent`, `UriContent`, and more — directly via `AIJsonUtilities.DefaultOptions`'s polymorphic discriminator. New MEAI content types are picked up automatically; no per-type wrapper is needed. Token usage is preserved per-response for monitoring.
 
 ---
 

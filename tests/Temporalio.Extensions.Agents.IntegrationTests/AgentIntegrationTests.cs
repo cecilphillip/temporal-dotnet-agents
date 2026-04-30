@@ -119,7 +119,7 @@ public class AgentIntegrationTests : IClassFixture<IntegrationTestFixture>
     [Fact]
     public async Task ExplicitSessionId_DeterministicRoutingForSameKey()
     {
-        var sessionId = new TemporalAgentSessionId("EchoAgent", $"user-{s_runId}");
+        var sessionId = new TemporalAgentSessionId("EchoAgent", $"user_{s_runId}");
         var session = new TemporalAgentSession(sessionId);
 
         var r1 = await _fixture.AgentProxy.RunAsync("First call", session);
@@ -133,8 +133,8 @@ public class AgentIntegrationTests : IClassFixture<IntegrationTestFixture>
     [Fact]
     public async Task ExplicitSessionId_WorkflowIdMatchesExpectedFormat()
     {
-        var sessionId = new TemporalAgentSessionId("EchoAgent", $"check-{s_runId}");
-        Assert.Equal($"ta-echoagent-check-{s_runId}", sessionId.WorkflowId);
+        var sessionId = new TemporalAgentSessionId("EchoAgent", $"check_{s_runId}");
+        Assert.Equal($"ta-echoagent-check_{s_runId}", sessionId.WorkflowId);
     }
 
     // ── Agent not registered ────────────────────────────────────────────────

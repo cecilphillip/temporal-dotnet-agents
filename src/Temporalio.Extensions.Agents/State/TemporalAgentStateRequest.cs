@@ -43,7 +43,7 @@ public sealed class TemporalAgentStateRequest : TemporalAgentStateEntry
         {
             CorrelationId = request.CorrelationId,
             OrchestrationId = request.OrchestrationId,
-            Messages = request.Messages.Select(TemporalAgentStateMessage.FromChatMessage).ToList(),
+            Messages = request.Messages.ToList(),
             CreatedAt = request.Messages.Count > 0
                 ? request.Messages.Min(m => m.CreatedAt) ?? timestamp
                 : timestamp,

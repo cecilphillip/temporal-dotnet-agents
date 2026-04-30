@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
@@ -16,7 +17,7 @@ public abstract class TemporalAgentStateEntry
     public required DateTimeOffset CreatedAt { get; init; }
 
     [JsonPropertyName("messages")]
-    public IReadOnlyList<TemporalAgentStateMessage> Messages { get; init; } = [];
+    public IReadOnlyList<ChatMessage> Messages { get; init; } = [];
 
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? ExtensionData { get; set; }

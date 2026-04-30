@@ -1,3 +1,4 @@
+using Microsoft.Extensions.AI;
 using Temporalio.Extensions.Agents.Session;
 using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.Agents.Workflows;
@@ -67,9 +68,9 @@ public class WorkflowQueryTests : IClassFixture<IntegrationTestFixture>
         Assert.NotEmpty(request.Messages);
 
         var requestMsg = request.Messages[0];
-        Assert.Equal("user", requestMsg.Role);
+        Assert.Equal(ChatRole.User, requestMsg.Role);
         var requestText = requestMsg.Contents
-            .OfType<TemporalAgentStateTextContent>()
+            .OfType<TextContent>()
             .FirstOrDefault();
         Assert.NotNull(requestText);
         Assert.Equal("What is Temporal?", requestText.Text);
@@ -79,9 +80,9 @@ public class WorkflowQueryTests : IClassFixture<IntegrationTestFixture>
         Assert.NotEmpty(response.Messages);
 
         var responseMsg = response.Messages[0];
-        Assert.Equal("assistant", responseMsg.Role);
+        Assert.Equal(ChatRole.Assistant, responseMsg.Role);
         var responseText = responseMsg.Contents
-            .OfType<TemporalAgentStateTextContent>()
+            .OfType<TextContent>()
             .FirstOrDefault();
         Assert.NotNull(responseText);
         Assert.Contains("Echo [1]: What is Temporal?", responseText.Text);

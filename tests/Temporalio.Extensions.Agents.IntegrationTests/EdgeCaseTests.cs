@@ -134,7 +134,7 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
 
         var request = Assert.IsType<TemporalAgentStateRequest>(history[0]);
         var textContent = request.Messages[0].Contents
-            .OfType<TemporalAgentStateTextContent>()
+            .OfType<TextContent>()
             .First();
         Assert.Equal(unicodeText, textContent.Text);
 
@@ -382,7 +382,7 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
 
         var request = Assert.IsType<TemporalAgentStateRequest>(history[0]);
         Assert.Equal(2, request.Messages.Count);
-        Assert.All(request.Messages, m => Assert.Equal("user", m.Role));
+        Assert.All(request.Messages, m => Assert.Equal(ChatRole.User, m.Role));
 
         _output.WriteLine("Multiple user messages in single turn preserved correctly.");
     }
@@ -418,8 +418,8 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
         // Each request has a user message, each response has an assistant message.
         var req1 = (TemporalAgentStateRequest)history[0];
         var resp1 = (TemporalAgentStateResponse)history[1];
-        Assert.Equal("user", req1.Messages[0].Role);
-        Assert.Equal("assistant", resp1.Messages[0].Role);
+        Assert.Equal(ChatRole.User, req1.Messages[0].Role);
+        Assert.Equal(ChatRole.Assistant, resp1.Messages[0].Role);
 
         _output.WriteLine("User-Assistant role alternation verified across 2 turns.");
     }

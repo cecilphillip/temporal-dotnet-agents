@@ -30,7 +30,7 @@ public sealed class TemporalAgentStateResponse : TemporalAgentStateEntry
             CreatedAt = response.CreatedAt
                 ?? (response.Messages.Count > 0 ? response.Messages.Max(m => m.CreatedAt) : null)
                 ?? timestamp,
-            Messages = response.Messages.Select(TemporalAgentStateMessage.FromChatMessage).ToList(),
+            Messages = response.Messages.ToList(),
             Usage = TemporalAgentStateUsage.FromUsage(response.Usage)
         };
     }
@@ -40,7 +40,7 @@ public sealed class TemporalAgentStateResponse : TemporalAgentStateEntry
         return new AgentResponse
         {
             CreatedAt = this.CreatedAt,
-            Messages = this.Messages.Select(m => m.ToChatMessage()).ToList(),
+            Messages = this.Messages.ToList(),
             Usage = this.Usage?.ToUsageDetails()
         };
     }

@@ -59,7 +59,7 @@ internal sealed class AgentActivities(
         var allMessages = new List<ChatMessage>(messageCount);
         foreach (var entry in input.ConversationHistory)
             foreach (var msg in entry.Messages)
-                allMessages.Add(msg.ToChatMessage());
+                allMessages.Add(msg);
 
         _logger.LogActivityHistoryRebuilt(input.AgentName, sessionId.WorkflowId,
             input.ConversationHistory.Count, allMessages.Count);

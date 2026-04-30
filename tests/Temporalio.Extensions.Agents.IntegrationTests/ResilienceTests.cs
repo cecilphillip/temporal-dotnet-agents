@@ -1,3 +1,4 @@
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Temporalio.Client;
@@ -192,14 +193,14 @@ public class ResilienceTests
                 // Verify the first request contains "Turn 1".
                 var firstRequest = Assert.IsType<TemporalAgentStateRequest>(history[0]);
                 var textContent = firstRequest.Messages[0].Contents
-                    .OfType<TemporalAgentStateTextContent>()
+                    .OfType<TextContent>()
                     .First();
                 Assert.Equal("Turn 1", textContent.Text);
 
                 // Verify the last response is for Turn 3.
                 var lastResponse = Assert.IsType<TemporalAgentStateResponse>(history[5]);
                 var responseText = lastResponse.Messages[0].Contents
-                    .OfType<TemporalAgentStateTextContent>()
+                    .OfType<TextContent>()
                     .First();
                 Assert.Contains("Echo [3]: Turn 3", responseText.Text);
 

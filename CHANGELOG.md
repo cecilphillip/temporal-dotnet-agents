@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed (BREAKING)
+
+- **`Temporalio.Extensions.Agents` workflow history wire format.** Conversation
+  history entries serialized by prior versions are not deserializable by this
+  version. `TemporalAgentStateEntry.Messages` changed from a TA-custom
+  `TemporalAgentStateMessage[]` shape to MEAI's `ChatMessage[]`. The
+  `TemporalAgentStateMessage` and `TemporalAgentStateContent` hierarchies
+  (13 types in total) are removed; `Microsoft.Extensions.AI.ChatMessage` and
+  the `AIContent` subtypes are used directly. Polymorphism is preserved
+  end-to-end through `DurableAIDataConverter` (which is auto-wired by both
+  `AddTemporalAgents()` and `AddWorkerPlugin(new TemporalAgentsPlugin(...))`).
+  New MEAI content types are now picked up automatically — no per-type
+  wrapper to add.
+
+  **Migration:** drain in-flight workflows before upgrading. Stop new
+  workflow starts on the prior version, wait for in-flight workflows to
+  complete (or use `ContinueAsNew` to roll history), then deploy the new
+  version. No dual-reader compatibility shim is provided; the library is
+  in preview.
+
+### Fixed
+
+- **`ChatMessage.AdditionalProperties` now round-trips through agent
+  conversation history.** Prior versions silently dropped this field
+  during the `TemporalAgentStateMessage.FromChatMessage` conversion. With
+  direct `ChatMessage` storage, the field is preserved end-to-end and is
+  visible in `GetHistory()` query results.
+
+---
+
 ## [0.1.4] - 2026-03-13 
 
 ### Added

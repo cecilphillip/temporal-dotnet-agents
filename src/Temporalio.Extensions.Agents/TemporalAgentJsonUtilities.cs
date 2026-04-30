@@ -1,6 +1,7 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.AI;
 using Temporalio.Extensions.Agents.State;
 
 namespace Temporalio.Extensions.Agents;
@@ -12,12 +13,9 @@ internal static class TemporalAgentJsonUtilities
 
     private static JsonSerializerOptions CreateDefaultOptions()
     {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-        };
-
+        var options = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions);
+        options.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+        options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
         options.TypeInfoResolverChain.Add(TemporalAgentStateJsonContext.Default);
 
         options.MakeReadOnly();

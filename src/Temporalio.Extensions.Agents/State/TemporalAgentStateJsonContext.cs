@@ -5,9 +5,7 @@ using System.Text.Json.Serialization;
 namespace Temporalio.Extensions.Agents.State;
 
 [JsonSourceGenerationOptions(WriteIndented = false)]
-[JsonSerializable(typeof(TemporalAgentStateContent))]
 [JsonSerializable(typeof(TemporalAgentStateEntry))]
-[JsonSerializable(typeof(TemporalAgentStateMessage))]
 [JsonSerializable(typeof(TemporalAgentStateRequest))]
 [JsonSerializable(typeof(TemporalAgentStateResponse))]
 // Function call and result content

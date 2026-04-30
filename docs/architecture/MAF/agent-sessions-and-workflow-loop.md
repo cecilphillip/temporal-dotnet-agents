@@ -169,10 +169,10 @@ Every request/response pair is recorded in `_history` as a `TemporalAgentStateEn
 
 ```
 _history: [
-    TemporalAgentStateRequest  { correlationId: "abc", messages: [User: "Hi"] },
-    TemporalAgentStateResponse { correlationId: "abc", messages: [Assistant: "Hello!"], usage: {...} },
-    TemporalAgentStateRequest  { correlationId: "def", messages: [User: "Weather?"] },
-    TemporalAgentStateResponse { correlationId: "def", messages: [Assistant: "It's sunny"], usage: {...} },
+    TemporalAgentStateRequest  { correlationId: "abc", messages: [ChatMessage(User, "Hi")] },
+    TemporalAgentStateResponse { correlationId: "abc", messages: [ChatMessage(Assistant, "Hello!")], usage: {...} },
+    TemporalAgentStateRequest  { correlationId: "def", messages: [ChatMessage(User, "Weather?")] },
+    TemporalAgentStateResponse { correlationId: "def", messages: [ChatMessage(Assistant, "It's sunny")], usage: {...} },
 ]
 ```
 
@@ -182,11 +182,11 @@ Each entry contains:
 |-------|---------|
 | `CorrelationId` | Links a request to its response (GUID, assigned by the caller) |
 | `CreatedAt` | Timestamp for ordering |
-| `Messages` | Serialized `ChatMessage` objects (user text, assistant text, tool calls, tool results) |
+| `Messages` | `IReadOnlyList<ChatMessage>` — MEAI types stored directly (user text, assistant text, tool calls, tool results); polymorphism preserved by `DurableAIDataConverter` |
 | `Usage` (response only) | Token counts from the LLM |
 | `OrchestrationId` (request only) | Workflow ID of the orchestrating workflow, if this was a sub-agent call |
 
-When the activity executes, it receives the **entire history** flattened into a list of `ChatMessage` objects. This gives the LLM full conversational context on every turn:
+When the activity executes, it receives the **entire history** flattened into a list of `ChatMessage` objects. Because `entry.Messages` is already `IReadOnlyList<ChatMessage>`, no conversion step is needed — the messages are appended directly. This gives the LLM full conversational context on every turn:
 
 ```csharp
 // Inside AgentActivities.ExecuteAgentAsync
@@ -197,7 +197,7 @@ foreach (var entry in input.ConversationHistory)
 var allMessages = new List<ChatMessage>(messageCount);
 foreach (var entry in input.ConversationHistory)
     foreach (var msg in entry.Messages)
-        allMessages.Add(msg.ToChatMessage());
+        allMessages.Add(msg);
 
 // allMessages now contains: [User: "Hi", Assistant: "Hello!", User: "Weather?"]
 // The LLM sees the full conversation

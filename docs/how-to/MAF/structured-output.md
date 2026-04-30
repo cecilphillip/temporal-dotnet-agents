@@ -291,8 +291,9 @@ When `ChatResponseFormat` is used, it's serialized into the conversation history
 
 - `ResponseType`: `"json"` or `"text"`
 - `ResponseSchema`: the JSON schema as a `JsonElement` (for `ChatResponseFormatJson`)
+- `Messages`: the request messages as `ChatMessage[]` (MEAI type, stored directly)
 
-This ensures that on replay, the same format hint is sent to the LLM, preserving determinism.
+This ensures that on replay, the same format hint and messages are sent to the LLM, preserving determinism. `ChatMessage`/`AIContent` polymorphism is preserved end-to-end via `DurableAIDataConverter`.
 
 ---
 
