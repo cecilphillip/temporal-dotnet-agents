@@ -47,6 +47,7 @@ EvaluatorOptimizerWorkflow.RunAsync(task, maxIterations)
 
 ```bash
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/EvaluatorOptimizer
+dotnet user-secrets set "OPENAI_API_BASE_URL" "https://api.openai.com/v1" --project samples/MAF/EvaluatorOptimizer
 ```
 
 ### Run

@@ -50,11 +50,13 @@ proxy.RunAsync(messages, session)        ← [WorkflowUpdate] to AgentWorkflow
 - [.NET 10 SDK](https://dot.net) or later
 - A local Temporal server: `temporal server start-dev`
 - An OpenAI-compatible API key
+- This sample waits for you to type `approve` or `reject` at the console — do not run it with piped stdin
 
 ### Configure API credentials
 
 ```bash
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/HumanInTheLoop
+dotnet user-secrets set "OPENAI_API_BASE_URL" "https://api.openai.com/v1" --project samples/MAF/HumanInTheLoop
 ```
 
 ### Run

@@ -29,6 +29,7 @@ This sample demonstrates:
 
 ```bash
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/WorkflowOrchestration
+dotnet user-secrets set "OPENAI_API_BASE_URL" "https://api.openai.com/v1" --project samples/MAF/WorkflowOrchestration
 ```
 
 ### Run

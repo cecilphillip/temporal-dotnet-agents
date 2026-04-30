@@ -48,19 +48,31 @@ When `MonitorWorkflow` detects an anomaly, it signals `AlertWorkflow` through `A
 
 External code inspects workflow state via `[WorkflowQuery]` — e.g., `GetStatus()` on the monitor, `GetNotifications()` on the alert workflow. Queries are non-blocking and don't affect workflow execution, making them safe for dashboards and health checks.
 
-## How to Run
+## Highlights
+
+- **Custom workflows, not AgentWorkflow.** `AgentWorkflow` is designed for conversational sessions with history/HITL. The monitor needs signal-driven data ingestion + periodic batch analysis — a fundamentally different loop structure.
+
+- **`GetAgent()` inside workflows for LLM calls.** This is the standard sub-agent pattern. Each LLM call runs as a durable activity — crash-safe and automatically replayed on recovery.
+
+- **Cross-workflow signal via activity.** Since the Temporal .NET SDK doesn't have `Workflow.SignalExternalWorkflow`, we use the established pattern of an activity with `ITemporalClient`.
+
+- **Bounded buffer + continue-as-new.** Prevents workflow state from growing unboundedly. Essential for long-lived ambient agents that may run for days or weeks.
+
+- **Fixed workflow IDs + `UseExisting`.** Re-running the sample reuses existing workflows rather than creating duplicates — idempotent startup.
+
+## Getting Started
 
 ### Prerequisites
 
+- [.NET 10 SDK](https://dot.net) or later
 - A local Temporal server: `temporal server start-dev`
-- OpenAI API credentials via `dotnet user-secrets` (see below) or environment variable
+- An OpenAI-compatible API key
 
 ### Configure API credentials
 
-Set your API key with:
-
 ```bash
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/AmbientAgent
+dotnet user-secrets set "OPENAI_API_BASE_URL" "https://api.openai.com/v1" --project samples/MAF/AmbientAgent
 ```
 
 ### Run
@@ -71,19 +83,14 @@ dotnet run --project samples/MAF/AmbientAgent/AmbientAgent.csproj
 
 ### Expected Output
 
-The sample sends 20 health readings with a spike window at readings 13-15. You should see:
-- 4 analysis passes (every 5 readings)
-- An anomaly detection during the spike window
-- An alert notification composed by the AlertAgent
+The sample sends 20 health readings with a spike at readings 13–15. You should see 4 analysis passes (every 5 readings), an anomaly detected during the spike, and an alert composed by the AlertAgent:
 
-## Highlights
-
-1. **Custom workflows, not AgentWorkflow.** `AgentWorkflow` is designed for conversational sessions with history/HITL. The monitor needs signal-driven data ingestion + periodic batch analysis — a fundamentally different loop structure.
-
-2. **`GetAgent()` inside workflows for LLM calls.** This is the standard sub-agent pattern. Each LLM call runs as a durable activity — crash-safe and automatically replayed on recovery.
-
-3. **Cross-workflow signal via activity.** Since the Temporal .NET SDK doesn't have `Workflow.SignalExternalWorkflow`, we use the established pattern of an activity with `ITemporalClient`.
-
-4. **Bounded buffer + continue-as-new.** Prevents workflow state from growing unboundedly. Essential for long-lived ambient agents that may run for days or weeks.
-
-5. **Fixed workflow IDs + `UseExisting`.** Re-running the sample reuses existing workflows rather than creating duplicates — idempotent startup.
+```
+[Monitor] Received reading 5 — triggering analysis...
+[Monitor] Analysis: No anomalies detected.
+...
+[Monitor] Received reading 15 — triggering analysis...
+[Monitor] Analysis: ANOMALY detected — CPU spike and elevated temperature.
+[Alert] Notification: Elevated CPU and temperature detected between readings 13–15...
+Done.
+```

@@ -65,6 +65,7 @@ Sdk.CreateTracerProviderBuilder()
 
 ```bash
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/MultiAgentRouting
+dotnet user-secrets set "OPENAI_API_BASE_URL" "https://api.openai.com/v1" --project samples/MAF/MultiAgentRouting
 ```
 
 ### Run

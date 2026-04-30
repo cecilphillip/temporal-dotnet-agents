@@ -2,7 +2,7 @@
 
 ## Overview
 
-This sample demonstrates **routing entirely inside a Temporal workflow** — no `IAgentRouter`, no `SetRouterAgent`, no `RouteAsync`. The workflow itself acts as the router with full programmatic control.
+This sample demonstrates **routing entirely inside a Temporal workflow** — the workflow itself is the router, with full programmatic control over classification and dispatch.
 
 A `CustomerServiceWorkflow` receives a customer question and:
 
@@ -32,11 +32,20 @@ Every agent call runs as a durable Temporal activity. If the worker crashes afte
 
 | | MultiAgentRouting | WorkflowRouting (this sample) |
 |---|---|---|
-| **Routing mechanism** | `IAgentRouter` + `RouteAsync` (external) | `switch` expression inside the workflow |
-| **Router registration** | `SetRouterAgent` + `AddAgentDescriptor` | `AddAIAgent` + optionally `AddAgentDescriptor` (for dynamic routing) |
-| **Control flow** | Framework-driven (LLM picks agent name, framework dispatches) | Code-driven (you write the if/else/switch) |
-| **Extensibility** | Add descriptors to influence LLM routing | Add any logic — fallback chains, confidence thresholds, multi-step classification |
-| **Agent discovery** | Automatic from descriptors | Static (hardcoded) or dynamic (via activity + descriptors) |
+| **Routing mechanism** | `RoutingActivities.ClassifyRequest` activity (keyword scoring, no LLM) | LLM `Classifier` agent inside the workflow, result drives a `switch` |
+| **Control flow** | Activity returns agent name → workflow dispatches | Workflow classifies + dispatches in one place |
+| **Also demonstrates** | Parallel fan-out via `ExecuteAgentsInParallelAsync` + OTel tracing | Dynamic agent discovery via activity + runtime-built classifier prompt |
+| **Agent discovery** | Hardcoded keyword map inside the activity | Static `switch` (static routing) or live registry query via activity (dynamic routing) |
+
+## Highlights
+
+1. **Workflow as router.** All routing logic lives in `CustomerServiceWorkflow.RunAsync` as a plain `switch` expression. No framework abstractions to learn or configure.
+
+2. **Graceful default.** Unrecognized classifications fall through to `GeneralAgent` via the `_` discard pattern, so unexpected LLM output doesn't crash the workflow.
+
+3. **Auto-extracted descriptions.** Specialist agents carry `description:` in their `AsAIAgent()` calls, and `AddAIAgent()` auto-extracts these into the descriptor registry. No explicit `AddAgentDescriptor()` needed — the dynamic routing workflow discovers agents via the same descriptors. No `IAgentRouter` is created.
+
+4. **Independent sessions per agent.** Each agent call gets its own session (`CreateSessionAsync`), keeping conversation histories isolated between the classifier and specialist.
 
 ## Getting Started
 
@@ -58,6 +67,7 @@ Set your API key with:
 
 ```bash
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/WorkflowRouting
+dotnet user-secrets set "OPENAI_API_BASE_URL" "https://api.openai.com/v1" --project samples/MAF/WorkflowRouting
 ```
 
 To use a non-default Temporal address, add it to `appsettings.json`:
@@ -121,16 +131,6 @@ Each question is classified by the Classifier agent, then routed to the appropri
 | **TechSupportAgent** | Tech specialist | Software issues, crashes, error messages, troubleshooting |
 | **GeneralAgent** | Catch-all | Greetings, general inquiries, company information |
 
-## Highlights
-
-1. **Workflow as router.** All routing logic lives in `CustomerServiceWorkflow.RunAsync` as a plain `switch` expression. No framework abstractions to learn or configure.
-
-2. **Graceful default.** Unrecognized classifications fall through to `GeneralAgent` via the `_` discard pattern, so unexpected LLM output doesn't crash the workflow.
-
-3. **Auto-extracted descriptions.** Specialist agents carry `description:` in their `AsAIAgent()` calls, and `AddAIAgent()` auto-extracts these into the descriptor registry. No explicit `AddAgentDescriptor()` needed — the dynamic routing workflow discovers agents via the same descriptors. No `IAgentRouter` is created.
-
-4. **Independent sessions per agent.** Each agent call gets its own session (`CreateSessionAsync`), keeping conversation histories isolated between the classifier and specialist.
-
 ## Dynamic Routing via Activity
 
 The sample also includes `DynamicRoutingWorkflow`, which demonstrates **truly dynamic agent discovery** — the workflow has zero hardcoded agent names in its routing logic.
@@ -143,11 +143,11 @@ The sample also includes `DynamicRoutingWorkflow`, which demonstrates **truly dy
 - If the agent set changes between the original execution and a replay, the routing decision would differ
 - This breaks Temporal's determinism guarantee — the same reason `DateTime.UtcNow` is forbidden in workflows
 
-### The Safe Pattern: Descriptors + Activity
+### The Safe Pattern: Registry + Activity
 
-`AddAgentDescriptor()` is typically associated with `IAgentRouter`, but it's also a general-purpose agent metadata store. `DynamicRoutingWorkflow` uses descriptors *without* `SetRouterAgent`:
+`DynamicRoutingWorkflow` discovers agents at runtime without hardcoding any names in the routing workflow:
 
-1. **An activity** calls `options.GetRegisteredDescriptors()` to discover available agents and their descriptions — the result is cached in workflow event history
+1. **An activity** calls `options.GetRegisteredAgentNames()` to get the registered agent list, then combines the names with a local descriptions dictionary declared in the activity — the result is cached in workflow event history
 2. **The Classifier agent** receives the descriptor list as context and picks the best match from whatever agents are currently registered
 3. **A validation activity** confirms the LLM's choice is actually registered, with a fallback
 
@@ -155,7 +155,8 @@ The sample also includes `DynamicRoutingWorkflow`, which demonstrates **truly dy
 DynamicRoutingWorkflow
     │
     ├─ Activity: GetAvailableAgents()
-    │    └─ reads AddAgentDescriptor() registrations from TemporalAgentsOptions
+    │    └─ calls options.GetRegisteredAgentNames() for the registered agent list
+    │    └─ combines with a local descriptions map in the activity
     │    └─ returns: [("OrdersAgent", "Handles orders..."), ("TechSupportAgent", "..."), ...]
     │    └─ result cached in event history (replay-safe)
     │
@@ -173,16 +174,14 @@ DynamicRoutingWorkflow
 ### Why This is Truly Dynamic
 
 - **No hardcoded agent names** in the routing workflow — it discovers what's available at runtime
-- **Add a new agent** via `AddAIAgent` + `AddAgentDescriptor` and it's automatically picked up
+- **Add a new agent** via `AddAIAgent` and it's automatically picked up by `GetRegisteredAgentNames()`
 - **Remove an agent** and the validation activity falls back gracefully
-- **The Classifier adapts** — its prompt is built from live descriptors, not a static enum
-- **Replay-safe** — both activity results (descriptor list + validation) are recorded in history
+- **The Classifier adapts** — its prompt is built from the live agent list, not a static enum
+- **Replay-safe** — both activity results (agent list + validation) are recorded in history
 
 ### Auto-Extracted Descriptions
 
-When agents carry a `description:` parameter in their `AsAIAgent()` call, `AddAIAgent()` automatically populates the descriptor registry — no separate `AddAgentDescriptor()` needed. The descriptors are stored in `TemporalAgentsOptions` and exposed via `options.GetRegisteredDescriptors()`. This sample uses them as a metadata source without creating an `IAgentRouter` at all.
-
-For factory-registered agents (`AddAIAgentFactory`), use `AddAgentDescriptor()` explicitly since there's no agent instance available at registration time.
+Agents registered with a `description:` parameter in their `AsAIAgent()` call carry that metadata for documentation and tooling purposes. In this sample, however, the routing activity maintains its own description map — routing metadata is a concern of the routing activity, not the core agent registry. This keeps the agent definitions focused on their AI behavior and the routing logic self-contained in `RoutingActivities`.
 
 ### Files
 
