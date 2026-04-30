@@ -58,6 +58,8 @@ Worker started.
  Agent: Paris has a population of approximately 2.1 million ...
 ════════════════════════════════════════════════════════
 
+(Demo 2 — tool call exchange — output omitted for brevity; shows the model invoking get_weather and returning a forecast.)
+
 ════════════════════════════════════════════════════════
  Demo 3: History Query
 ════════════════════════════════════════════════════════

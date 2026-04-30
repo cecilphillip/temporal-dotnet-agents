@@ -27,6 +27,17 @@ durable_chat.send  (conversation.id = <id>)
 ## Highlights
 
 - **Four sources, not one.** `DurableChatTelemetry.ActivitySourceName` covers library semantic spans; the three `TracingInterceptor` sources cover Temporal protocol spans. Omitting any one of them produces gaps in your trace.
+
+  ```csharp
+  builder.Services
+      .AddOpenTelemetry()
+      .WithTracing(tracing => tracing
+          .AddSource(DurableChatTelemetry.ActivitySourceName)
+          .AddSource(TracingInterceptor.ClientSource.Name)
+          .AddSource(TracingInterceptor.WorkflowsSource.Name)
+          .AddSource(TracingInterceptor.ActivitiesSource.Name)
+          .AddConsoleExporter());
+  ```
 - **`TracingInterceptor` is required for connected traces.** Without it, Temporal's internal gRPC calls break the distributed trace and the library spans appear disconnected from the protocol spans in your backend.
 - **`conversation.id` makes session filtering practical.** Both the client-side `durable_chat.send` span and the worker-side `durable_chat.turn` span carry `conversation.id`, so a single attribute filter surfaces every span for a session across all service instances.
 - **`DurableAIPlugin` is the plugin entry point.** Gated by `[Experimental("TAI001")]`, it is equivalent to `AddDurableAI()` and follows the canonical Temporal AI Partner Ecosystem integration pattern. Suppress `TAI001` with `#pragma warning disable TAI001`.
@@ -49,7 +60,7 @@ dotnet user-secrets set "OPENAI_API_BASE_URL" "https://api.openai.com/v1" --proj
 ### Run
 
 ```bash
-dotnet run --project samples/MEAI/OpenTelemetry/OpenTelemetry.csproj
+dotnet run --project samples/MEAI/OpenTelemetry/DurableOpenTelemetry.csproj
 ```
 
 ### Expected Output

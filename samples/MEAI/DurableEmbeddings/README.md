@@ -46,6 +46,7 @@ DocumentIndexingWorkflow             ParallelDocumentIndexingWorkflow
 ```bash
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MEAI/DurableEmbeddings
 dotnet user-secrets set "OPENAI_API_BASE_URL" "https://api.openai.com/v1" --project samples/MEAI/DurableEmbeddings
+dotnet user-secrets set "OPENAI_EMBEDDING_MODEL" "text-embedding-3-small" --project samples/MEAI/DurableEmbeddings
 ```
 
 ### Run
