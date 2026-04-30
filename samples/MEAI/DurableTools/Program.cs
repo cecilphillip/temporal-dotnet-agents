@@ -71,10 +71,17 @@ builder.Services.AddSingleton<ITemporalClient>(temporalClient);
 // GetCurrentWeather is the real implementation — registered via AddDurableTools()
 // so DurableFunctionActivities can resolve it by name ("get_current_weather")
 // when WeatherReportWorkflow dispatches a durable tool call.
-static string GetCurrentWeather(string city)
-    => Random.Shared.NextDouble() > 0.5
+static async Task<string> GetCurrentWeather(string city)
+{
+    // Simulate a short network round-trip. Without this delay the activity
+    // completes so quickly that the Temporal dev-server UI fires its
+    // legacy __workflow_definitions query at the exact same moment the
+    // workflow tries to complete, causing an SDK activation conflict.
+    await Task.Delay(TimeSpan.FromSeconds(1));
+    return Random.Shared.NextDouble() > 0.5
         ? $"It's sunny and 22 °C in {city}."
         : $"It's overcast and 15 °C in {city}.";
+}
 
 var weatherTool = AIFunctionFactory.Create(
     GetCurrentWeather,
@@ -85,10 +92,10 @@ var weatherTool = AIFunctionFactory.Create(
 // AddChatClient is the idiomatic MEAI pattern — it returns a ChatClientBuilder
 // for chaining middleware, then Build() registers the final IChatClient singleton.
 // DurableChatActivities constructor-injects this on the worker side.
-IChatClient openAiChatClient = (IChatClient)new OpenAIClient(
+IChatClient openAiChatClient = new OpenAIClient(
     new ApiKeyCredential(apiKey),
     new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) }
-).GetChatClient(model);
+).GetChatClient(model).AsIChatClient();
 
 builder.Services
     .AddChatClient(openAiChatClient)
@@ -102,7 +109,7 @@ builder.Services
 // DurableFunctionActivities can resolve it by name at activity execution time.
 // AddWorkflow<WeatherReportWorkflow> registers the workflow type with the worker.
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", taskQueue)
+    .AddHostedTemporalWorker(taskQueue)
     .AddDurableAI(opts =>
     {
         opts.ActivityTimeout = TimeSpan.FromMinutes(5);

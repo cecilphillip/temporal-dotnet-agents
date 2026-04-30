@@ -61,9 +61,14 @@ public sealed class DurableEmbeddingGenerator : DelegatingEmbeddingGenerator<str
             activityOptions.RetryPolicy = _options.RetryPolicy;
         }
 
+        // Do NOT use .ConfigureAwait(false) here: this runs inside a Temporal workflow.
+        // ConfigureAwait(false) bypasses the Temporal workflow scheduler's SynchronizationContext,
+        // causing the continuation to run on the ThreadPool instead of the workflow thread.
+        // The workflow would then be unable to register its CompleteWorkflowExecution command,
+        // causing it to hang indefinitely at WorkflowTaskCompleted without ever completing.
         var output = await Workflow.ExecuteActivityAsync(
             (DurableEmbeddingActivities a) => a.GenerateAsync(input),
-            activityOptions).ConfigureAwait(false);
+            activityOptions);
 
         return output.Embeddings;
     }

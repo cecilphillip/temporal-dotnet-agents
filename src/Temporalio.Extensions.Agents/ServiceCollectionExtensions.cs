@@ -1,8 +1,11 @@
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Temporalio.Client;
 using Temporalio.Extensions.Agents.Workflows;
+using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Hosting;
 
 namespace Temporalio.Extensions.Agents;
@@ -56,6 +59,14 @@ public static class ServiceCollectionExtensions
         {
             services.AddTemporalClient(targetHost, @namespace ?? "default");
         }
+
+        // Auto-wire DurableAIDataConverter so that AgentResponse ChatMessage/AIContent subtypes
+        // (e.g. TextContent) round-trip correctly through the WorkflowUpdate return path.
+        // Without this, the Client process uses DataConverter.Default which drops $type
+        // discriminators, causing all messages to deserialize as base AIContent with no text.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IConfigureOptions<TemporalClientConnectOptions>,
+            DurableAIClientOptionsConfigurator>());
 
         services.AddSingleton<ITemporalAgentClient>(sp =>
             new DefaultTemporalAgentClient(

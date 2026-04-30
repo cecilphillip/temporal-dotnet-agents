@@ -52,9 +52,14 @@ public sealed class DurableAIFunction : DelegatingAIFunction
             activityOptions.RetryPolicy = _options.RetryPolicy;
         }
 
+        // Do NOT use .ConfigureAwait(false) here: this runs inside a Temporal workflow.
+        // ConfigureAwait(false) bypasses the Temporal workflow scheduler's SynchronizationContext,
+        // so the continuation would run on the ThreadPool instead of the workflow thread.
+        // The workflow would then be unable to register its CompleteWorkflowExecution command,
+        // causing it to hang indefinitely at WorkflowTaskCompleted without ever completing.
         var output = await Workflow.ExecuteActivityAsync(
             (DurableFunctionActivities a) => a.InvokeFunctionAsync(input),
-            activityOptions).ConfigureAwait(false);
+            activityOptions);
 
         return output.Result;
     }
