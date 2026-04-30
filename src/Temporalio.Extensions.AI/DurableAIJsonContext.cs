@@ -24,6 +24,11 @@ namespace Temporalio.Extensions.AI;
 [JsonSerializable(typeof(IList<ChatMessage>))]
 [JsonSerializable(typeof(List<ChatMessage>))]
 [JsonSerializable(typeof(IDictionary<string, object?>))]
+[JsonSerializable(typeof(DurableSessionEntry))]
+[JsonSerializable(typeof(DurableSessionRequest))]
+[JsonSerializable(typeof(DurableSessionResponse))]
+[JsonSerializable(typeof(IReadOnlyList<DurableSessionEntry>))]
+[JsonSerializable(typeof(List<DurableSessionEntry>))]
 internal partial class DurableAIJsonContext : JsonSerializerContext;
 
 /// <summary>
