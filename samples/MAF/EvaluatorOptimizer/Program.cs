@@ -72,8 +72,9 @@ var evaluator = openAiClient
             "Otherwise, provide a numbered list of specific, actionable improvements.");
 
 // ── Step 4: Register agents and the orchestrating workflow ────────────────────
+builder.Services.AddTemporalClient(temporalAddress, "default");
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", "evaluator-optimizer")
+    .AddHostedTemporalWorker("evaluator-optimizer")
     .AddTemporalAgents(opts =>
     {
         opts.AddAIAgent(generator);

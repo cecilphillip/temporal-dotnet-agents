@@ -62,14 +62,16 @@ var agent = openAiClient
     );
 
 // ── Step 4: Register Temporal Agents ─────────────────────────────────────────
-// AddHostedTemporalWorker (from Temporalio.Extensions.Hosting, namespace Microsoft.Extensions.DependencyInjection)
-// registers the ITemporalClient and hosted worker. AddTemporalAgents registers:
+// AddTemporalClient registers ITemporalClient in DI (required by ITemporalAgentClient).
+// AddHostedTemporalWorker registers the hosted worker on the given task queue.
+// AddTemporalAgents registers:
 //   • AgentWorkflow    — long-lived workflow that is the durable agent session
 //   • AgentActivities  — activity that calls the real IChatClient (preserves determinism)
 //   • ITemporalAgentClient — sends messages via Temporal Update (no polling required)
 //   • Keyed AIAgent proxy — the object your code actually calls
+builder.Services.AddTemporalClient(temporalAddress, "default");
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", "agents")
+    .AddHostedTemporalWorker("agents")
     .AddTemporalAgents(options => { options.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1)); });
 
 // ── Step 5: Start the host (worker runs as IHostedService) ────────────────────

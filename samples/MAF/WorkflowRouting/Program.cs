@@ -104,8 +104,9 @@ var generalAgent = openAiClient
 // CustomerServiceWorkflow uses hardcoded agent names (static routing).
 // DynamicRoutingWorkflow discovers agents via descriptors at runtime.
 // Both patterns are demonstrated — descriptors don't require SetRouterAgent.
+builder.Services.AddTemporalClient(temporalAddress, "default");
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", "workflow-routing")
+    .AddHostedTemporalWorker("workflow-routing")
     .AddTemporalAgents(opts =>
     {
         // Classifier doesn't need a description — it's not a routable specialist.

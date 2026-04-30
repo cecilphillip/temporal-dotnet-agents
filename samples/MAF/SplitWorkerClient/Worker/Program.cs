@@ -61,7 +61,8 @@ var agent = openAiClient
     );
 
 // ── Step 2: Register the full Temporal Agent stack ────────────────────────────
-// AddHostedTemporalWorker registers the ITemporalClient and hosted worker.
+// AddTemporalClient registers ITemporalClient in DI (required by ITemporalAgentClient).
+// AddHostedTemporalWorker registers the hosted worker on the given task queue.
 // AddTemporalAgents registers:
 //   • AgentWorkflow          — long-lived session workflow (durable state)
 //   • AgentActivities        — activity that runs the real AI inference
@@ -70,8 +71,9 @@ var agent = openAiClient
 //
 // The real agent (ChatClientAgent + IChatClient) MUST be registered here so
 // AgentActivities can resolve it when executing AI requests.
+builder.Services.AddTemporalClient(temporalAddress, "default");
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", "agents")
+    .AddHostedTemporalWorker("agents")
     .AddTemporalAgents(options => { options.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1)); });
 
 // ── Step 3: Run until Ctrl+C ──────────────────────────────────────────────────

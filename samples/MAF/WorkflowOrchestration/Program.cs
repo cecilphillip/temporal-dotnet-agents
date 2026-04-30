@@ -72,7 +72,7 @@ builder.Services
     .AddTemporalClient(temporalAddress, "default");
 
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", "orchestration")
+    .AddHostedTemporalWorker("orchestration")
     .AddTemporalAgents(options =>
     {
         // Register the agent (or factory for DI-resolved agents)

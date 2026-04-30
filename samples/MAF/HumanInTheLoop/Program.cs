@@ -117,7 +117,7 @@ var emailAgent = chatClient.AsAIAgent(
 builder.Services
     .AddTemporalClient(temporalAddress, "default");
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", "hitl-sample")
+    .AddHostedTemporalWorker("hitl-sample")
     .AddTemporalAgents(opts =>
     {
         // HITL requires a timeout that covers the full human review window.
