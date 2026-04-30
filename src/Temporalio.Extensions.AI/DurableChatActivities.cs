@@ -22,7 +22,7 @@ internal sealed class DurableChatActivities(
     /// Executes a chat completion by calling the inner <see cref="IChatClient"/>.
     /// </summary>
     [Activity("Temporalio.Extensions.AI.GetResponse")]
-    public async Task<DurableChatOutput> GetResponseAsync(DurableChatInput input)
+    public async Task<ChatResponse> GetResponseAsync(DurableChatInput input)
     {
         var ctx = ActivityExecutionContext.HasCurrent ? ActivityExecutionContext.Current : null;
         var ct = ctx?.CancellationToken ?? CancellationToken.None;
@@ -59,7 +59,7 @@ internal sealed class DurableChatActivities(
                 "Durable chat activity completed for conversation {ConversationId}, turn {TurnNumber}",
                 input.ConversationId, input.TurnNumber);
 
-            return new DurableChatOutput { Response = response };
+            return response;
         }
         catch (Exception ex)
         {

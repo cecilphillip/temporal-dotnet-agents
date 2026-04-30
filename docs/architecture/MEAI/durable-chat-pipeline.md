@@ -27,8 +27,11 @@ This document covers the internal architecture of the pipeline: how the componen
 | Component | Kind | Role |
 |---|---|---|
 | `DurableChatSessionClient` | External entry point | Starts or reuses the session workflow; sends chat turns as `[WorkflowUpdate]`; exposes history query and HITL methods to external callers |
-| `DurableChatWorkflow` | `[Workflow]` | Long-lived durable session; accumulates conversation history in workflow state; serializes concurrent turns; handles ContinueAsNew and HITL |
-| `DurableChatActivities` | `[Activity]` host | Runs on a worker; calls the real `IChatClient.GetResponseAsync`; emits OTel span |
+| `DurableChatWorkflow` | `[Workflow]` | Long-lived durable session; accumulates `DurableSessionEntry` history (request/response entries) in workflow state; serializes concurrent turns; handles ContinueAsNew and HITL |
+| `DurableChatActivities` | `[Activity]` host | Runs on a worker; calls the real `IChatClient.GetResponseAsync` and returns a `ChatResponse`; emits OTel span |
+| `DurableSessionEntry` | Wire-format type | Abstract base for one turn's history record. Polymorphic with `ai_request`/`ai_response` discriminators on the `$type` property. |
+| `DurableSessionRequest` | `DurableSessionEntry` | The user/tool messages that initiated a turn. Carries `CorrelationId`, `CreatedAt`, `Messages`. |
+| `DurableSessionResponse` | `DurableSessionEntry` | The assistant's reply for a turn. Carries `CorrelationId`, `CreatedAt`, `Messages`, and `UsageDetails? Usage`. Exposes a `Text` convenience accessor returning the last assistant message's text. |
 | `DurableChatClient` | `DelegatingChatClient` middleware | Intercepts `GetResponseAsync` and `GetStreamingResponseAsync`; dispatches as activity when `Workflow.InWorkflow == true`; passes through otherwise |
 | `DurableAIFunction` | `DelegatingAIFunction` | Same dispatch guard for tool calls; serializes arguments and dispatches `DurableFunctionActivities.InvokeFunctionAsync` |
 | `DurableFunctionActivities` | `[Activity]` host | Receives `DurableFunctionInput` with function name; resolves from `DurableFunctionRegistry`; invokes the real `AIFunction` |
@@ -77,7 +80,7 @@ DurableChatSessionClient.ChatAsync
   │              (follows ContinueAsNew chain automatically)
   │
   │  ExecuteUpdateAsync → [WorkflowUpdate("Chat")]
-  │      blocks until the workflow handler completes and returns DurableChatOutput
+  │      blocks until the workflow handler completes and returns DurableSessionResponse
   │
   ▼
 DurableChatWorkflow.ChatAsync   [WorkflowUpdate]
@@ -86,11 +89,14 @@ DurableChatWorkflow.ChatAsync   [WorkflowUpdate]
   │  WaitConditionAsync(() => !_isProcessing)   ← wait for any concurrent turn to finish
   │  _isProcessing = true
   │
-  │  foreach msg in input.Messages → _history.Add(msg)   ← append user turn to history
+  │  correlationId = input.CorrelationId ?? Workflow.NewGuid().ToString("N")
+  │  requestEntry  = DurableSessionRequest.FromMessages(input.Messages, correlationId, Workflow.UtcNow)
+  │  _history.Add(requestEntry)            ← append request entry to history
   │  _turnCount++
   │
+  │  flatMessages = _history.SelectMany(e => e.Messages).ToList()
   │  activityInput = DurableChatInput
-  │      { Messages = [.._history],    ← FULL history sent to activity
+  │      { Messages = flatMessages,    ← FULL history flattened to ChatMessage[] for the LLM
   │        Options  = input.Options,
   │        ConversationId = WorkflowId,
   │        TurnNumber = _turnCount }
@@ -114,17 +120,19 @@ LLM (OpenAI / Azure OpenAI / Ollama / etc.)
   ◄  ChatResponse
   │
 DurableChatActivities
-  │  return DurableChatOutput { Response = chatResponse }
+  │  return chatResponse
   │  (result checkpointed to Temporal event history)
   │
 DurableChatWorkflow.ChatAsync  (resumes from ExecuteActivityAsync)
-  │  foreach msg in output.Response.Messages → _history.Add(msg)  ← append response turn
+  │  responseEntry = BuildResponseEntry(correlationId, chatResponse, Workflow.UtcNow)
+  │                = DurableSessionResponse.FromChatResponse(...)
+  │  _history.Add(responseEntry)   ← append response entry (carries Usage + CorrelationId)
   │  _isProcessing = false
-  │  return DurableChatOutput
+  │  return responseEntry          ← DurableSessionResponse
   │
 DurableChatSessionClient.ChatAsync  (ExecuteUpdateAsync returns)
   │  span tags: response model, input tokens, output tokens
-  │  return output.Response   ← ChatResponse to original caller
+  │  return DurableSessionResponse to original caller (response.Text exposes the last assistant message)
   │
 External Caller
 ```
@@ -208,7 +216,7 @@ public void ValidateChat(DurableChatInput input)
 
 **Durability across crashes.** Once an update is accepted (past validation), it is written to history. If the worker crashes after accepting the update but before the handler completes and returns, Temporal replays the workflow on a healthy worker and re-executes the update handler from history. The caller's `ExecuteUpdateAsync` call continues blocking until the response arrives. The caller never sees a lost request.
 
-**Structured response.** The update handler returns `DurableChatOutput` — a typed value carrying the `ChatResponse`. The caller gets a strongly typed result directly from `ExecuteUpdateAsync`, with no polling, no separate query, and no conversion layer.
+**Structured response.** The update handler returns `DurableSessionResponse` — a typed value carrying the assistant `Messages`, per-turn `Usage` (token counts), and `CorrelationId`. The caller gets a strongly typed result directly from `ExecuteUpdateAsync`, with no polling, no separate query, and no conversion layer. Use `response.Text` for the common "give me the reply text" pattern.
 
 ---
 
@@ -216,21 +224,46 @@ public void ValidateChat(DurableChatInput input)
 
 ### Accumulation Per Turn
 
-History is stored as `List<ChatMessage> _history` in the workflow's in-memory state. Each chat update handler appends the incoming user messages, executes the LLM activity with the full history, then appends the response messages:
+History is stored as `List<DurableSessionEntry> _history` in the workflow's in-memory state. Each chat update handler appends a `DurableSessionRequest` for the incoming messages, executes the LLM activity with the full flattened history, then appends a `DurableSessionResponse` for the LLM's reply:
 
 ```
-Turn 1:  _history = [User("Hello")]
+Turn 1:  _history = [Request(corrId=A, [User("Hello")])]
          → activity receives [User("Hello")]
-         → LLM returns Assistant("Hi there!")
-         _history = [User("Hello"), Assistant("Hi there!")]
+         → LLM returns Assistant("Hi there!") with Usage { Input=12, Output=4 }
+         _history = [
+             Request (corrId=A, [User("Hello")]),
+             Response(corrId=A, [Assistant("Hi there!")], Usage={12,4}),
+         ]
 
-Turn 2:  _history = [User("Hello"), Assistant("Hi there!"), User("Tell me more")]
-         → activity receives all 3 messages
-         → LLM returns Assistant("Sure, ...")
-         _history = [..., User("Tell me more"), Assistant("Sure, ...")]
+Turn 2:  _history adds Request(corrId=B, [User("Tell me more")])
+         → activity receives the flattened ChatMessage[] (3 messages)
+         → LLM returns Assistant("Sure, ...") with Usage
+         _history = [..Turn 1.., Request(corrId=B, ...), Response(corrId=B, ..., Usage)]
 ```
 
-The full history is always sent to the activity. The LLM always has complete context. There is no implicit truncation in the workflow.
+Each turn produces exactly two entries — one request, one response — sharing a `CorrelationId`. The activity layer sees only `ChatMessage[]` (entries are flattened via `entries.SelectMany(e => e.Messages)` before dispatch); the LLM always has complete context. There is no implicit truncation in the workflow.
+
+The polymorphic JSON shape of an entry on the wire:
+
+```json
+[
+  {
+    "$type": "ai_request",
+    "correlationId": "...",
+    "createdAt": "...",
+    "messages": [ /* ChatMessage[] */ ]
+  },
+  {
+    "$type": "ai_response",
+    "correlationId": "...",
+    "createdAt": "...",
+    "messages": [ /* ChatMessage[] */ ],
+    "usage": { "inputTokenCount": 12, "outputTokenCount": 4, "totalTokenCount": 16 }
+  }
+]
+```
+
+`DurableSessionResponse.Text` is a `[JsonIgnore]` convenience property — it does not appear in the wire format; it returns the last assistant message's text from `Messages` at read time.
 
 ### ContinueAsNew — Never Losing History
 
@@ -243,12 +276,12 @@ bool conditionMet = await Workflow.WaitConditionAsync(
 
 if (Workflow.ContinueAsNewSuggested && !_shutdownRequested)
 {
-    var carriedHistory = _history.ToList();
+    var carriedHistory = _history.ToList();   // List<DurableSessionEntry>
     throw Workflow.CreateContinueAsNewException(
         (DurableChatWorkflow wf) => wf.RunAsync(new DurableChatWorkflowInput
         {
             TimeToLive       = input.TimeToLive,
-            CarriedHistory   = carriedHistory,   // ← history carried forward
+            CarriedHistory   = carriedHistory,   // ← entry-shaped history carried forward
             ActivityTimeout  = input.ActivityTimeout,
             HeartbeatTimeout = input.HeartbeatTimeout,
             ApprovalTimeout  = input.ApprovalTimeout,
@@ -283,10 +316,10 @@ The condition only fires when `!_isProcessing` — the workflow will never Conti
 
 ```csharp
 [WorkflowQuery("GetHistory")]
-public IReadOnlyList<ChatMessage> GetHistory() => _history;
+public IReadOnlyList<DurableSessionEntry> GetHistory() => _history;
 ```
 
-`DurableChatSessionClient.GetHistoryAsync` calls it via `QueryAsync`.
+`DurableChatSessionClient.GetHistoryAsync` calls it via `QueryAsync` and returns `IReadOnlyList<DurableSessionEntry>`. Callers can pattern-match each entry as either a `DurableSessionRequest` or `DurableSessionResponse` to access per-turn metadata such as `Usage` (response only) and `CorrelationId` (both). To get a flat `ChatMessage` log for downstream display, flatten via `entries.SelectMany(e => e.Messages)`.
 
 ### History Reduction (Optional)
 
@@ -303,6 +336,14 @@ services
 ```
 
 > **Design rationale — full history lives on the workflow, not on middleware.** `DurableChatWorkflow._history` is the single source of truth for full conversation state. It is workflow-local (no leakage across conversations), replay-safe (rebuilt deterministically from Temporal event history), and carried through `ContinueAsNew` transitions. Reducer middleware stays in its proper, stateless role of trimming the message list passed to the LLM on each turn — it never accumulates conversation state of its own.
+
+#### Entry-shaped `HistoryReducer` for `ContinueAsNew`
+
+Separate from the LLM-input reducer above, `DurableExecutionOptions.HistoryReducer` is an optional delegate that trims the workflow's own entry log when the workflow rolls over via `ContinueAsNew`. Its signature is `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?`. It runs in workflow context (must be deterministic and synchronous) and operates on the entry shape — so trimming preserves per-turn `Usage` and `CorrelationId` metadata across rollovers rather than dropping it.
+
+```csharp
+opts.HistoryReducer = entries => entries.TakeLast(50).ToList();
+```
 
 See [docs/how-to/MEAI/usage.md](../../how-to/MEAI/usage.md) for complete registration examples.
 

@@ -35,18 +35,24 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
     }
 
     /// <summary>
-    /// Sends messages to a durable chat session and returns the response.
+    /// Sends messages to a durable chat session and returns the response entry.
     /// Starts the session workflow if not already running.
     /// </summary>
     /// <param name="conversationId">A unique identifier for the conversation.</param>
     /// <param name="messages">The messages to send.</param>
     /// <param name="options">Optional chat options.</param>
+    /// <param name="correlationId">
+    /// Optional caller-supplied correlation ID for this turn. When null/empty, the
+    /// workflow auto-generates one via <c>Workflow.NewGuid()</c>. Useful for threading
+    /// upstream HTTP/gRPC trace IDs into the workflow for cross-system log correlation.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The chat response from the LLM.</returns>
-    public async Task<ChatResponse> ChatAsync(
+    /// <returns>The response entry from the LLM, including per-turn <see cref="UsageDetails"/> and correlation ID.</returns>
+    public async Task<DurableSessionResponse> ChatAsync(
         string conversationId,
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
+        string? correlationId = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(conversationId);
@@ -74,7 +80,7 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
                 HeartbeatTimeout = _options.HeartbeatTimeout,
                 ApprovalTimeout = _options.ApprovalTimeout,
                 SearchAttributes = _options.EnableSearchAttributes ? new DurableSessionAttributes() : null,
-                MaxHistorySize = _options.MaxHistorySize,
+                MaxEntryCount = _options.MaxEntryCount,
                 HistoryReducer = _options.HistoryReducer,
             }),
             new WorkflowOptions(workflowId, _options.TaskQueue!)
@@ -96,23 +102,25 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
             Options = options,
             ConversationId = conversationId,
             ClientKey = effectiveKey,
+            CorrelationId = string.IsNullOrEmpty(correlationId) ? null : correlationId,
         };
 
-        var output = await handle.ExecuteUpdateAsync<DurableChatWorkflow, DurableChatOutput>(
+        var responseEntry = await handle.ExecuteUpdateAsync<DurableChatWorkflow, DurableSessionResponse>(
             wf => wf.ChatAsync(input),
             new WorkflowUpdateOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } });
 
-        span?.SetTag(DurableChatTelemetry.ResponseModelAttribute, output.Response.ModelId);
-        span?.SetTag(DurableChatTelemetry.InputTokensAttribute, output.Response.Usage?.InputTokenCount);
-        span?.SetTag(DurableChatTelemetry.OutputTokensAttribute, output.Response.Usage?.OutputTokenCount);
+        span?.SetTag(DurableChatTelemetry.InputTokensAttribute, responseEntry.Usage?.InputTokenCount);
+        span?.SetTag(DurableChatTelemetry.OutputTokensAttribute, responseEntry.Usage?.OutputTokenCount);
 
-        return output.Response;
+        return responseEntry;
     }
 
     /// <summary>
-    /// Retrieves the conversation history for a session.
+    /// Retrieves the conversation history for a session as a list of
+    /// <see cref="DurableSessionEntry"/> instances. Each turn appears as a request entry
+    /// followed by a response entry.
     /// </summary>
-    public async Task<IReadOnlyList<ChatMessage>> GetHistoryAsync(
+    public async Task<IReadOnlyList<DurableSessionEntry>> GetHistoryAsync(
         string conversationId,
         CancellationToken cancellationToken = default)
     {
@@ -121,7 +129,7 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
         var workflowId = GetWorkflowId(conversationId);
         var handle = _client.GetWorkflowHandle<DurableChatWorkflow>(workflowId);
 
-        return await handle.QueryAsync<DurableChatWorkflow, IReadOnlyList<ChatMessage>>(
+        return await handle.QueryAsync<DurableChatWorkflow, IReadOnlyList<DurableSessionEntry>>(
             wf => wf.GetHistory(),
             new WorkflowQueryOptions { Rpc = new RpcOptions { CancellationToken = cancellationToken } });
     }

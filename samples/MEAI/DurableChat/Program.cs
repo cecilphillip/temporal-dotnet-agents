@@ -184,12 +184,14 @@ static async Task RunHistoryQueryDemoAsync(DurableChatSessionClient sessionClien
         [new ChatMessage(ChatRole.User, "Which of those is closest to the Sun?")]);
 
     // GetHistoryAsync sends a Temporal Query to the running workflow.
-    // The workflow returns every ChatMessage it has accumulated — user,
-    // assistant, tool calls, and tool results.
+    // The workflow returns every DurableSessionEntry it has accumulated. Each turn
+    // produces a request entry followed by a response entry; flatten the entries'
+    // Messages to display individual ChatMessages.
     var history = await sessionClient.GetHistoryAsync(conversationId);
+    var messages = history.SelectMany(e => e.Messages).ToList();
 
     Console.WriteLine(" Persisted history:");
-    foreach (var msg in history)
+    foreach (var msg in messages)
     {
         var role = msg.Role == ChatRole.User      ? "User "
                  : msg.Role == ChatRole.Assistant ? "Agent"
@@ -200,6 +202,6 @@ static async Task RunHistoryQueryDemoAsync(DurableChatSessionClient sessionClien
             Console.WriteLine($"   [{role}] {text}");
     }
 
-    Console.WriteLine($"\n Total messages stored: {history.Count}");
+    Console.WriteLine($"\n Total entries stored: {history.Count} ({messages.Count} messages)");
     Console.WriteLine("════════════════════════════════════════════════════════\n");
 }

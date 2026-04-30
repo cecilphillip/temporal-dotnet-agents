@@ -136,43 +136,65 @@ public class DurableExecutionOptionsTests
     }
 
     [Fact]
-    public void HistoryReducer_CanBeSetWithFuncChatReducer()
+    public void HistoryReducer_CanBeSetWithEntryShapedDelegate()
     {
-        var reducer = new FuncChatReducer(msgs => msgs.TakeLast(10).ToList());
+        Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>> reducer =
+            entries => entries.TakeLast(10).ToList();
         var options = new DurableExecutionOptions { HistoryReducer = reducer };
 
         Assert.Same(reducer, options.HistoryReducer);
-        Assert.IsType<FuncChatReducer>(options.HistoryReducer);
     }
 
     [Fact]
-    public async Task FuncChatReducer_AppliesDelegateToMessages()
+    public void HistoryReducer_AppliesDelegateToEntries()
     {
-        var messages = new List<ChatMessage>
+        var entries = new List<DurableSessionEntry>
         {
-            new(ChatRole.User, "msg1"),
-            new(ChatRole.User, "msg2"),
-            new(ChatRole.User, "msg3"),
+            DurableSessionRequest.FromMessages([new ChatMessage(ChatRole.User, "msg1")], "id1", DateTimeOffset.UtcNow),
+            DurableSessionRequest.FromMessages([new ChatMessage(ChatRole.User, "msg2")], "id2", DateTimeOffset.UtcNow),
+            DurableSessionRequest.FromMessages([new ChatMessage(ChatRole.User, "msg3")], "id3", DateTimeOffset.UtcNow),
         };
-        var reducer = new FuncChatReducer(msgs => msgs.TakeLast(2).ToList());
 
-        var result = (await reducer.ReduceAsync(messages, CancellationToken.None)).ToList();
+        Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>> reducer =
+            xs => xs.TakeLast(2).ToList();
+        var result = reducer(entries);
 
         Assert.Equal(2, result.Count);
-        Assert.Equal("msg2", result[0].Text);
-        Assert.Equal("msg3", result[1].Text);
+        Assert.Equal("id2", result[0].CorrelationId);
+        Assert.Equal("id3", result[1].CorrelationId);
+    }
+
+    // ── MaxEntryCount ──────────────────────────────────────────────────
+
+    [Fact]
+    public void MaxEntryCount_DefaultsTo1000()
+    {
+        var options = new DurableExecutionOptions();
+        Assert.Equal(1000, options.MaxEntryCount);
     }
 
     [Fact]
-    public async Task FuncChatReducer_CompletesInline()
+    public void MaxEntryCount_CanBeSet()
     {
-        var reducer = new FuncChatReducer(msgs => msgs.ToList());
-        var messages = new List<ChatMessage> { new(ChatRole.User, "hello") };
+        var options = new DurableExecutionOptions { TaskQueue = "q", MaxEntryCount = 500 };
+        Assert.Equal(500, options.MaxEntryCount);
+    }
 
-        var task = reducer.ReduceAsync(messages, CancellationToken.None);
+    [Fact]
+    public void Validate_ThrowsWhenMaxEntryCountIsZero()
+    {
+        var options = new DurableExecutionOptions { TaskQueue = "q", MaxEntryCount = 0 };
 
-        Assert.True(task.IsCompletedSuccessfully);
-        var result = await task;
-        Assert.Single(result);
+        var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
+        Assert.Contains("MaxEntryCount", ex.Message);
+    }
+
+    [Fact]
+    public void Validate_ThrowsWhenMaxEntryCountIsNegative()
+    {
+        var options = new DurableExecutionOptions { TaskQueue = "q", MaxEntryCount = -5 };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
+        Assert.Contains("MaxEntryCount", ex.Message);
     }
 }

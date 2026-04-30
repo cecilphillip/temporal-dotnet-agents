@@ -125,14 +125,39 @@ var sessionClient = host.Services.GetRequiredService<DurableChatSessionClient>()
 
 var conversationId = "user-42-session-1";   // any stable string you control
 
-var response = await sessionClient.ChatAsync(
+DurableSessionResponse response = await sessionClient.ChatAsync(
     conversationId,
     [new ChatMessage(ChatRole.User, "What is the capital of France?")]);
 
 Console.WriteLine(response.Text);   // "Paris."
 ```
 
+`ChatAsync` returns `DurableSessionResponse` — the workflow's per-turn response entry. It carries:
+
+- `Messages` — the assistant's reply messages
+- `Usage` — `UsageDetails?` with input/output token counts (when the model returned them)
+- `CorrelationId` — the per-turn correlation ID (auto-generated unless you supplied one)
+- `CreatedAt` — when the workflow recorded the response
+- `Text` — convenience accessor returning the last assistant message's text (empty string if none)
+
 `ChatAsync` starts the `DurableChatWorkflow` if it is not already running (using `WorkflowIdConflictPolicy.UseExisting`), then sends the messages via a `[WorkflowUpdate]`. The update blocks until the LLM activity completes and returns the response. If the workflow is already running from a previous turn, the update is routed to the existing instance.
+
+#### Supplying your own correlation ID
+
+Pass an optional `correlationId` argument to thread an upstream HTTP/gRPC trace ID, request ID, or any cross-system identifier through the workflow turn. When omitted (or null/empty), the workflow auto-generates one via `Workflow.NewGuid()`.
+
+```csharp
+// Client — thread the inbound HTTP request's trace identifier through the agent turn
+var traceId = httpContext.TraceIdentifier;
+var response = await sessionClient.ChatAsync(
+    conversationId,
+    [new ChatMessage(ChatRole.User, "What is the capital of France?")],
+    correlationId: traceId);
+
+// The same trace ID is now stamped on the request and response entries in workflow history,
+// queryable later via GetHistoryAsync.
+Console.WriteLine(response.CorrelationId);   // "0HMVB..." (your trace ID)
+```
 
 ### Multi-turn conversations
 
@@ -156,17 +181,35 @@ Each `ChatAsync` call only needs to send the new message — the workflow mainta
 
 ### Retrieving history
 
-`GetHistoryAsync` sends a Temporal Query to the running workflow and returns every message accumulated so far — user messages, assistant responses, tool calls, and tool results:
+`GetHistoryAsync` sends a Temporal Query to the running workflow and returns every entry accumulated so far. Each turn produces two entries — a `DurableSessionRequest` (the user/tool messages that initiated the turn) and a `DurableSessionResponse` (the assistant's reply, with `Usage` token counts attached). Pattern-match on the entry type to access the per-turn metadata:
 
 ```csharp
 // Client
-var history = await sessionClient.GetHistoryAsync(conversationId);
+IReadOnlyList<DurableSessionEntry> history = await sessionClient.GetHistoryAsync(conversationId);
 
-foreach (var msg in history)
+foreach (var entry in history)
 {
-    var text = string.Concat(msg.Contents.OfType<TextContent>().Select(c => c.Text));
-    Console.WriteLine($"[{msg.Role}] {text}");
+    foreach (var msg in entry.Messages)
+    {
+        var text = string.Concat(msg.Contents.OfType<TextContent>().Select(c => c.Text));
+        Console.WriteLine($"[{msg.Role}] {text}");
+    }
+
+    if (entry is DurableSessionResponse response)
+    {
+        // Per-turn token usage is now first-class — no external telemetry needed.
+        var inTokens  = response.Usage?.InputTokenCount  ?? 0;
+        var outTokens = response.Usage?.OutputTokenCount ?? 0;
+        Console.WriteLine(
+            $"   turn {response.CorrelationId}: in={inTokens} out={outTokens}");
+    }
 }
+```
+
+To get a flat `ChatMessage` log (the prior return shape) for downstream display code that expects messages rather than entries:
+
+```csharp
+var flatMessages = history.SelectMany(e => e.Messages).ToList();
 ```
 
 ---
@@ -250,6 +293,8 @@ When the Temporal event history for a session grows large (Temporal's per-workfl
 | `ApprovalTimeout` | `TimeSpan` | 7 days | Maximum time to wait for a human to respond to a HITL tool approval request. |
 | `WorkflowIdPrefix` | `string` | `"chat-"` | Prefix prepended to `conversationId` when constructing the Temporal workflow ID. |
 | `EnableSessionManagement` | `bool` | `false` | When false, middleware wraps individual calls as activities only. When true, session history is managed in the workflow. |
+| `MaxEntryCount` | `int` | `1000` | Maximum number of `DurableSessionEntry` records the workflow holds before triggering `ContinueAsNew`. Each turn adds two entries (request + response), so the default retains roughly 500 turns. Renamed from `MaxHistorySize` in 0.2.0. |
+| `HistoryReducer` | `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` | `null` | Optional synchronous, deterministic delegate that trims the workflow's entry log when rolling over via `ContinueAsNew`. Operates on entries (not flat messages), preserving per-turn `Usage` / `CorrelationId` metadata. |
 
 ---
 
@@ -330,22 +375,23 @@ builder.Services
 
 ### ChatAsync
 
-Starts the session workflow on first call using `WorkflowIdConflictPolicy.UseExisting` — subsequent calls with the same `conversationId` reuse the running workflow. Each call delivers messages as a `[WorkflowUpdate]` and blocks until the LLM responds.
+Starts the session workflow on first call using `WorkflowIdConflictPolicy.UseExisting` — subsequent calls with the same `conversationId` reuse the running workflow. Each call delivers messages as a `[WorkflowUpdate]` and blocks until the LLM responds. Returns `Task<DurableSessionResponse>` — the per-turn response entry with `Text`, `Usage`, and `CorrelationId`. The optional `correlationId` parameter lets callers thread a cross-system identifier through the turn.
 
 ```csharp
 // Client
-var response = await sessionClient.ChatAsync(
+DurableSessionResponse response = await sessionClient.ChatAsync(
     "conv-123",
-    [new ChatMessage(ChatRole.User, "Hello")]);
+    [new ChatMessage(ChatRole.User, "Hello")],
+    correlationId: "req-42-abc");   // optional; auto-generated when null
 ```
 
 ### GetHistoryAsync
 
-Returns all `ChatMessage` entries accumulated across every turn in workflow state order. Useful for displaying conversation history or auditing.
+Returns `IReadOnlyList<DurableSessionEntry>` — every per-turn entry (`DurableSessionRequest` and `DurableSessionResponse`) accumulated across every turn in workflow state order. Each response entry exposes per-turn `Usage` (`UsageDetails?`) and a shared `CorrelationId` linking it to its request. Pattern-match to read the per-turn metadata; `entries.SelectMany(e => e.Messages)` flattens to the prior `ChatMessage` shape.
 
 ```csharp
 // Client
-var history = await sessionClient.GetHistoryAsync("conv-123");
+IReadOnlyList<DurableSessionEntry> history = await sessionClient.GetHistoryAsync("conv-123");
 ```
 
 ### GetPendingApprovalAsync and SubmitApprovalAsync

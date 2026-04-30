@@ -33,11 +33,27 @@ public sealed class ShoppingAssistantWorkflow : DurableChatWorkflowBase<Shopping
     /// any cart mutations that occurred during tool calls in this turn.
     /// </summary>
     [WorkflowUpdate("Shop")]
-    public Task<ShoppingTurnOutput> ShopAsync(DurableChatInput input) =>
-        RunTurnAsync(input.Messages, input.Options, input.ConversationId);
+    public async Task<ShoppingTurnOutput> ShopAsync(DurableChatInput input)
+    {
+        var (output, _) = await RunTurnAsync(
+            input.Messages,
+            input.Options,
+            input.ConversationId,
+            correlationId: input.CorrelationId);
+        return output;
+    }
 
-    protected override IEnumerable<ChatMessage> GetHistoryMessages(ShoppingTurnOutput output) =>
-        output.Response.Messages;
+    /// <summary>
+    /// Wraps the shopping turn output's <see cref="ChatResponse"/> into a
+    /// <see cref="DurableSessionResponse"/> for history storage. Cart-action data is
+    /// retained on the live <see cref="ShoppingTurnOutput"/> returned by <see cref="ShopAsync"/>;
+    /// only the chat response is persisted in the durable session history.
+    /// </summary>
+    protected override DurableSessionResponse BuildResponseEntry(
+        string correlationId,
+        ShoppingTurnOutput output,
+        DateTimeOffset createdAt) =>
+        DurableSessionResponse.FromChatResponse(correlationId, output.Response, createdAt);
 
     protected override Task<ShoppingTurnOutput> ExecuteTurnAsync(
         ActivityOptions activityOptions,

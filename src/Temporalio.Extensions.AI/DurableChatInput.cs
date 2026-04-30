@@ -34,4 +34,12 @@ public sealed class DurableChatInput
     /// When null, the unkeyed <see cref="IChatClient"/> registration is used.
     /// </summary>
     public string? ClientKey { get; init; }
+
+    /// <summary>
+    /// Optional caller-supplied correlation ID for this turn. When null/empty, the
+    /// workflow auto-generates one via <c>Workflow.NewGuid()</c>. Useful for threading
+    /// upstream HTTP/gRPC trace IDs into the workflow for cross-system log correlation.
+    /// Per-turn (each <c>ChatAsync</c> call), not per-session.
+    /// </summary>
+    public string? CorrelationId { get; init; }
 }

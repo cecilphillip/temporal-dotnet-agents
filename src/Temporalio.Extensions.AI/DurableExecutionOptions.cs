@@ -103,14 +103,11 @@ public sealed class DurableExecutionOptions
     /// preventing the carried history from growing unbounded across runs.
     /// </para>
     /// <para>
-    /// <b>Workflow determinism:</b> the reducer runs inside the workflow task scheduler.
-    /// <see cref="IChatReducer.ReduceAsync"/> must complete synchronously — do not perform
-    /// async I/O, call LLM APIs, or use <c>Task.Delay</c>. Return <c>Task.FromResult(...)</c>
-    /// from your implementation. To adapt an existing lambda, use
-    /// <c>new FuncChatReducer(msgs => ...)</c>.
+    /// <b>Workflow determinism:</b> the reducer runs inside the workflow task scheduler and
+    /// must be synchronous — do not perform async I/O, call LLM APIs, or use <c>Task.Delay</c>.
     /// </para>
     /// </remarks>
-    public IChatReducer? HistoryReducer { get; set; }
+    public Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>? HistoryReducer { get; set; }
 
     /// <summary>
     /// Gets or sets whether to register the default <see cref="DurableChatWorkflow"/> and
@@ -132,15 +129,23 @@ public sealed class DurableExecutionOptions
     public bool RegisterDefaultWorkflow { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets the maximum number of messages in the conversation history before a
-    /// continue-as-new transition is triggered. Defaults to 1000.
+    /// Gets or sets the maximum number of <see cref="DurableSessionEntry"/> instances retained
+    /// in the conversation history before a continue-as-new transition is triggered.
+    /// Defaults to 1000.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The workflow also continues-as-new when the Temporal SDK's internal event history
     /// threshold is reached (<c>Workflow.ContinueAsNewSuggested</c>), whichever comes first.
     /// Reduce this value to limit payload size on long-running sessions.
+    /// </para>
+    /// <para>
+    /// <b>Note:</b> this property previously counted individual <see cref="ChatMessage"/>s.
+    /// It now counts <see cref="DurableSessionEntry"/> instances (a request entry + a response
+    /// entry per turn). The same numeric value retains roughly 2× the conversation depth.
+    /// </para>
     /// </remarks>
-    public int MaxHistorySize { get; set; } = 1000;
+    public int MaxEntryCount { get; set; } = 1000;
 
     internal void Validate()
     {
@@ -170,10 +175,10 @@ public sealed class DurableExecutionOptions
             throw new InvalidOperationException("ApprovalTimeout must be a positive duration.");
         }
 
-        if (MaxHistorySize <= 0)
+        if (MaxEntryCount <= 0)
         {
             throw new InvalidOperationException(
-                $"{nameof(MaxHistorySize)} must be greater than zero in {nameof(DurableExecutionOptions)}.");
+                $"{nameof(MaxEntryCount)} must be greater than zero in {nameof(DurableExecutionOptions)}.");
         }
     }
 }

@@ -33,9 +33,9 @@ public class DurableChatKeyedClientTests
             ClientKey = null,
         };
 
-        var output = await activities.GetResponseAsync(input);
+        var response = await activities.GetResponseAsync(input);
 
-        Assert.Equal("unkeyed", output.Response.Messages[0].Text);
+        Assert.Equal("unkeyed", response.Messages[0].Text);
     }
 
     [Fact]
@@ -56,9 +56,9 @@ public class DurableChatKeyedClientTests
             ClientKey = "gpt-4o",
         };
 
-        var output = await activities.GetResponseAsync(input);
+        var response = await activities.GetResponseAsync(input);
 
-        Assert.Equal("keyed", output.Response.Messages[0].Text);
+        Assert.Equal("keyed", response.Messages[0].Text);
     }
 
     // -----------------------------------------------------------------------

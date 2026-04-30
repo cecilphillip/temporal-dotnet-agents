@@ -215,6 +215,58 @@ You can register both exporters simultaneously during a migration or for local v
 
 ---
 
+## Per-turn Usage Queries
+
+Token usage is also queryable directly from the workflow — no OpenTelemetry exporter, collector, or telemetry backend required. Each turn's response is stored as a `DurableSessionResponse` entry in workflow history, carrying `UsageDetails?` and a `CorrelationId` that ties it to the originating request entry. `DurableChatSessionClient.GetHistoryAsync` returns these entries via a Temporal Query, so any caller with workflow ID access can answer "show me the token usage for turn N" against live workflow state.
+
+This complements the OpenTelemetry path described above — OTel gives you cross-system distributed tracing and is the right tool for ongoing operational dashboards, while `GetHistoryAsync` gives you durable per-turn metadata that lives in workflow history forever (no retention policy, no sampling). Pick OTel for live aggregation; pick `GetHistoryAsync` for after-the-fact audit, replay analysis, or test assertions.
+
+### Reading per-turn usage
+
+```csharp
+// Client — answer "show me the token usage for turn N"
+IReadOnlyList<DurableSessionEntry> history =
+    await sessionClient.GetHistoryAsync(conversationId);
+
+// Pull only response entries; each one represents one completed assistant turn.
+var responses = history.OfType<DurableSessionResponse>().ToList();
+
+for (int turn = 0; turn < responses.Count; turn++)
+{
+    var r = responses[turn];
+    var inTokens    = r.Usage?.InputTokenCount  ?? 0;
+    var outTokens   = r.Usage?.OutputTokenCount ?? 0;
+    var totalTokens = r.Usage?.TotalTokenCount  ?? 0;
+
+    Console.WriteLine(
+        $"Turn {turn + 1}  corrId={r.CorrelationId}  in={inTokens}  out={outTokens}  total={totalTokens}");
+}
+```
+
+### Linking a request entry to its response via `CorrelationId`
+
+Every `DurableSessionRequest` and the `DurableSessionResponse` it produced share the same `CorrelationId`. When you supplied a `correlationId` to `ChatAsync`, that value is the link; otherwise the workflow auto-generated one with `Workflow.NewGuid()`.
+
+```csharp
+// Client — find the request and response for a specific upstream request ID
+var entries = await sessionClient.GetHistoryAsync(conversationId);
+
+var pair = entries
+    .Where(e => e.CorrelationId == "req-42-abc")
+    .OrderBy(e => e.CreatedAt)
+    .ToList();
+
+// pair[0] is the DurableSessionRequest, pair[1] is the DurableSessionResponse
+var request  = (DurableSessionRequest)pair[0];
+var response = (DurableSessionResponse)pair[1];
+
+Console.WriteLine($"Sent {request.Messages.Count} message(s); used {response.Usage?.TotalTokenCount} tokens.");
+```
+
+This is the canonical way to thread an inbound HTTP/gRPC request ID, batch-job ID, or any upstream identifier through agent execution and back out for cross-system log correlation — with zero external infrastructure.
+
+---
+
 ## Activity Summaries in the Temporal Web UI
 
 Beyond OpenTelemetry spans, the library also populates `ActivityOptions.Summary` at every activity dispatch site. The summary value is rendered in the Temporal Web UI activity list — clicking into a workflow shows each activity row with its summary alongside the activity type, making it easy to scan which model handled a turn or which tool a turn invoked without opening individual events.

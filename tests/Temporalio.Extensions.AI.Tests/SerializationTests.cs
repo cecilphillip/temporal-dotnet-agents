@@ -127,21 +127,22 @@ public class SerializationTests
     }
 
     [Fact]
-    public void DurableChatOutput_RoundTrips()
+    public void ChatResponse_ActivityReturn_RoundTrips()
     {
+        // The chat activity returns a bare ChatResponse (the workflow wraps it into
+        // a DurableSessionResponse). Verify ChatResponse round-trips through the
+        // converter so the activity payload is preserved across the boundary.
         var response = new ChatResponse([new ChatMessage(ChatRole.Assistant, "Hello!")])
         {
             ModelId = "gpt-4o",
         };
-        var output = new DurableChatOutput { Response = response };
 
-        var json = JsonSerializer.Serialize(output, Options);
-        var deserialized = JsonSerializer.Deserialize<DurableChatOutput>(json, Options);
+        var json = JsonSerializer.Serialize(response, Options);
+        var deserialized = JsonSerializer.Deserialize<ChatResponse>(json, Options);
 
         Assert.NotNull(deserialized);
-        Assert.NotNull(deserialized!.Response);
-        Assert.Equal("gpt-4o", deserialized.Response.ModelId);
-        Assert.Single(deserialized.Response.Messages);
+        Assert.Equal("gpt-4o", deserialized!.ModelId);
+        Assert.Single(deserialized.Messages);
     }
 
     [Fact]

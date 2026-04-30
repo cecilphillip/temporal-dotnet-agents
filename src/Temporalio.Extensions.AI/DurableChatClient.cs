@@ -66,11 +66,11 @@ public sealed class DurableChatClient : DelegatingChatClient
         // Inside a workflow — dispatch as an activity.
         var input = CreateInput(messages, options);
 
-        var output = await Workflow.ExecuteActivityAsync(
+        var response = await Workflow.ExecuteActivityAsync(
             (DurableChatActivities a) => a.GetResponseAsync(input),
             CreateActivityOptions(options)).ConfigureAwait(false);
 
-        return output.Response;
+        return response;
     }
 
     /// <inheritdoc/>
@@ -109,12 +109,12 @@ public sealed class DurableChatClient : DelegatingChatClient
         // across the workflow/activity boundary is not supported.
         var input = CreateInput(messages, options);
 
-        var output = await Workflow.ExecuteActivityAsync(
+        var response = await Workflow.ExecuteActivityAsync(
             (DurableChatActivities a) => a.GetResponseAsync(input),
             CreateActivityOptions(options)).ConfigureAwait(false);
 
         // Convert the buffered response to streaming updates.
-        foreach (var update in output.Response.ToChatResponseUpdates())
+        foreach (var update in response.ToChatResponseUpdates())
         {
             yield return update;
         }

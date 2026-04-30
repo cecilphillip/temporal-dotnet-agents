@@ -5,12 +5,13 @@ namespace Temporalio.Extensions.AI;
 
 /// <summary>
 /// Temporal workflow that manages a durable conversation session.
-/// Conversation history is persisted in workflow state. Chat turns are executed
-/// via <c>[WorkflowUpdate]</c> for synchronous request/response semantics.
+/// Conversation history is persisted in workflow state as a list of
+/// <see cref="DurableSessionEntry"/> instances. Chat turns are executed via
+/// <c>[WorkflowUpdate]</c> for synchronous request/response semantics.
 /// Includes HITL approval support via <c>[WorkflowUpdate]</c> for tool approval gates.
 /// </summary>
 [Workflow("Temporalio.Extensions.AI.DurableChatWorkflow")]
-internal sealed class DurableChatWorkflow : DurableChatWorkflowBase<DurableChatOutput>
+internal sealed class DurableChatWorkflow : DurableChatWorkflowBase<ChatResponse>
 {
     [WorkflowRun]
     public new Task RunAsync(DurableChatWorkflowInput input) => base.RunAsync(input);
@@ -30,16 +31,31 @@ internal sealed class DurableChatWorkflow : DurableChatWorkflowBase<DurableChatO
 
     /// <summary>
     /// Executes a chat turn: appends user messages, calls the LLM via activity,
-    /// appends response, and returns the result.
+    /// appends response, and returns the response entry.
     /// </summary>
     [WorkflowUpdate("Chat")]
-    public Task<DurableChatOutput> ChatAsync(DurableChatInput input) =>
-        RunTurnAsync(input.Messages, input.Options, input.ConversationId, input.ClientKey);
+    public async Task<DurableSessionResponse> ChatAsync(DurableChatInput input)
+    {
+        var (_, responseEntry) = await RunTurnAsync(
+            input.Messages,
+            input.Options,
+            input.ConversationId,
+            input.ClientKey,
+            input.CorrelationId);
+        return responseEntry;
+    }
 
-    protected override IEnumerable<ChatMessage> GetHistoryMessages(DurableChatOutput output) =>
-        output.Response.Messages;
+    /// <summary>
+    /// Wraps the activity's <see cref="ChatResponse"/> into a <see cref="DurableSessionResponse"/>
+    /// for history storage.
+    /// </summary>
+    protected override DurableSessionResponse BuildResponseEntry(
+        string correlationId,
+        ChatResponse output,
+        DateTimeOffset createdAt) =>
+        DurableSessionResponse.FromChatResponse(correlationId, output, createdAt);
 
-    protected override Task<DurableChatOutput> ExecuteTurnAsync(
+    protected override Task<ChatResponse> ExecuteTurnAsync(
         ActivityOptions activityOptions,
         DurableChatInput activityInput) =>
         Workflow.ExecuteActivityAsync(

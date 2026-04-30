@@ -8,7 +8,7 @@ namespace Temporalio.Extensions.AI;
 /// <remarks>
 /// <para>
 /// The concrete implementation is <see cref="DurableChatSessionClient"/>, which maps each
-/// <paramref name="conversationId"/> to a long-lived Temporal workflow and delivers chat turns
+/// <c>conversationId</c> to a long-lived Temporal workflow and delivers chat turns
 /// via <c>[WorkflowUpdate]</c>.
 /// </para>
 /// <para>
@@ -21,18 +21,23 @@ namespace Temporalio.Extensions.AI;
 public interface IDurableChatSessionClient
 {
     /// <summary>
-    /// Sends messages to a durable chat session and returns the response.
+    /// Sends messages to a durable chat session and returns the response entry.
     /// Starts the session workflow if not already running.
     /// </summary>
     /// <param name="conversationId">A unique identifier for the conversation.</param>
     /// <param name="messages">The messages to send.</param>
     /// <param name="options">Optional chat options.</param>
+    /// <param name="correlationId">
+    /// Optional caller-supplied correlation ID for this turn. When null/empty, the
+    /// workflow auto-generates one via <c>Workflow.NewGuid()</c>.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The chat response from the LLM.</returns>
-    Task<ChatResponse> ChatAsync(
+    /// <returns>The response entry from the LLM, including per-turn <see cref="UsageDetails"/>.</returns>
+    Task<DurableSessionResponse> ChatAsync(
         string conversationId,
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
+        string? correlationId = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -40,8 +45,11 @@ public interface IDurableChatSessionClient
     /// </summary>
     /// <param name="conversationId">The conversation identifier.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>All messages accumulated in the workflow, including tool calls and results.</returns>
-    Task<IReadOnlyList<ChatMessage>> GetHistoryAsync(
+    /// <returns>
+    /// All <see cref="DurableSessionEntry"/> instances accumulated in the workflow. Each turn
+    /// produces a request entry followed by a response entry.
+    /// </returns>
+    Task<IReadOnlyList<DurableSessionEntry>> GetHistoryAsync(
         string conversationId,
         CancellationToken cancellationToken = default);
 

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Temporalio.Extensions.AI` per-turn observability.**
+  `DurableChatSessionClient.GetHistoryAsync()` now returns
+  `IReadOnlyList<DurableSessionEntry>` instead of `IReadOnlyList<ChatMessage>`.
+  Entries carry per-turn `CorrelationId`, `CreatedAt`, and (on responses)
+  `UsageDetails`, enabling queries like "show me the token usage for turn N"
+  directly against workflow state — no external telemetry pipeline required.
+
+- **Optional `correlationId` parameter on `DurableChatSessionClient.ChatAsync`.**
+  Callers can supply their own correlation ID for cross-system log/trace
+  threading. When omitted, the workflow auto-generates one via
+  `Workflow.NewGuid()`. The same value is stamped on the request and response
+  entries, so it is recoverable later via `GetHistoryAsync`.
+
+- **`DurableSessionResponse.Text` convenience accessor.** Returns the last
+  assistant message's text (or empty string if none). Replaces
+  `ChatResponse.Text` for the common `response.Text` pattern at user call
+  sites; `[JsonIgnore]` so it does not appear on the wire.
+
 ### Changed (BREAKING)
 
 - **`Temporalio.Extensions.Agents` workflow history wire format.** Conversation
@@ -28,6 +48,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   complete (or use `ContinueAsNew` to roll history), then deploy the new
   version. No dual-reader compatibility shim is provided; the library is
   in preview.
+
+- **`Temporalio.Extensions.AI` workflow history wire format.**
+  `DurableChatWorkflow` history entries now serialize as `DurableSessionEntry`
+  (with `ai_request` / `ai_response` polymorphic discriminators on the
+  `$type` property) instead of flat `ChatMessage`. In-flight workflows from
+  prior versions are not deserializable by this version.
+
+  **Migration:** drain in-flight workflows before upgrading; no dual-reader
+  compatibility shim is provided.
+
+- **`DurableChatSessionClient.ChatAsync` return type.** Changed from
+  `Task<ChatResponse>` to `Task<DurableSessionResponse>`. The new return type
+  carries the per-turn metadata (`Usage`, `CorrelationId`, `CreatedAt`)
+  directly. Use `response.Text` (now a property on `DurableSessionResponse`)
+  for the common `response.Text` pattern. To reconstruct a `ChatResponse`
+  for downstream code that requires it:
+  `var chatResponse = new ChatResponse(response.Messages.ToList());`.
+
+- **`DurableChatSessionClient.GetHistoryAsync()` return type.** Changed from
+  `IReadOnlyList<ChatMessage>` to `IReadOnlyList<DurableSessionEntry>`.
+
+  **Migration:** to flatten back to a `ChatMessage` log, use
+  `entries.SelectMany(e => e.Messages)`. Pattern-match on
+  `DurableSessionResponse` to access per-turn `Usage`.
+
+- **`DurableChatWorkflowBase<TOutput>` virtual hooks.** Replaced
+  `GetHistoryMessages` with `BuildResponseEntry` (and an optional
+  `BuildRequestEntry`). Custom subclasses must update their overrides to
+  produce a `DurableSessionResponse` from their output type rather than
+  emitting a `ChatMessage` sequence.
+
+- **`DurableExecutionOptions.MaxHistorySize` renamed to `MaxEntryCount`.**
+  Equivalent fields on workflow inputs renamed to match. Default (1000)
+  unchanged. **Note for MEAI users:** the unit shifted from "1000 messages"
+  to "1000 entries", and each turn now produces two entries (one
+  `DurableSessionRequest` and one `DurableSessionResponse`). At the same
+  numeric value, `MaxEntryCount` retains roughly half the turn count
+  `MaxHistorySize` did — recheck the threshold if you previously tuned it
+  to control workflow lifetime.
+
+- **`DurableExecutionOptions.HistoryReducer` shape changed** from
+  `IChatReducer?` to
+  `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?`. Reducers
+  now operate on entries (not flat messages), preserving per-turn `Usage`
+  and `CorrelationId` metadata across `ContinueAsNew` boundaries. The
+  reducer must be synchronous and deterministic (it runs in workflow
+  context). Existing `IChatReducer` implementations must migrate to the
+  entry-shaped delegate; in-pipeline reducers passed to
+  `ChatClientBuilder.UseChatReducer(...)` are unaffected.
 
 ### Fixed
 

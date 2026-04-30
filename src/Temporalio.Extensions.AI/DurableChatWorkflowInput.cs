@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using Microsoft.Extensions.AI;
 
 namespace Temporalio.Extensions.AI;
 
@@ -16,7 +15,7 @@ public sealed class DurableChatWorkflowInput
     /// <summary>
     /// Conversation history carried forward from a previous run (continue-as-new).
     /// </summary>
-    public List<ChatMessage>? CarriedHistory { get; init; }
+    public List<DurableSessionEntry>? CarriedHistory { get; init; }
 
     /// <summary>
     /// Activity timeout for LLM calls.
@@ -42,17 +41,17 @@ public sealed class DurableChatWorkflowInput
     public DurableSessionAttributes? SearchAttributes { get; init; }
 
     /// <summary>
-    /// Maximum number of messages in the conversation history before a continue-as-new
-    /// transition is triggered. Defaults to 1000.
+    /// Maximum number of <see cref="DurableSessionEntry"/> instances retained in the
+    /// conversation history before a continue-as-new transition is triggered. Defaults to 1000.
     /// </summary>
-    public int MaxHistorySize { get; init; } = 1000;
+    public int MaxEntryCount { get; init; } = 1000;
 
     /// <summary>
     /// Optional reducer applied to conversation history before a continue-as-new transition.
     /// Not serialized — the session client re-supplies this on each workflow start.
     /// </summary>
     [JsonIgnore]
-    public IChatReducer? HistoryReducer { get; init; }
+    public Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>? HistoryReducer { get; init; }
 
     /// <summary>
     /// The UTC timestamp at which the session was originally created.

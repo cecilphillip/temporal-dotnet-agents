@@ -10,7 +10,6 @@ namespace Temporalio.Extensions.AI;
 /// handle <see cref="AIContent"/> polymorphism (TextContent, FunctionCallContent, etc.).
 /// </summary>
 [JsonSerializable(typeof(DurableChatInput))]
-[JsonSerializable(typeof(DurableChatOutput))]
 [JsonSerializable(typeof(DurableFunctionInput))]
 [JsonSerializable(typeof(DurableFunctionOutput))]
 [JsonSerializable(typeof(DurableChatWorkflowInput))]
