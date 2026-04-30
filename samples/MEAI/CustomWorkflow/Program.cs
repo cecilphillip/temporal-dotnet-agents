@@ -68,10 +68,10 @@ builder.Services.AddSingleton<ITemporalClient>(temporalClient);
 
 // ── Setup: Register IChatClient ───────────────────────────────────────────────
 // UseFunctionInvocation handles the tool call loop inside the activity.
-IChatClient openAiChatClient = (IChatClient)new OpenAIClient(
+IChatClient openAiChatClient = new OpenAIClient(
     new ApiKeyCredential(apiKey),
     new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) }
-).GetChatClient(model);
+).GetChatClient(model).AsIChatClient();
 
 builder.Services
     .AddChatClient(openAiChatClient)
@@ -85,7 +85,7 @@ builder.Services
 // AddWorkflow<ShoppingAssistantWorkflow> registers the custom workflow type.
 // AddSingletonActivities<ShoppingActivities> registers the shopping activity class.
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", taskQueue)
+    .AddHostedTemporalWorker(taskQueue)
     .AddDurableAI(opts =>
     {
         opts.ActivityTimeout = TimeSpan.FromMinutes(5);

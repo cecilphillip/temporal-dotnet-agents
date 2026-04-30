@@ -114,7 +114,7 @@ builder.Services
 // AddDurableAI registers DurableChatActivities, which constructor-injects IChatClient.
 // Even though this sample is about embeddings and does not use the chat workflow,
 // we must provide an IChatClient so the activities can be resolved without error.
-IChatClient openAiChatClient = (IChatClient)openAiClient.GetChatClient("gpt-4o-mini");
+IChatClient openAiChatClient = openAiClient.GetChatClient("gpt-4o-mini").AsIChatClient();
 builder.Services.AddChatClient(openAiChatClient).Build();
 
 // ── Setup: Register worker + durable AI ──────────────────────────────────────
@@ -128,7 +128,7 @@ builder.Services.AddChatClient(openAiChatClient).Build();
 // DurableEmbeddingActivities is already included — no extra registration required.
 // AddWorkflow<DocumentIndexingWorkflow>() registers our custom workflow on the worker.
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", taskQueue)
+    .AddHostedTemporalWorker(taskQueue)
     .AddDurableAI(opts =>
     {
         opts.ActivityTimeout = TimeSpan.FromMinutes(2);

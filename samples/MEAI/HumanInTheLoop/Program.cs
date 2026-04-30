@@ -92,10 +92,10 @@ builder.Services.AddSingleton<ITemporalClient>(temporalClient);
 // UseFunctionInvocation() handles the tool-call loop inside the activity:
 //   LLM request → tool call → tool result → LLM request (repeat until done)
 // The tool itself may suspend inside that loop for HITL approval.
-IChatClient openAiChatClient = (IChatClient)new OpenAIClient(
+IChatClient openAiChatClient = new OpenAIClient(
     new ApiKeyCredential(apiKey),
     new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) }
-).GetChatClient(model);
+).GetChatClient(model).AsIChatClient();
 
 builder.Services
     .AddChatClient(openAiChatClient)
@@ -109,7 +109,7 @@ builder.Services
 const string taskQueue = "hitl-meai-sample";
 
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", taskQueue)
+    .AddHostedTemporalWorker(taskQueue)
     .AddDurableAI(opts =>
     {
         // Leave headroom for the full review window.

@@ -75,10 +75,10 @@ var weatherTool = AIFunctionFactory.Create(
 // AddChatClient is the idiomatic MEAI pattern — it returns a ChatClientBuilder
 // for chaining middleware, then Build() registers the final IChatClient singleton.
 // DurableChatActivities constructor-injects this on the worker side.
-IChatClient openAiChatClient = (IChatClient)new OpenAIClient(
+IChatClient openAiChatClient = new OpenAIClient(
     new ApiKeyCredential(apiKey),
     new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) }
-).GetChatClient(model);
+).GetChatClient(model).AsIChatClient();
 
 builder.Services
     .AddChatClient(openAiChatClient)
@@ -90,7 +90,7 @@ builder.Services
 // DurableChatSessionClient on the worker. The session client is resolved from
 // DI after the host starts.
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", "durable-chat")
+    .AddHostedTemporalWorker("durable-chat")
     .AddDurableAI(opts =>
     {
         opts.ActivityTimeout = TimeSpan.FromMinutes(5);

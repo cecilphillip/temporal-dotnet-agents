@@ -70,10 +70,10 @@ builder.Services.AddSingleton<ITemporalClient>(temporalClient);
 // for chaining middleware, then Build() registers the final IChatClient singleton.
 // DurableChatActivities constructor-injects the unkeyed IChatClient on the worker
 // side; this is the client it calls when executing the durable_chat.turn activity.
-IChatClient openAiChatClient = (IChatClient)new OpenAIClient(
+IChatClient openAiChatClient = new OpenAIClient(
     new ApiKeyCredential(apiKey),
     new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) }
-).GetChatClient(model);
+).GetChatClient(model).AsIChatClient();
 
 builder.Services
     .AddChatClient(openAiChatClient)
@@ -87,7 +87,7 @@ builder.Services
 // DurableChatSessionClient, the DurableExecutionOptions singleton, and queues
 // DurableAIPlugin in the worker plugin chain — equivalent to AddDurableAI().
 builder.Services
-    .AddHostedTemporalWorker(temporalAddress, "default", "durable-chat-otel")
+    .AddHostedTemporalWorker("durable-chat-otel")
     .AddWorkerPlugin(new DurableAIPlugin(opts =>
     {
         opts.ActivityTimeout = TimeSpan.FromMinutes(5);
