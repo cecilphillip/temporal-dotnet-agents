@@ -300,10 +300,14 @@ static async Task RunHitlDemoAsync(
     Console.WriteLine();
 
     // ── Show persisted history ────────────────────────────────────────────
-    // GetHistoryAsync retrieves the full conversation log from the workflow,
-    // including user messages, assistant messages, tool calls, and tool results.
+    // GetHistoryAsync retrieves the full conversation log from the workflow.
+    // Returns IReadOnlyList<DurableSessionEntry> — each entry is a request or
+    // response carrying its own messages plus per-turn metadata (CorrelationId,
+    // Usage, CreatedAt). Flatten to count individual messages (user, assistant,
+    // tool calls, tool results).
     var history = await sessionClient.GetHistoryAsync(conversationId);
-    Console.WriteLine($" [History] {history.Count} messages persisted in workflow state.");
+    var messageCount = history.Sum(e => e.Messages.Count);
+    Console.WriteLine($" [History] {messageCount} messages persisted in workflow state.");
 
     Console.WriteLine("════════════════════════════════════════════════════════════\n");
 }
