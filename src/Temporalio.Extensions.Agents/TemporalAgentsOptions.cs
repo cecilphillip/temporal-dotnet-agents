@@ -100,6 +100,17 @@ public sealed class TemporalAgentsOptions
     public Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>? HistoryReducer { get; set; }
 
     /// <summary>Adds an agent factory with an optional per-agent TTL.</summary>
+    /// <param name="name">
+    /// Case-insensitive agent name. Must be unique across registrations.
+    /// </param>
+    /// <param name="factory">
+    /// Factory invoked once at activity dispatch time to obtain the <see cref="AIAgent"/> instance.
+    /// Receives the activity's <see cref="IServiceProvider"/>.
+    /// </param>
+    /// <param name="timeToLive">
+    /// Per-agent session TTL. When null, <see cref="DefaultTimeToLive"/> is used.
+    /// </param>
+    /// <returns>This options instance, for fluent chaining.</returns>
     public TemporalAgentsOptions AddAIAgentFactory(string name, Func<IServiceProvider, AIAgent> factory, TimeSpan? timeToLive = null)
     {
         ArgumentNullException.ThrowIfNull(name);
@@ -116,6 +127,12 @@ public sealed class TemporalAgentsOptions
     }
 
     /// <summary>Adds multiple agents at once.</summary>
+    /// <param name="agents">
+    /// One or more <see cref="AIAgent"/> instances to register. Each agent must have a
+    /// non-null, non-whitespace <see cref="AIAgent.Name"/> and must not duplicate an
+    /// already-registered name.
+    /// </param>
+    /// <returns>This options instance, for fluent chaining.</returns>
     public TemporalAgentsOptions AddAIAgents(params IEnumerable<AIAgent> agents)
     {
         ArgumentNullException.ThrowIfNull(agents);
@@ -128,6 +145,14 @@ public sealed class TemporalAgentsOptions
     }
 
     /// <summary>Adds a single agent with an optional per-agent TTL.</summary>
+    /// <param name="agent">
+    /// The <see cref="AIAgent"/> instance to register. Its <see cref="AIAgent.Name"/> must be
+    /// non-null, non-whitespace, and unique within this options instance.
+    /// </param>
+    /// <param name="timeToLive">
+    /// Per-agent session TTL. When null, <see cref="DefaultTimeToLive"/> is used.
+    /// </param>
+    /// <returns>This options instance, for fluent chaining.</returns>
     public TemporalAgentsOptions AddAIAgent(AIAgent agent, TimeSpan? timeToLive = null)
     {
         ArgumentNullException.ThrowIfNull(agent);
@@ -157,6 +182,15 @@ public sealed class TemporalAgentsOptions
     /// No factory is required; call this from <see cref="ServiceCollectionExtensions.AddTemporalAgentProxies"/>
     /// instead of <see cref="AddAIAgent"/> or <see cref="AddAIAgentFactory"/>.
     /// </summary>
+    /// <param name="name">
+    /// Case-insensitive agent name that must match the name used by the remote worker.
+    /// Must be unique within this options instance.
+    /// </param>
+    /// <param name="timeToLive">
+    /// Per-agent session TTL used when the proxy starts a new workflow. When null,
+    /// <see cref="DefaultTimeToLive"/> is used.
+    /// </param>
+    /// <returns>This options instance, for fluent chaining.</returns>
     public TemporalAgentsOptions AddAgentProxy(string name, TimeSpan? timeToLive = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -190,6 +224,18 @@ public sealed class TemporalAgentsOptions
     /// Adds an agent using an <c>async</c> factory.
     /// The factory is invoked synchronously (blocking) during worker startup, not on hot paths.
     /// </summary>
+    /// <param name="name">
+    /// Case-insensitive agent name. Must be unique across registrations.
+    /// </param>
+    /// <param name="asyncFactory">
+    /// Async factory invoked once at activity dispatch time. The result is awaited
+    /// synchronously via <c>GetAwaiter().GetResult()</c> — safe at startup but not on the
+    /// workflow thread. Receives the activity's <see cref="IServiceProvider"/>.
+    /// </param>
+    /// <param name="timeToLive">
+    /// Per-agent session TTL. When null, <see cref="DefaultTimeToLive"/> is used.
+    /// </param>
+    /// <returns>This options instance, for fluent chaining.</returns>
     /// <remarks>
     /// Use this overload when agent setup requires async work, such as connecting to an MCP
     /// server and listing its tools:
@@ -257,6 +303,10 @@ public sealed class TemporalAgentsOptions
     /// Returns the names of all registered agents (case-preserving, in registration order).
     /// Useful for health-check endpoints, admin dashboards, and startup validation.
     /// </summary>
+    /// <returns>
+    /// A snapshot of the registered agent names at the time of the call. The list is
+    /// independent of the internal registry — mutations to it do not affect registrations.
+    /// </returns>
     public IReadOnlyList<string> GetRegisteredAgentNames() =>
         [.. _agentFactories.Keys];
 
@@ -264,6 +314,13 @@ public sealed class TemporalAgentsOptions
     /// Returns <see langword="true"/> if an agent with the given name is registered.
     /// The check is case-insensitive.
     /// </summary>
+    /// <param name="name">
+    /// The agent name to look up. Null or empty returns <see langword="false"/> without throwing.
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> if <paramref name="name"/> matches a registered agent name
+    /// (case-insensitive); <see langword="false"/> otherwise.
+    /// </returns>
     public bool IsAgentRegistered(string name) =>
         !string.IsNullOrEmpty(name) && _agentFactories.ContainsKey(name);
 
