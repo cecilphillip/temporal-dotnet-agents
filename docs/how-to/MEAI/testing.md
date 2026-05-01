@@ -39,20 +39,28 @@ public class ConversationService(IDurableChatSessionClient client)
 
 ```csharp
 // Test
-// Stub for unit tests
+// Stub for unit tests. Signatures match IDurableChatSessionClient post-0.2.0:
+// ChatAsync returns DurableSessionResponse (carries per-turn Usage / CorrelationId);
+// GetHistoryAsync returns IReadOnlyList<DurableSessionEntry>.
 public class StubChatSessionClient : IDurableChatSessionClient
 {
-    public Func<string, IEnumerable<ChatMessage>, ChatOptions?, CancellationToken, Task<ChatResponse>>
-        ChatAsyncHandler { get; set; } = (_, _, _, _) =>
-            Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "stub reply")]));
+    public Func<string, IEnumerable<ChatMessage>, ChatOptions?, string?, CancellationToken, Task<DurableSessionResponse>>
+        ChatAsyncHandler { get; set; } = (_, _, _, _, _) =>
+            Task.FromResult(new DurableSessionResponse
+            {
+                CorrelationId = "stub",
+                CreatedAt = DateTimeOffset.UtcNow,
+                Messages = [new ChatMessage(ChatRole.Assistant, "stub reply")],
+            });
 
-    public Task<ChatResponse> ChatAsync(string conversationId, IEnumerable<ChatMessage> messages,
-        ChatOptions? options = null, CancellationToken cancellationToken = default)
-        => ChatAsyncHandler(conversationId, messages, options, cancellationToken);
-
-    public Task<IReadOnlyList<ChatMessage>> GetHistoryAsync(string conversationId,
+    public Task<DurableSessionResponse> ChatAsync(string conversationId, IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null, string? correlationId = null,
         CancellationToken cancellationToken = default)
-        => Task.FromResult<IReadOnlyList<ChatMessage>>([]);
+        => ChatAsyncHandler(conversationId, messages, options, correlationId, cancellationToken);
+
+    public Task<IReadOnlyList<DurableSessionEntry>> GetHistoryAsync(string conversationId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<DurableSessionEntry>>([]);
 
     public Task<DurableApprovalRequest?> GetPendingApprovalAsync(string conversationId,
         CancellationToken cancellationToken = default)
@@ -70,9 +78,13 @@ public class StubChatSessionClient : IDurableChatSessionClient
 public async Task AskAsync_Returns_AssistantText()
 {
     var stub = new StubChatSessionClient();
-    stub.ChatAsyncHandler = (_, _, _, _) =>
-        Task.FromResult(new ChatResponse(
-            [new ChatMessage(ChatRole.Assistant, "Paris.")]));
+    stub.ChatAsyncHandler = (_, _, _, _, _) =>
+        Task.FromResult(new DurableSessionResponse
+        {
+            CorrelationId = "test-1",
+            CreatedAt = DateTimeOffset.UtcNow,
+            Messages = [new ChatMessage(ChatRole.Assistant, "Paris.")],
+        });
 
     var service = new ConversationService(stub);
     var result  = await service.AskAsync("conv-1", "What is the capital of France?");

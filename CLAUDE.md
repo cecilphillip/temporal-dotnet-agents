@@ -12,9 +12,9 @@ This document provides essential context for working with the TemporalAgents cod
 
 - **Language**: C# (.NET 10.0)
 - **Solution File**: `TemporalAgents.slnx` (.slnx format, not .sln)
-- **Status**: Complete — 292 unit tests + 58 integration tests (350 total, all pass)
-  - Agents: 214 unit + 51 integration
-  - AI: 78 unit + 7 integration
+- **Status**: Complete — 415 unit tests + 66 integration tests (481 total, all pass)
+  - Agents: 225 unit + 53 integration
+  - AI: 190 unit + 13 integration
 - **Purpose**: Two complementary libraries — `Extensions.Agents` ports `Microsoft.Agents.AI.DurableTask` to Temporal; `Extensions.AI` adds MEAI-level durability without the Agent Framework
 - **Key Pattern**: `[WorkflowUpdate]` replaces Signal+Query+polling for request/response
 
@@ -32,38 +32,84 @@ TemporalAgents/
 │   │   │   ├── durability-and-determinism.md
 │   │   │   ├── agent-sessions-and-workflow-loop.md
 │   │   │   ├── session-statebag-and-context-providers.md
+│   │   │   ├── agent-to-agent-communication.md
 │   │   │   └── pub-sub-and-event-driven.md
-│   │   └── MEAI/                           # Internal design docs (AI library) — stubs
-│   │       └── durable-chat-pipeline.md
+│   │   └── MEAI/                           # Internal design docs (AI library)
+│   │       ├── durable-chat-pipeline.md
+│   │       └── cross-library-integration.md
 │   └── how-to/
 │       ├── MAF/                            # Practical guides (Agents library)
 │       │   ├── usage.md
 │       │   ├── routing.md
-│       │   └── ... (9 guides)
-│       └── MEAI/                           # Practical guides (AI library) — stubs
+│       │   ├── testing-agents.md
+│       │   ├── observability.md
+│       │   ├── scheduling.md
+│       │   ├── structured-output.md
+│       │   ├── hitl-patterns.md
+│       │   ├── prompt-caching.md
+│       │   └── dos-and-donts.md
+│       └── MEAI/                           # Practical guides (AI library)
 │           ├── usage.md
+│           ├── tool-functions.md
+│           ├── embeddings.md
 │           ├── testing.md
 │           ├── observability.md
-│           └── hitl-patterns.md
+│           ├── hitl-patterns.md
+│           └── custom-workflow-output.md
 ├── TemporalAgents.slnx                     # Solution file (use this, not .sln)
 │
 ├── src/
 │   ├── Temporalio.Extensions.Agents/       # Agent Framework integration library
-│   │   └── README.md                       # Library-specific docs
+│   │   ├── README.md                       # Library-specific docs
+│   │   ├── ServiceCollectionExtensions.cs  # GetTemporalAgentProxy, AddTemporalAgentProxies
+│   │   ├── TemporalWorkerBuilderExtensions.cs # .AddTemporalAgents() / AddWorkerPlugin(TemporalAgentsPlugin)
+│   │   ├── TemporalAgentsOptions.cs        # Configuration (internal ctor); GetRegisteredAgentNames(), IsAgentRegistered()
+│   │   ├── TemporalAgentsPlugin.cs         # ITemporalWorkerPlugin entry point [TA001]
+│   │   ├── TemporalAgentsRegistrar.cs      # Internal: shared DI registration body for both entry points
+│   │   ├── ITemporalAgentClient.cs         # Interface: RunAgentAsync, HITL
+│   │   ├── TemporalAIAgent.cs              # For workflow orchestration (sub-agent)
+│   │   ├── TemporalAIAgentProxy.cs         # For external callers (proxy)
+│   │   ├── TemporalWorkflowExtensions.cs   # GetAgent(), ExecuteAgentsInParallelAsync()
+│   │   ├── TemporalAgentDataConverter.cs   # Re-exposes AI library's DurableAIDataConverter for the agents library
+│   │   ├── TemporalAgentDataConverterPlugin.cs # Plugin alias around DurableAIDataConverterPlugin
+│   │   ├── TemporalAgentJsonUtilities.cs   # JSON options for agents-only types
+│   │   ├── TemporalAgentTelemetry.cs       # ActivitySource + span/attribute constants
+│   │   ├── AgentNotRegisteredException.cs  # Thrown when an unknown agent name is run
+│   │   ├── AIAgentExtensions.cs            # AsAIAgent() and friends
+│   │   ├── StructuredOutputExtensions.cs   # ChatResponseFormat helpers for typed output
+│   │   ├── StructuredOutputOptions.cs      # Config for typed-output agents
+│   │   ├── AgentWorkflowWrapper.cs         # Wraps agent with request context
+│   │   ├── Session/                        # TemporalAgentContext, TemporalAgentSession, TemporalAgentSessionId
+│   │   ├── State/                          # AgentSessionRequest/Response (extend DurableSession*), AgentDescriptor, source-gen ctx
+│   │   └── Workflows/                      # AgentWorkflow (subclass of DurableChatWorkflowBase<AgentResponse>), AgentActivities, schedule infrastructure
+│   │
 │   └── Temporalio.Extensions.AI/           # MEAI IChatClient middleware library
 │       ├── README.md                       # Library-specific docs
 │       ├── DurableChatClient.cs            # DelegatingChatClient middleware
-│       ├── DurableChatWorkflow.cs          # [Workflow] managing session history + HITL
+│       ├── DurableChatWorkflow.cs          # [Workflow] managing session history (subclass of DurableChatWorkflowBase<ChatResponse>)
+│       ├── DurableChatWorkflowBase.cs      # Abstract base class providing the shared session loop + HITL
+│       ├── DurableChatWorkflowInput.cs     # Workflow input record
 │       ├── DurableChatActivities.cs        # [Activity] wrapping IChatClient.GetResponseAsync
-│       ├── DurableChatSessionClient.cs     # External entry point: ChatAsync, GetHistoryAsync, HITL
-│       ├── DurableExecutionOptions.cs      # TaskQueue, ActivityTimeout, RetryPolicy, etc.
+│       ├── DurableChatInput.cs             # Activity input for chat dispatch
+│       ├── DurableChatSessionClient.cs     # External entry point: ChatAsync, GetHistoryAsync, HITL — implements IDurableChatSessionClient
+│       ├── IDurableChatSessionClient.cs    # Interface for session client (testable)
+│       ├── DurableExecutionOptions.cs      # TaskQueue, ActivityTimeout, RetryPolicy, MaxEntryCount, HistoryReducer, EnableSearchAttributes, etc.
 │       ├── DurableAIPayloadConverter.cs    # DurableAIDataConverter.Instance (AIJsonUtilities.DefaultOptions)
+│       ├── DurableAIDataConverterPlugin.cs # ITemporalClientPlugin that installs the data converter
+│       ├── DurableAIJsonContext.cs         # Source-gen JSON context for AI types
 │       ├── DurableAIFunction.cs            # DelegatingAIFunction wrapping tool calls as activities
 │       ├── DurableFunctionActivities.cs    # [Activity] resolving + invoking AIFunction from DI registry
+│       ├── DurableFunctionInput.cs         # Activity input for tool dispatch
+│       ├── DurableFunctionOutput.cs        # Activity output for tool dispatch
 │       ├── DurableEmbeddingGenerator.cs    # DelegatingEmbeddingGenerator for IEmbeddingGenerator
 │       ├── DurableEmbeddingActivities.cs   # [Activity] wrapping IEmbeddingGenerator.GenerateAsync
+│       ├── DurableEmbeddingInput.cs        # Activity input for embedding dispatch
+│       ├── DurableEmbeddingOutput.cs       # Activity output for embedding dispatch
 │       ├── DurableApprovalRequest.cs       # HITL request type (RequestId, FunctionName, Description)
 │       ├── DurableApprovalDecision.cs      # HITL decision type (RequestId, Approved, Reason)
+│       ├── DurableApprovalMixin.cs         # Shared HITL handler logic used by DurableChatWorkflowBase
+│       ├── DurableSessionAttributes.cs     # SearchAttributeKey<> definitions for TurnCount, SessionCreatedAt
+│       ├── Session/                        # DurableSessionEntry / DurableSessionRequest / DurableSessionResponse
 │       ├── DurableChatTelemetry.cs         # ActivitySource "Temporalio.Extensions.AI" + span constants
 │       ├── ChatClientBuilderExtensions.cs  # UseDurableExecution()
 │       ├── EmbeddingGeneratorBuilderExtensions.cs # UseDurableExecution() for embeddings
@@ -73,27 +119,9 @@ TemporalAgents/
 │       ├── TemporalPluginBuilderExtensions.cs # AddWorkerPlugin() / AddClientPlugin() — incl. DurableAIPlugin overload
 │       ├── AIFunctionExtensions.cs         # AsDurable() extension on AIFunction
 │       └── TemporalChatOptionsExtensions.cs # WithActivityTimeout(), WithMaxRetryAttempts(), etc.
-
-│       ├── ServiceCollectionExtensions.cs  # GetTemporalAgentProxy, AddTemporalAgentProxies
-│       ├── TemporalWorkerBuilderExtensions.cs # [NEW API] .AddTemporalAgents() fluent builder
-│       ├── TemporalAgentsOptions.cs        # Configuration (internal ctor)
-│       ├── ITemporalAgentClient.cs         # Interface: RunAgentAsync, HITL
-│       ├── DefaultTemporalAgentClient.cs   # Implementation using WorkflowUpdate + OTel
-│       ├── AgentWorkflow.cs                # Durable session: history, HITL handlers, StateBag
-│       ├── AgentActivities.cs              # Activity: calls real AIAgent, OTel span
-│       ├── TemporalAIAgent.cs              # For workflow orchestration (sub-agent)
-│       ├── TemporalAIAgentProxy.cs         # For external callers (proxy)
-│       ├── TemporalWorkflowExtensions.cs   # GetAgent(), ExecuteAgentsInParallelAsync()
-│       ├── AgentWorkflowWrapper.cs         # Wraps agent with request context
-│       ├── TemporalAgentSession.cs         # Session with StateBag persistence
-│       ├── TemporalAgentTelemetry.cs       # ActivitySource + span/attribute constants
-│       │   # HITL types: DurableApprovalRequest / DurableApprovalDecision (from Temporalio.Extensions.AI)
-│       ├── ExecuteAgentResult.cs           # Internal: wraps AgentResponse + StateBag
-│       ├── State/                          # Conversation history serialization
-│       └── ...
 │
 ├── tests/
-│   ├── Temporalio.Extensions.Agents.Tests/       # 214 unit tests
+│   ├── Temporalio.Extensions.Agents.Tests/       # 225 unit tests
 │   │   ├── TemporalWorkerBuilderExtensionsTests.cs
 │   │   ├── HITLTypesTests.cs
 │   │   ├── StateBagPersistenceTests.cs
@@ -104,9 +132,9 @@ TemporalAgents/
 │   │   │   └── CapturingChatClient.cs      # Test double: records ChatOptions
 │   │   └── ...
 │   │
-│   ├── Temporalio.Extensions.Agents.IntegrationTests/ # 51 integration tests (real Temporal server)
+│   ├── Temporalio.Extensions.Agents.IntegrationTests/ # 53 integration tests (embedded Temporal server)
 │   │
-│   ├── Temporalio.Extensions.AI.Tests/           # 78 unit tests
+│   ├── Temporalio.Extensions.AI.Tests/           # 190 unit tests
 │   │   ├── DurableExecutionOptionsTests.cs
 │   │   ├── DurableChatClientTests.cs
 │   │   ├── SerializationTests.cs
@@ -114,9 +142,10 @@ TemporalAgents/
 │   │   ├── TemporalChatOptionsExtensionsTests.cs
 │   │   ├── DurableEmbeddingGeneratorTests.cs
 │   │   ├── DurableApprovalTests.cs
+│   │   ├── DurableSessionEntryTests.cs
 │   │   └── ...
 │   │
-│   └── Temporalio.Extensions.AI.IntegrationTests/ # 7 integration tests (real Temporal server)
+│   └── Temporalio.Extensions.AI.IntegrationTests/ # 13 integration tests (embedded Temporal server)
 │       └── Helpers/
 │           ├── TestChatClient.cs           # IChatClient stub returning canned responses
 │           └── IntegrationTestFixture.cs   # WorkflowEnvironment.StartLocalAsync() + hosted worker
@@ -125,9 +154,10 @@ TemporalAgents/
     ├── MEAI/                               # Microsoft.Extensions.AI samples
     │   ├── DurableChat/                    # Extensions.AI: multi-turn chat
     │   ├── DurableTools/                   # Extensions.AI: per-tool activity dispatch via AsDurable()
-    │   ├── OpenTelemetry/                  # Extensions.AI: OTel tracing configuration
+    │   ├── OpenTelemetry/                  # Extensions.AI: OTel tracing configuration (project: DurableOpenTelemetry.csproj)
     │   ├── HumanInTheLoop/                 # Extensions.AI: HITL approval gates
-    │   └── DurableEmbeddings/              # Extensions.AI: IEmbeddingGenerator in workflow context
+    │   ├── DurableEmbeddings/              # Extensions.AI: IEmbeddingGenerator in workflow context
+    │   └── CustomWorkflow/                 # Extensions.AI: subclass DurableChatWorkflowBase<TOutput> for typed update output
     └── MAF/                                # Microsoft Agent Framework samples
         ├── BasicAgent/                     # Extensions.Agents: external caller pattern
         ├── SplitWorkerClient/              # Extensions.Agents: worker + client in separate processes
@@ -323,8 +353,8 @@ Composes with other worker configuration (e.g., `.ConfigureOptions(opts => opts.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `EnableSearchAttributes` | `bool` | `false` | Opt in to upsert `AgentName`, `SessionCreatedAt`, `TurnCount` on each run |
-| `MaxHistorySize` | `int?` | `null` | Maximum number of history entries before triggering continue-as-new |
-| `HistoryReducer` | `IHistoryReducer?` | `null` | Custom strategy for trimming history at continue-as-new boundaries |
+| `MaxEntryCount` | `int` | `1000` | Maximum number of `DurableSessionEntry` records the workflow holds before triggering continue-as-new. Renamed from `MaxHistorySize` in 0.2.0 |
+| `HistoryReducer` | `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` | `null` | Custom strategy for trimming history at continue-as-new boundaries. Operates on entries (preserving per-turn `Usage` and `CorrelationId`) since 0.3.0 |
 | `RetryPolicy` | `RetryPolicy?` | `null` | Override the default Temporal retry policy for agent activities |
 
 `EnableSearchAttributes = false` is the default and is a **breaking change** from the previous release — workflows that relied on search attributes being upserted unconditionally must now set this flag.
@@ -378,11 +408,11 @@ public class CustomerServiceWorkflow
 }
 ```
 
-**Dynamic routing** — when the agent set changes across deployments, discover available agents via an activity that queries `TemporalAgentsOptions.GetRegisteredDescriptors()`. Activity results are cached in workflow history, keeping the workflow deterministic on replay. See `samples/MAF/WorkflowRouting/DynamicRoutingWorkflow.cs` for the full example.
+**Dynamic routing** — when the agent set changes across deployments, discover available agents via an activity that queries `TemporalAgentsOptions.GetRegisteredAgentNames()`. Activity results are cached in workflow history, keeping the workflow deterministic on replay. See `samples/MAF/WorkflowRouting/DynamicRoutingWorkflow.cs` for the full example.
 
-- `AddAIAgent()` auto-extracts `AIAgent.Description` into the descriptor registry (readable via `GetRegisteredDescriptors()` from an activity)
-- `AddAgentDescriptor()` is available for factory-registered agents (`AddAIAgentFactory`) or explicit overrides
-- Never call `GetRegisteredAgentNames()` or `IsAgentRegistered()` directly inside a `[Workflow]` — non-deterministic on replay; wrap in an activity instead
+- `TemporalAgentsOptions.GetRegisteredAgentNames()` returns all registered agent names; `IsAgentRegistered(name)` is a case-insensitive existence check.
+- The `AgentDescriptor` record (`Name`, `Description`) is available in `Temporalio.Extensions.Agents.State` for routing activities to build their own description maps; the routing sample maintains its description metadata locally inside the activity rather than on the agent registry.
+- Never call `GetRegisteredAgentNames()` or `IsAgentRegistered()` directly inside a `[Workflow]` — non-deterministic on replay; wrap in an activity instead.
 
 ---
 
@@ -467,6 +497,8 @@ When a worker crashes:
 - ✅ `_currentStateBag` is carried forward through `AgentWorkflowInput.CarriedStateBag`
 - ✅ Conversation history is serialized in workflow state across continue-as-new transitions
 
+As of Layer 3, `AgentWorkflow` inherits from `DurableChatWorkflowBase<AgentResponse>`. The shared session loop (history accumulation, mutex, `[WorkflowSignal("Shutdown")]`, `[WorkflowQuery("GetHistory")]`, HITL approval handlers, continue-as-new trigger) lives on the base; `AgentWorkflow` overrides the abstract hooks (`ExecuteTurnAsync`, `BuildResponseEntry`, `CreateContinueAsNewException`, `UpsertCustomSearchAttributes`) and adds the MAF-specific concerns (`StateBag` carry-forward, `AgentName` search attribute, fire-and-forget signal).
+
 ---
 
 ## Important Dependencies and Notes
@@ -500,22 +532,23 @@ When a worker crashes:
 - `ActivatorUtilities.CreateInstance<T>(provider, taskQueue)` — pattern for extra constructor args
 
 ### JSON Serialization
-- `TemporalAgentStateJsonContext` — source-generated context for conversation history types only
-- `TemporalAgentSession` is **NOT** in the source-gen context — do not try to serialize it via `DefaultOptions.GetTypeInfo(typeof(TemporalAgentSession))` directly
+- `AgentSessionJsonContext` (Agents) and `DurableAIJsonContext` (AI) — source-generated contexts for conversation history types
+- `TemporalAgentSession` is **NOT** in any source-gen context — do not try to serialize it via `DefaultOptions.GetTypeInfo(typeof(TemporalAgentSession))` directly
 - `TemporalAgentSession.SerializeStateBag()` — delegates to `StateBag.Serialize()`, not session serialization
+- Agents library reuses `DurableAIDataConverter` from the AI library (re-exposed via `TemporalAgentDataConverter`) so chat-content polymorphism works identically across both libraries
 
 ---
 
 ## Testing Patterns
 
-### Unit Tests (292 total — 214 Agents + 78 AI)
+### Unit Tests (415 total — 225 Agents + 190 AI)
 - **Framework**: xunit with `[Fact]` attributes
 - **Assertions**: `Assert.*` — `Assert.Throws<T>` requires **exact** type, not subtype (use `Assert.Throws<ArgumentNullException>` for null, not `ArgumentException`)
 - **Mocking**: Hand-written fakes/stubs preferred over Moq
 - `StubAIAgent` — implements `CreateSessionCoreAsync` returning `new TemporalAgentSession(TemporalAgentSessionId.WithRandomKey(Name ?? "stub"))`
 - `TestChatClient` — `IChatClient` stub for AI tests returning `"Response: {lastMessage}"` with token counts
 
-### Integration Tests (58 total — 51 Agents + 7 AI)
+### Integration Tests (66 total — 53 Agents + 13 AI)
 - Both test suites use `WorkflowEnvironment.StartLocalAsync()` (embedded server — no external process needed)
 - Agents tests use `TestEnvironmentHelper.StartLocalAsync()`, a thin wrapper that passes `--search-attribute` CLI args to pre-register the three custom search attributes (`AgentName`, `SessionCreatedAt`, `TurnCount`). This pre-registration is only required when `EnableSearchAttributes = true` — if your test fixture leaves search attributes disabled (the default), bare `WorkflowEnvironment.StartLocalAsync()` works fine for Agents tests too.
 - AI tests use a bare `WorkflowEnvironment.StartLocalAsync()` — `DurableChatWorkflow` uses no custom search attributes.
@@ -622,11 +655,11 @@ just info         # Show solution, version, config, artifacts path
 ### Testing
 
 ```bash
-just test-unit          # Agents unit tests (214) — no server required
-just test-unit-ai       # AI unit tests (78) — no server required
-just test-unit-all      # All unit tests (292) — no server required
-just test-integration   # Agents integration tests (51) — uses embedded server via TestEnvironmentHelper
-just test-integration-ai # AI integration tests (7) — uses embedded server (no external process)
+just test-unit          # Agents unit tests (225) — no server required
+just test-unit-ai       # AI unit tests (190) — no server required
+just test-unit-all      # All unit tests (415) — no server required
+just test-integration   # Agents integration tests (53) — uses embedded server via TestEnvironmentHelper
+just test-integration-ai # AI integration tests (13) — uses embedded server (no external process)
 just test               # All suites
 
 just test-coverage      # Unit tests with XPlat Code Coverage (output: artifacts/packages/coverage/)
@@ -709,15 +742,22 @@ Pipeline defined in `.github/workflows/build.yml`. Three jobs:
 ```bash
 # All samples require: temporal server start-dev + OPENAI_API_KEY set via dotnet user-secrets
 
-# Temporalio.Extensions.AI sample
+# Temporalio.Extensions.AI samples
 dotnet run --project samples/MEAI/DurableChat/DurableChat.csproj
+dotnet run --project samples/MEAI/DurableTools/DurableTools.csproj
+dotnet run --project samples/MEAI/OpenTelemetry/DurableOpenTelemetry.csproj
+dotnet run --project samples/MEAI/HumanInTheLoop/HumanInTheLoop.csproj
+dotnet run --project samples/MEAI/DurableEmbeddings/DurableEmbeddings.csproj
+dotnet run --project samples/MEAI/CustomWorkflow/CustomWorkflow.csproj
 
 # Temporalio.Extensions.Agents samples
 dotnet run --project samples/MAF/BasicAgent/BasicAgent.csproj
 dotnet run --project samples/MAF/WorkflowOrchestration/WorkflowOrchestration.csproj
 dotnet run --project samples/MAF/EvaluatorOptimizer/EvaluatorOptimizer.csproj
 dotnet run --project samples/MAF/MultiAgentRouting/MultiAgentRouting.csproj
+dotnet run --project samples/MAF/WorkflowRouting/WorkflowRouting.csproj
 dotnet run --project samples/MAF/HumanInTheLoop/HumanInTheLoop.csproj
+dotnet run --project samples/MAF/AmbientAgent/AmbientAgent.csproj
 
 # SplitWorkerClient — run Worker first, then Client in a separate terminal
 dotnet run --project samples/MAF/SplitWorkerClient/Worker/Worker.csproj
@@ -745,13 +785,13 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
                          │ ExecuteUpdateAsync         │
                          ▼                            ▼
               ┌──────────────────────────────────────────────────┐
-              │                  AgentWorkflow                   │
-              │  • conversation history (_history)               │
-              │  • StateBag (_currentStateBag)                   │
-              │  • HITL state (_pendingApproval)                 │
-              │  • RunAgentAsync [WorkflowUpdate]                │
-              │  • RequestApprovalAsync [WorkflowUpdate]         │
-              │  • SubmitApprovalAsync [WorkflowUpdate]          │
+              │  AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
+              │  • conversation history (List<DurableSessionEntry> on base)│
+              │  • StateBag carry-forward (_currentStateBag)     │
+              │  • HITL state (inherited DurableApprovalMixin)   │
+              │  • RunAgentAsync [WorkflowUpdate("Run")]         │
+              │  • RequestApprovalAsync / SubmitApprovalAsync    │
+              │     (inherited [WorkflowUpdate])                 │
               └──────────┬───────────────────────────────────────┘
                          │ ExecuteActivityAsync
                          ▼
@@ -808,11 +848,14 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 
 - **Usage Guide**: `docs/how-to/MEAI/usage.md`
 - **Tool Functions**: `docs/how-to/MEAI/tool-functions.md` — Model 1 vs Model 2 explained
+- **Embeddings**: `docs/how-to/MEAI/embeddings.md`
 - **Testing**: `docs/how-to/MEAI/testing.md`
 - **Observability**: `docs/how-to/MEAI/observability.md`
 - **Human-in-the-Loop**: `docs/how-to/MEAI/hitl-patterns.md`
+- **Custom Workflow Output**: `docs/how-to/MEAI/custom-workflow-output.md`
 - **Durable Chat Pipeline**: `docs/architecture/MEAI/durable-chat-pipeline.md`
+- **Cross-Library Integration**: `docs/architecture/MEAI/cross-library-integration.md`
 
 ---
 
-**Last Updated**: 2026-04-29
+**Last Updated**: 2026-04-30

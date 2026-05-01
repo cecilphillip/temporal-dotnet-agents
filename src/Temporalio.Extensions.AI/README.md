@@ -12,7 +12,7 @@ A [Temporal](https://temporal.io/) integration for [Microsoft.Extensions.AI (MEA
 |---|---|---|
 | Dependency | `Microsoft.Extensions.AI` only | `Microsoft.Agents.AI` (Agent Framework) |
 | Entry point | Any `IChatClient` | `AIAgent` / `ChatClientAgent` |
-| Routing | Not included | `IAgentRouter` / `AIModelAgentRouter` |
+| Routing | Not included | Workflow-level routing — see `samples/MAF/WorkflowRouting` |
 | Complexity | Lower — direct chat pipeline | Higher — full agent session model |
 
 Use this package when you want Temporal durability on top of a standard MEAI pipeline without adopting the full Agent Framework.

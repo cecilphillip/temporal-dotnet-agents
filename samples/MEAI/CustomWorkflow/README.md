@@ -33,10 +33,10 @@ Program.cs
 
 ## Highlights
 
-- **Typed update responses.** `[WorkflowUpdate("Shop")]` returns `ShoppingTurnOutput`, carrying both the assistant's `ChatResponse` and the `IReadOnlyList<CartAction>` mutated during tool calls. The stock `DurableChatWorkflow` returns only `ChatResponse`.
+- **Typed update responses.** `[WorkflowUpdate("Shop")]` returns `ShoppingTurnOutput`, carrying both the assistant's `ChatResponse` and the `IReadOnlyList<CartAction>` mutated during tool calls. The stock `DurableChatWorkflow.ChatAsync` returns a `DurableSessionResponse` that wraps the LLM's `ChatResponse` — useful, but it cannot carry domain-specific structured data the way a custom workflow can.
 - **Cart tools live in the activity, not the workflow.** `ShoppingActivities.GetShoppingResponseAsync` defines `add_to_cart` and `remove_from_cart` as local `AIFunction` instances that close over a per-invocation `List<CartAction>`. This keeps side-effect capture inside the activity boundary — correct for Temporal's determinism model.
 - **`RegisterDefaultWorkflow = false`.** Passing this option to `AddDurableAI` prevents the library from registering `DurableChatWorkflow` on the worker. This avoids a conflict when the custom workflow is registered instead, and signals intent clearly.
-- **Base class handles history and continue-as-new.** `DurableChatWorkflowBase<TOutput>` manages conversation history accumulation, the idle TTL loop, continue-as-new transitions, and the `RequestShutdownAsync` signal. The subclass only needs to override `ExecuteTurnAsync`, `GetHistoryMessages`, and `CreateContinueAsNewException`.
+- **Base class handles history and continue-as-new.** `DurableChatWorkflowBase<TOutput>` manages conversation history accumulation, the idle TTL loop, continue-as-new transitions, HITL approval handlers, and the `RequestShutdownAsync` signal. The subclass only needs to implement the three abstract members — `ExecuteTurnAsync`, `BuildResponseEntry`, and `CreateContinueAsNewException` — and call `RunTurnAsync` from its own `[WorkflowUpdate]` handler.
 
 ## Getting Started
 

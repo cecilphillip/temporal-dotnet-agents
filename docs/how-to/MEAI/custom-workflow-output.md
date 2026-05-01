@@ -66,18 +66,39 @@ public sealed class ShoppingAssistantWorkflow : DurableChatWorkflowBase<Shopping
     }
 
     [WorkflowUpdate("Shop")]
-    public Task<ShoppingTurnOutput> ShopAsync(DurableChatInput input) =>
-        RunTurnAsync(input.Messages, input.Options, input.ConversationId);
+    public async Task<ShoppingTurnOutput> ShopAsync(DurableChatInput input)
+    {
+        var requestEntry = DurableSessionRequest.FromMessages(input.Messages, input.CorrelationId);
+        var (output, _) = await RunTurnAsync(requestEntry, input.Options);
+        return output;
+    }
 
-    protected override IEnumerable<ChatMessage> GetHistoryMessages(ShoppingTurnOutput output) =>
-        output.Response.Messages;
+    // Wraps the activity output as a DurableSessionResponse for the base class to append
+    // to history. The base class calls this once ExecuteTurnAsync completes.
+    protected override DurableSessionResponse BuildResponseEntry(
+        string correlationId,
+        ShoppingTurnOutput output,
+        DateTimeOffset createdAt) =>
+        DurableSessionResponse.FromChatResponse(correlationId, output.Response, createdAt);
 
     protected override Task<ShoppingTurnOutput> ExecuteTurnAsync(
         ActivityOptions activityOptions,
-        DurableChatInput activityInput) =>
-        Workflow.ExecuteActivityAsync(
+        DurableSessionRequest requestEntry,
+        ChatOptions? chatOptions)
+    {
+        // Flatten the conversation (the request entry is already appended to History) into a
+        // single message list for the activity input.
+        var allMessages = History.SelectMany(e => e.Messages).ToList();
+        var activityInput = new DurableChatInput
+        {
+            Messages = allMessages,
+            Options = chatOptions,
+            CorrelationId = requestEntry.CorrelationId,
+        };
+        return Workflow.ExecuteActivityAsync(
             (ShoppingActivities a) => a.GetShoppingResponseAsync(activityInput),
             activityOptions);
+    }
 
     protected override ContinueAsNewException CreateContinueAsNewException(
         DurableChatWorkflowInput input) =>
@@ -134,31 +155,44 @@ foreach (var action in output.CartActions)
 
 ## The Three Abstract Members
 
-### `GetHistoryMessages(TOutput output)`
+### `BuildResponseEntry(correlationId, output, createdAt)`
 
-Extracts the assistant messages from the output to append to the persisted conversation history. The base class calls this after `ExecuteTurnAsync` completes.
+Wraps the per-turn `TOutput` into a `DurableSessionResponse` that the base class appends to history. The correlation ID matches the request entry that was already appended.
 
 ```csharp
-protected override IEnumerable<ChatMessage> GetHistoryMessages(ShoppingTurnOutput output) =>
-    output.Response.Messages;
+protected override DurableSessionResponse BuildResponseEntry(
+    string correlationId,
+    ShoppingTurnOutput output,
+    DateTimeOffset createdAt) =>
+    DurableSessionResponse.FromChatResponse(correlationId, output.Response, createdAt);
 ```
 
-For a `ChatResponse`-based output this is always `output.Response.Messages`. If your output type does not include the full `ChatResponse`, extract just the assistant messages.
+For a `ChatResponse`-based output, the static `DurableSessionResponse.FromChatResponse` factory captures the assistant messages, usage, and timestamp. If your output type does not include the full `ChatResponse`, construct a `DurableSessionResponse` directly from the assistant messages you want preserved.
 
-### `ExecuteTurnAsync(ActivityOptions activityOptions, DurableChatInput activityInput)`
+### `ExecuteTurnAsync(ActivityOptions activityOptions, DurableSessionRequest requestEntry, ChatOptions? chatOptions)`
 
-Dispatches the LLM call (or custom logic) as a Temporal activity. The base class provides the `ActivityOptions` (timeout, heartbeat) and the `DurableChatInput` (full history, options, conversation ID, turn number).
+Dispatches the LLM call (or custom logic) as a Temporal activity. The base class supplies pre-built `ActivityOptions` (timeout, heartbeat, summary), the request entry that was just appended to history, and the per-turn `ChatOptions` (model id, tools).
 
 ```csharp
 protected override Task<ShoppingTurnOutput> ExecuteTurnAsync(
     ActivityOptions activityOptions,
-    DurableChatInput activityInput) =>
-    Workflow.ExecuteActivityAsync(
+    DurableSessionRequest requestEntry,
+    ChatOptions? chatOptions)
+{
+    var allMessages = History.SelectMany(e => e.Messages).ToList();
+    var activityInput = new DurableChatInput
+    {
+        Messages = allMessages,
+        Options = chatOptions,
+        CorrelationId = requestEntry.CorrelationId,
+    };
+    return Workflow.ExecuteActivityAsync(
         (ShoppingActivities a) => a.GetShoppingResponseAsync(activityInput),
         activityOptions);
+}
 ```
 
-You can dispatch to any registered activity class — it does not have to be derived from `DurableChatActivities`. The activity receives the full conversation history in `activityInput.Messages` and can add tools, call external APIs, or produce any serializable output.
+You can dispatch to any registered activity class — it does not have to be derived from `DurableChatActivities`. The base exposes the full conversation history via the protected `History` property; the activity input is yours to construct.
 
 ### `CreateContinueAsNewException(DurableChatWorkflowInput input)`
 
@@ -180,11 +214,11 @@ The concrete type in the lambda must match the actual workflow class — if you 
 By extending `DurableChatWorkflowBase<TOutput>` you get the following at no cost:
 
 - **Session loop** — `RunAsync` waits for shutdown or `ContinueAsNewSuggested`, then transitions or returns.
-- **Conversation history** — full `List<ChatMessage>` persisted in workflow state, restored on continue-as-new.
+- **Conversation history** — full `List<DurableSessionEntry>` persisted in workflow state, restored on continue-as-new. Each turn appends a `DurableSessionRequest` followed by a `DurableSessionResponse`.
 - **Turn serialization** — `WaitConditionAsync(() => !_isProcessing)` prevents concurrent turns from corrupting history.
 - **HITL** — `[WorkflowUpdate("RequestApproval")]`, `[WorkflowUpdate("SubmitApproval")]`, and `[WorkflowQuery("GetPendingApproval")]` are wired to `DurableApprovalMixin` automatically.
 - **Continue-as-new** — history is carried forward when workflow history grows large; search attributes are preserved.
-- **Search attributes** — optional `TurnCount` and `SessionCreatedAt` upserts via `DurableSessionAttributes` when `input.SearchAttributes` is set.
+- **Search attributes** — optional `TurnCount` and `SessionCreatedAt` upserts via `DurableSessionAttributes` when `input.EnableSearchAttributes` is `true`.
 - **`[WorkflowQuery("GetHistory")]`** — returns the current conversation history.
 - **`[WorkflowSignal("Shutdown")]`** — sets `IsShutdownRequested` and unblocks the session loop.
 

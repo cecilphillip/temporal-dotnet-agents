@@ -130,9 +130,9 @@ The natural instinct is to call `TemporalAgentsOptions.GetRegisteredAgentNames()
 - A different decision means a different code path, which means Temporal raises a **non-determinism error** and the workflow fails
 - This is the same fundamental reason `DateTime.UtcNow` and `Guid.NewGuid()` are forbidden in workflows
 
-### The Safe Pattern: Descriptors + Activity
+### The Safe Pattern: Registry Lookup + Activity
 
-Store agent metadata in `TemporalAgentsOptions` via the `description` parameter of `AsAIAgent()` — descriptions are available via `options.GetRegisteredDescriptors()`. The workflow discovers available agents by reading descriptors inside an activity, where the result is cached in workflow history.
+The workflow discovers available agents by calling an activity that queries `options.GetRegisteredAgentNames()` and combines the names with a local description map declared in the activity. The activity result is cached in workflow history, so the registry is never re-queried on replay.
 
 #### Step 1: Register agents with descriptions
 
@@ -150,8 +150,8 @@ var techSupportAgent = chatClient.AsAIAgent(
 services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(classifierAgent);   // no description needed — not a routable specialist
-        opts.AddAIAgent(ordersAgent);       // description auto-extracted from AsAIAgent()
+        opts.AddAIAgent(classifierAgent);   // not a routable specialist
+        opts.AddAIAgent(ordersAgent);
         opts.AddAIAgent(techSupportAgent);
         opts.AddAIAgent(generalAgent);
     })
@@ -159,7 +159,7 @@ services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddSingletonActivities<RoutingActivities>();
 ```
 
-> Descriptions are auto-extracted from the `description:` parameter of `AsAIAgent()`. For factory-registered agents (`AddAIAgentFactory`), use `AddAgentDescriptor()` to register metadata explicitly.
+> The `description:` you pass to `AsAIAgent()` lives on the agent itself for use by tooling and the model, but the agent registry exposes only names. For routing prompts, keep a description map inside the routing activity (or build one from your DI container). The `AgentDescriptor` record in `Temporalio.Extensions.Agents.State` is a convenient `(Name, Description)` shape for that activity output.
 
 #### Step 2: Define routing activities
 
@@ -168,13 +168,24 @@ Activities are not replayed — their results are cached in workflow history. Th
 ```csharp
 public class RoutingActivities(TemporalAgentsOptions options)
 {
-    // Returns all registered descriptors — the workflow uses these to build the classifier prompt.
-    // Safe inside an activity: result is cached in history; registry not re-queried on replay.
+    // Local description map kept alongside the routing activity. Pair with the live
+    // registered names so callers see only currently registered specialists.
+    private static readonly Dictionary<string, string> Descriptions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["OrdersAgent"]      = "Handles order tracking, returns, and shipping.",
+        ["TechSupportAgent"] = "Handles technical issues, app crashes, and troubleshooting.",
+        ["GeneralAgent"]     = "Handles general inquiries that do not match a specialist.",
+    };
+
+    // Returns the live registered specialists with their descriptions — the workflow
+    // uses these to build the classifier prompt. Safe inside an activity: result is
+    // cached in history; the registry is not re-queried on replay.
     [Activity("GetAvailableAgents")]
     public AgentInfo[] GetAvailableAgents()
     {
-        return options.GetRegisteredDescriptors()
-            .Select(d => new AgentInfo(d.Name, d.Description))
+        return options.GetRegisteredAgentNames()
+            .Where(Descriptions.ContainsKey)
+            .Select(name => new AgentInfo(name, Descriptions[name]))
             .ToArray();
     }
 
@@ -281,7 +292,7 @@ See `samples/MAF/WorkflowRouting/` (`DynamicRoutingWorkflow.cs` and `RoutingActi
 - Query `TemporalAgentsOptions` inside **activities** — activity results are cached; the registry is never re-queried on replay
 - Provide a default/fallback agent for unrecognized or empty classifications
 - Validate LLM-chosen agent names via an activity before dispatching (LLMs can hallucinate names)
-- Test routing with edge cases: empty LLM response, unexpected classification, no registered descriptors
+- Test routing with edge cases: empty LLM response, unexpected classification, no registered agents
 
 ### DON'T
 
@@ -326,8 +337,8 @@ The rule is simple: **if the code runs inside a workflow execution context, do n
 - [`durability-and-determinism.md`](../architecture/MAF/durability-and-determinism.md) — why workflow code must be deterministic
 - [`agent-sessions-and-workflow-loop.md`](../architecture/MAF/agent-sessions-and-workflow-loop.md) — how agent calls become durable activities
 - [`session-statebag-and-context-providers.md`](../architecture/MAF/session-statebag-and-context-providers.md) — StateBag and AIContextProvider integration
-- `src/Temporalio.Extensions.Agents/TemporalAgentsOptions.cs` — agent registry API (`GetRegisteredDescriptors`, `IsAgentRegistered`)
+- `src/Temporalio.Extensions.Agents/TemporalAgentsOptions.cs` — agent registry API (`GetRegisteredAgentNames`, `IsAgentRegistered`)
 
 ---
 
-_Last updated: 2026-04-29_
+_Last updated: 2026-04-30_

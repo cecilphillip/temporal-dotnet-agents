@@ -133,8 +133,8 @@ Key options on `TemporalAgentsOptions` (accessed via the `AddTemporalAgents(opts
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `EnableSearchAttributes` | `bool` | `false` | Opt in to upsert `AgentName`, `SessionCreatedAt`, `TurnCount` on each workflow run |
-| `MaxHistorySize` | `int?` | `null` | Cap on history entries before triggering continue-as-new |
-| `HistoryReducer` | `IHistoryReducer?` | `null` | Custom strategy for trimming history at continue-as-new boundaries |
+| `MaxEntryCount` | `int` | `1000` | Cap on `DurableSessionEntry` records (request + response pairs) before triggering continue-as-new. Renamed from `MaxHistorySize` in 0.2.0 |
+| `HistoryReducer` | `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` | `null` | Custom strategy for trimming history at continue-as-new boundaries. Operates on entries, preserving per-turn `Usage` and `CorrelationId` |
 | `RetryPolicy` | `RetryPolicy?` | `null` | Override the default retry policy for agent activities |
 
 `EnableSearchAttributes` defaults to `false`. Enabling it requires the three search attributes to be pre-registered on the Temporal server. With `temporal server start-dev` this happens automatically; on production clusters run the CLI commands in the [Observability guide](../../docs/how-to/MAF/observability.md#search-attributes).

@@ -43,7 +43,7 @@ Every agent call runs as a durable Temporal activity. If the worker crashes afte
 
 2. **Graceful default.** Unrecognized classifications fall through to `GeneralAgent` via the `_` discard pattern, so unexpected LLM output doesn't crash the workflow.
 
-3. **Auto-extracted descriptions.** Specialist agents carry `description:` in their `AsAIAgent()` calls. The dynamic routing workflow uses these descriptions — surfaced via `GetRegisteredAgentNames()` in an activity and combined with a local description map — to build a context-aware prompt for the Classifier. No explicit `AddAgentDescriptor()` call is needed.
+3. **Live agent list, locally-mapped descriptions.** The dynamic routing workflow asks an activity for the live registered agent names via `TemporalAgentsOptions.GetRegisteredAgentNames()`, then combines those names with a description map declared inside the activity. The result drives a context-aware prompt for the Classifier. Routing metadata is a routing-activity concern, not state on the agent registry.
 
 4. **Independent sessions per agent.** Each agent call gets its own session (`CreateSessionAsync`), keeping conversation histories isolated between the classifier and specialist.
 
