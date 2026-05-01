@@ -165,26 +165,35 @@ If two Updates arrive simultaneously, the second one **blocks** on `WaitConditio
 
 ### Conversation History as Workflow State
 
-Every request/response pair is recorded in `_history` as a `TemporalAgentStateEntry`:
+Every request/response pair is recorded in `_history` as a `DurableSessionEntry`. The MAF library
+stores instances of two concrete subclasses (`AgentSessionRequest` / `AgentSessionResponse`),
+which extend the AI library's shared `DurableSessionRequest` / `DurableSessionResponse`:
 
 ```
-_history: [
-    TemporalAgentStateRequest  { correlationId: "abc", messages: [ChatMessage(User, "Hi")] },
-    TemporalAgentStateResponse { correlationId: "abc", messages: [ChatMessage(Assistant, "Hello!")], usage: {...} },
-    TemporalAgentStateRequest  { correlationId: "def", messages: [ChatMessage(User, "Weather?")] },
-    TemporalAgentStateResponse { correlationId: "def", messages: [ChatMessage(Assistant, "It's sunny")], usage: {...} },
+_history: List<DurableSessionEntry>
+[
+    AgentSessionRequest  { correlationId: "abc", messages: [ChatMessage(User, "Hi")] },
+    AgentSessionResponse { correlationId: "abc", messages: [ChatMessage(Assistant, "Hello!")], usage: {...} },
+    AgentSessionRequest  { correlationId: "def", messages: [ChatMessage(User, "Weather?")] },
+    AgentSessionResponse { correlationId: "def", messages: [ChatMessage(Assistant, "It's sunny")], usage: {...} },
 ]
 ```
 
+The runtime polymorphism modifier in `TemporalAgentJsonUtilities` registers the
+MAF subclasses with the discriminator strings `"agent_request"` and
+`"agent_response"`; the AI library's own concrete types use `"ai_request"` /
+`"ai_response"`. All four shapes round-trip through `DurableAIDataConverter`.
+
 Each entry contains:
 
-| Field | Purpose |
-|-------|---------|
-| `CorrelationId` | Links a request to its response (GUID, assigned by the caller) |
-| `CreatedAt` | Timestamp for ordering |
-| `Messages` | `IReadOnlyList<ChatMessage>` — MEAI types stored directly (user text, assistant text, tool calls, tool results); polymorphism preserved by `DurableAIDataConverter` |
-| `Usage` (response only) | Token counts from the LLM |
-| `OrchestrationId` (request only) | Workflow ID of the orchestrating workflow, if this was a sub-agent call |
+| Field | Where defined | Purpose |
+|-------|---------------|---------|
+| `CorrelationId` | `DurableSessionEntry` (shared) | Links a request to its response. Caller-supplied via `TemporalAgentRunOptions.CorrelationId` or auto-generated with `Workflow.NewGuid()` |
+| `CreatedAt` | `DurableSessionEntry` (shared) | Timestamp for ordering (`Workflow.UtcNow`) |
+| `Messages` | `DurableSessionEntry` (shared) | `IReadOnlyList<ChatMessage>` — MEAI types stored directly (user text, assistant text, tool calls, tool results); polymorphism preserved by `DurableAIDataConverter` |
+| `Usage` (response only) | `DurableSessionResponse` (shared) | `Microsoft.Extensions.AI.UsageDetails` — token counts from the LLM, stored directly with no wrapper |
+| `OrchestrationId` (request only) | `AgentSessionRequest` (MAF-specific) | Workflow ID of the orchestrating workflow, if this was a sub-agent call |
+| `ResponseType` / `ResponseSchema` (request only) | `AgentSessionRequest` (MAF-specific) | Structured-output format hint preserved across replay |
 
 When the activity executes, it receives the **entire history** flattened into a list of `ChatMessage` objects. Because `entry.Messages` is already `IReadOnlyList<ChatMessage>`, no conversion step is needed — the messages are appended directly. This gives the LLM full conversational context on every turn:
 
@@ -265,7 +274,7 @@ Here is the complete path a message takes from an external caller to the LLM and
 │                                                              │
 │   6. await WaitConditionAsync(() => !_isProcessing)          │  ← Serialize
 │   7. _isProcessing = true                                    │
-│   8. _history.Add(TemporalAgentStateRequest)                 │  ← Record request
+│   8. _history.Add(AgentSessionRequest.FromRunRequest(...))   │  ← Record request
 │                                                              │
 │   9. Workflow.ExecuteActivityAsync(                           │
 │        (AgentActivities a) => a.ExecuteAgentAsync(input))    │
@@ -298,7 +307,7 @@ Here is the complete path a message takes from an external caller to the LLM and
 ┌──────────────────────────────────────────────────────────────┐
 │   AgentWorkflow (continued)                                  │
 │                                                              │
-│   19. _history.Add(TemporalAgentStateResponse)               │  ← Record response
+│   19. _history.Add(AgentSessionResponse.FromAgentResponse(...)) ← Record response
 │   20. _isProcessing = false                                  │  ← Release gate
 │   21. return response                                        │  ← Update returns
 └───────────┬──────────────────────────────────────────────────┘

@@ -52,31 +52,33 @@ These types are defined in `Temporalio.Extensions.AI` and used by both libraries
 | `DurableAIDataConverter` | `DataConverter` configured with `AIJsonUtilities.DefaultOptions` for correct `AIContent` polymorphic round-tripping through Temporal history. Required by both stacks. |
 | `DurableAIClientOptionsConfigurator` | `IConfigureOptions<TemporalClientConnectOptions>` that auto-wires `DurableAIDataConverter.Instance` when using `AddTemporalClient(address, ns)`. |
 | `DurableAIWorkerClientConfigurator` | `IPostConfigureOptions<TemporalWorkerServiceOptions>` that auto-wires `DurableAIDataConverter.Instance` when using the 3-arg `AddHostedTemporalWorker` overload. |
-| `Microsoft.Extensions.AI.ChatMessage` and `AIContent` subtypes | Used directly in both libraries' history. `DurableChatWorkflow` stores `List<ChatMessage>`; `AgentWorkflow` entries expose `IReadOnlyList<ChatMessage>` after Layer 1. Polymorphism (`TextContent`, `FunctionCallContent`, `FunctionResultContent`, `ErrorContent`, `UsageContent`, `DataContent`, `HostedFileContent`, `HostedVectorStoreContent`, `TextReasoningContent`, `UriContent`, etc.) is preserved end-to-end through `DurableAIDataConverter`'s `AIJsonUtilities`-based serializer. |
+| `Microsoft.Extensions.AI.ChatMessage` and `AIContent` subtypes | Used directly in both libraries' history. Both `DurableChatWorkflow` and `AgentWorkflow` store entries whose `Messages` is `IReadOnlyList<ChatMessage>`. Polymorphism (`TextContent`, `FunctionCallContent`, `FunctionResultContent`, `ErrorContent`, `UsageContent`, `DataContent`, `HostedFileContent`, `HostedVectorStoreContent`, `TextReasoningContent`, `UriContent`, etc.) is preserved end-to-end through `DurableAIDataConverter`'s `AIJsonUtilities`-based serializer. |
 | `ChatMessage.AdditionalProperties` round-trip | After Layer 1, this field survives serialization through the agent history pipeline as well as the chat pipeline — both libraries delegate to `AIJsonUtilities.DefaultOptions` and pick up new MEAI fields automatically. |
+| `DurableSessionEntry` / `DurableSessionRequest` / `DurableSessionResponse` | After Layer 2, the entry layer itself is shared. Both `DurableChatWorkflow._history` and `AgentWorkflow._history` are `List<DurableSessionEntry>`. The MAF library's `AgentSessionRequest` / `AgentSessionResponse` are subclasses of the AI library's concrete types, contributing MAF-specific fields (`OrchestrationId`, `ResponseType`, `ResponseSchema`) without forking the base shape. Polymorphism is wired across the assembly boundary via a runtime `JsonTypeInfoResolver` modifier in `TemporalAgentJsonUtilities`. |
+| Per-turn `Usage` and `CorrelationId` | `DurableSessionResponse.Usage` (`Microsoft.Extensions.AI.UsageDetails`, no wrapper) and `DurableSessionEntry.CorrelationId` are queryable on both libraries' `GetHistory()` results. |
 
-### What cannot be unified
+### What cannot be unified (today)
+
+After Layers 1 and 2, the message, content, and entry layers are all shared. The remaining divergence is concentrated below the entry layer — specifically, in the activity implementation and a few workflow-instance-level concerns.
 
 **Activity layer:** The two libraries dispatch fundamentally different calls in their core activities.
 
 - `DurableChatActivities` calls `IChatClient.GetResponseAsync()` — stateless, returns `ChatResponse`, no session object.
 - `AgentActivities.ExecuteAgentAsync` calls `AIAgent.RunStreamingAsync()` — stateful, manages `TemporalAgentSession`, serializes `AgentSessionStateBag`, streams `AgentResponseUpdate`, and runs `AIContextProvider` hooks.
 
-These require separate activity classes. A unified base class would need to abstract over the session lifecycle, StateBag serialization, streaming vs. non-streaming response handling, and provider hooks — the result would be more complex than either class alone. The divergence here is about **session lifecycle and StateBag**, not about how messages are represented.
+These require separate activity classes. A unified base class would need to abstract over the session lifecycle, StateBag serialization, streaming vs. non-streaming response handling, and provider hooks — the result would be more complex than either class alone. The divergence here is about **session lifecycle and StateBag**, not about how messages are represented or how entries are shaped.
 
-**Entry layer:** `DurableChatWorkflow` stores `List<ChatMessage>` directly. `AgentWorkflow` stores `List<TemporalAgentStateEntry>` — a wrapper that adds TA-specific per-turn metadata that `ChatMessage` cannot express:
+**Workflow-instance layer:** `AgentWorkflow` carries several pieces of state that `DurableChatWorkflow` does not:
 
-| `TemporalAgentStateEntry` field | Used for |
-|---|---|
-| `CorrelationId` | Pairing a `Request` entry with its matching `Response` entry across worker restarts |
-| `OrchestrationId` (request only) | Recording the workflow ID of an orchestrating workflow when one agent calls another via `GetAgent()` |
-| `Usage` (response only) | Per-turn token counts surfaced through `GetHistory()` and OTel spans |
-| `ResponseSchema` (request only) | Structured-output schema preserved across replay so the same format hint is reissued to the LLM |
-| `$type` discriminator | `request` / `response` distinction at the entry level (the chat workflow has no analog) |
+- `_currentStateBag` — serialized `AgentSessionStateBag` carried forward across turns and continue-as-new boundaries (decoupling provider state from the entry-layer payload).
+- A fire-and-forget signal handler (`RunFireAndForget`) that kicks off a background task without an Update return path.
+- The `AgentName` search-attribute upsert (when `EnableSearchAttributes = true`), absent from the chat workflow because chat sessions are not named.
 
-After Layer 1, the **message and content layers** (`ChatMessage` and `AIContent`) are shared with the chat library. Only the **entry layer** above remains divergent, because `DurableChatWorkflow` has no analog for these fields. Whether the entry layer continues to pull its weight is a separate decision — see the verdict below.
+These are MAF-specific session-lifecycle concerns. They live above the entry layer and would still need to live somewhere even if a shared workflow base existed.
 
-**One unexplored option:** A shared `DurableChatWorkflowBase<TOutput>` from which both `DurableChatWorkflow` and `AgentWorkflow` inherit the session loop, continue-as-new logic, and HITL handling. Assessment: this would require at least three type parameters to abstract over the history entry type, input type, and output type. The `[Workflow]` attribute has `Inherited = false`, which prevents base classes from carrying the attribute — the subclass must redeclare it. The marginal reduction in duplicated code does not justify the added abstraction complexity. Not recommended.
+**MAF-specific entry fields:** The `AgentSessionRequest` subclass adds `OrchestrationId`, `ResponseType`, and `ResponseSchema` to the shared `DurableSessionRequest` base. These are MAF-only because they correspond to MAF-specific concepts (sub-agent orchestration, structured-output format hints) that have no analog in the chat library today. They're a clean extension point — additive on the subclass, invisible to AI-library readers.
+
+**One option deferred to Layer 3:** A shared `DurableChatWorkflowBase<TOutput>` from which both `DurableChatWorkflow` and `AgentWorkflow` inherit the session loop, continue-as-new logic, and HITL handling. After Layer 2, both workflows have the same history shape, so the type-parameter explosion that previously made this awkward (one parameter for the entry type, one for the input, one for the output) collapses to something more tractable. The `[Workflow]` attribute has `Inherited = false`, which prevents base classes from carrying the attribute — the subclass must redeclare it — but that's a minor mechanical cost. Whether the shared loop is worth extracting is the natural next decision once Layer 2 settles in production.
 
 ---
 
@@ -208,22 +210,24 @@ These directions indicate that `AIAgent` and `IChatClient` will continue to be p
 - `Temporalio.Extensions.AI` serves `IChatClient` users who do not need named agents, routing, StateBag, or `AIContextProvider`. It is the right choice for most MEAI-native projects.
 - `Temporalio.Extensions.Agents` serves `AIAgent` users who need the full MAF session model, search attributes, routing, parallel fan-out, and `TemporalAgentContext`. It is the right choice for MAF-native projects.
 
-**Share at the type level — not the activity or workflow level.**
+**Share at the type level — not the activity or workflow-instance level.**
 
-After Layer 1, the shared surface includes:
+After Layers 1 and 2, the shared surface is significantly broader than it was at the start of this analysis. It now includes:
 
 - HITL types — `DurableApprovalRequest`, `DurableApprovalDecision`, `DurableApprovalMixin`.
 - The data converter and its DI auto-wiring — `DurableAIDataConverter`, `DurableAIClientOptionsConfigurator`, `DurableAIWorkerClientConfigurator`.
 - Session attribute keys — `DurableSessionAttributes` (`TurnCount`, `SessionCreatedAt`).
-- Message and content types — `Microsoft.Extensions.AI.ChatMessage` and the full `AIContent` hierarchy. Both libraries serialize these directly via `AIJsonUtilities.DefaultOptions`; the parallel `TemporalAgentStateMessage` / `TemporalAgentStateContent` hierarchy was deleted in Layer 1.
+- Message and content types — `Microsoft.Extensions.AI.ChatMessage` and the full `AIContent` hierarchy (Layer 1).
+- The entry layer — `DurableSessionEntry`, `DurableSessionRequest`, `DurableSessionResponse`, with MAF subclasses `AgentSessionRequest` / `AgentSessionResponse` extending the shared base (Layer 2). Both libraries' workflow history is now `List<DurableSessionEntry>`, with polymorphism wired across the assembly boundary via a runtime `JsonTypeInfoResolver` modifier.
+- Per-turn observability fields — `CorrelationId` and `Usage` (`Microsoft.Extensions.AI.UsageDetails`, used directly with no wrapper) on every response entry, queryable via `GetHistory()` on either library's session client.
 
-What remains divergent: the entry-layer history shape (`TemporalAgentStateEntry` wraps messages with `CorrelationId`, `OrchestrationId`, per-turn `Usage`, request/response discriminator, structured-output `ResponseSchema`) and the activity implementations themselves (session lifecycle, StateBag serialization, streaming, `AIContextProvider` hooks).
+What remains divergent: the activity implementations themselves (session lifecycle, StateBag serialization, streaming, `AIContextProvider` hooks) and a handful of workflow-instance concerns (StateBag carry-forward, fire-and-forget signal, `AgentName` upsert). The argument for two libraries today is the activity-layer fork plus those MAF-specific session-lifecycle pieces — not the type system, which has converged substantially.
 
 **Compose MEAI features into MAF agents via `clientFactory` and DI — no deeper coupling required or recommended.**
 
-A plain `IChatReducer` in `clientFactory` gives history reduction. An `IEmbeddingGenerator` injected into a tool class gives embeddings. Both patterns work without `AddDurableAI()`, without `DurableChatWorkflow`, and without any new abstractions.
+A plain `IChatReducer` in `clientFactory` gives in-pipeline LLM-context reduction. An `IEmbeddingGenerator` injected into a tool class gives embeddings. Both patterns work without `AddDurableAI()`, without `DurableChatWorkflow`, and without any new abstractions. (Workflow-level history reduction is now the entry-shaped `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` on `HistoryReducer`, symmetric across both libraries.)
 
-**Forward-looking note.** After Layer 1, the entry layer remains the message-history fork point — collapsing it onto `List<ChatMessage>` is the natural Layer 2 question if the entry-layer metadata (`CorrelationId`, `OrchestrationId`, per-turn `Usage`, `ResponseSchema`) isn't pulling its weight in practice. That decision is deferred to a separate plan; this document does not commit to it.
+**Forward-looking note (Layer 3).** With Layers 1 and 2 complete, the natural next decision is whether to share the workflow base class itself — `AgentWorkflow : DurableChatWorkflowBase<...>`. The entry-layer convergence makes this materially more tractable than it was previously. The open questions are around StateBag carry-forward, the fire-and-forget signal, and the `AgentName` search-attribute upsert — concerns that would need to live somewhere on the MAF subclass even if the session loop / continue-as-new / HITL plumbing moved up to a shared base. The decision is deferred to a separate plan; this document does not commit to it.
 
 ---
 

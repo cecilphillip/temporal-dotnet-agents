@@ -49,6 +49,7 @@ public class ContinueAsNewTests : IAsyncLifetime
         _env = await TestEnvironmentHelper.StartLocalAsync(
             "--dynamic-config-value",
             $"limit.historyCount.suggestContinueAsNew={HistoryCountThreshold}");
+        _env.Client.Options.DataConverter = TemporalAgentDataConverter.Instance;
 
         _taskQueue = $"continue-as-new-test-{Guid.NewGuid():N}";
 

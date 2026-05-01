@@ -77,7 +77,7 @@ This is the most important distinction in the whole system:
 | Provider scoping params (e.g. `UserId`, `AgentId`) | `StateBag` | Lightweight; needed to address the external service; must survive across turns |
 | Actual memories / extracted facts | External Mem0 service | Heavy; semantically indexed; cross-session and cross-agent |
 | Conversation turn history | `AgentWorkflow._history` → Temporal event history | Temporal-native durability; rebuilds context window each turn |
-| Raw LLM prompt + response | `TemporalAgentStateEntry.Messages` (`IReadOnlyList<ChatMessage>`) in event history | Stored as MEAI `ChatMessage` directly; flattened into `allMessages` at activity start |
+| Raw LLM prompt + response | `DurableSessionEntry.Messages` (`IReadOnlyList<ChatMessage>`) in event history | Stored as MEAI `ChatMessage` directly on `AgentSessionRequest` / `AgentSessionResponse` instances; flattened into `allMessages` at activity start |
 
 The `StateBag` is **not a memory store** — it is a persistent address book that tells providers where to find data in their respective external services.
 

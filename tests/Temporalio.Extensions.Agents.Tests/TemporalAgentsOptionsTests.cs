@@ -274,21 +274,21 @@ public class TemporalAgentsOptionsTests
         Assert.True(options.EnableSearchAttributes);
     }
 
-    // ─── MaxHistorySize ─────────────────────────────────────────────────────
+    // ─── MaxEntryCount ──────────────────────────────────────────────────────
 
     [Fact]
-    public void MaxHistorySize_DefaultIs1000()
+    public void MaxEntryCount_DefaultIs1000()
     {
         var options = new TemporalAgentsOptions();
-        Assert.Equal(1000, options.MaxHistorySize);
+        Assert.Equal(1000, options.MaxEntryCount);
     }
 
     [Fact]
-    public void MaxHistorySize_CanBeCustomized()
+    public void MaxEntryCount_CanBeCustomized()
     {
         var options = new TemporalAgentsOptions();
-        options.MaxHistorySize = 500;
-        Assert.Equal(500, options.MaxHistorySize);
+        options.MaxEntryCount = 500;
+        Assert.Equal(500, options.MaxEntryCount);
     }
 
     [Fact]

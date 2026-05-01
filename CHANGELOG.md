@@ -29,6 +29,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ChatResponse.Text` for the common `response.Text` pattern at user call
   sites; `[JsonIgnore]` so it does not appear on the wire.
 
+- **`Temporalio.Extensions.Agents` shares session-entry types with the AI
+  library.** `AgentSessionRequest` and `AgentSessionResponse` are now
+  subclasses of `DurableSessionRequest` and `DurableSessionResponse` (in
+  `Temporalio.Extensions.AI`). MAF-specific fields (`OrchestrationId`,
+  `ResponseType`, `ResponseSchema`) live on the subclasses; messages,
+  `CorrelationId`, `CreatedAt`, and `Usage` live on the shared base types.
+  Polymorphism is wired across the assembly boundary via a runtime
+  `JsonTypeInfoResolver` modifier in `TemporalAgentJsonUtilities`, with
+  discriminator strings `"agent_request"` / `"agent_response"` (alongside
+  the AI library's own `"ai_request"` / `"ai_response"`).
+
+- **`TemporalAgentRunOptions`** — a new public class extending
+  `Microsoft.Agents.AI.ChatClientAgentRunOptions` with a `CorrelationId`
+  property. Pass an instance to `AIAgent.RunAsync(...)`'s `options`
+  parameter to thread a caller-supplied correlation ID through agent
+  execution. When omitted, the workflow auto-generates one via
+  `Workflow.NewGuid()` (or `Guid.NewGuid()` outside workflow context).
+
+- **Optional `correlationId` parameter on
+  `StructuredOutputExtensions.RunAsync<T>`.** Direct parameter on owned
+  extension surfaces. The MAF proxy's inherited `RunAsync` uses
+  `TemporalAgentRunOptions` instead (see above) — different mechanism,
+  same capability.
+
 ### Changed (BREAKING)
 
 - **`Temporalio.Extensions.Agents` workflow history wire format.** Conversation
@@ -97,6 +121,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   context). Existing `IChatReducer` implementations must migrate to the
   entry-shaped delegate; in-pipeline reducers passed to
   `ChatClientBuilder.UseChatReducer(...)` are unaffected.
+
+- **`Temporalio.Extensions.Agents` state types removed.**
+  `TemporalAgentStateEntry`, `TemporalAgentStateRequest`,
+  `TemporalAgentStateResponse`, and `TemporalAgentStateUsage` are deleted.
+  Replaced by `AgentSessionRequest` and `AgentSessionResponse` (extending
+  the AI library's `DurableSessionRequest` / `DurableSessionResponse`).
+  `Microsoft.Extensions.AI.UsageDetails` replaces the removed
+  `TemporalAgentStateUsage` wrapper — token counts are now stored as the
+  MEAI type directly with no per-library wrapper.
+
+  **Migration:** drain in-flight `AgentWorkflow` workflows before
+  upgrading. Update consumers of `[WorkflowQuery("GetHistory")]` to expect
+  `IReadOnlyList<DurableSessionEntry>`; pattern-match on
+  `DurableSessionResponse` (or the MAF subclass `AgentSessionResponse`) to
+  read `Usage`, and cast to `AgentSessionRequest` to access
+  `OrchestrationId`, `ResponseType`, and `ResponseSchema`.
+
+- **`TemporalAgentsOptions.MaxHistorySize` renamed to `MaxEntryCount`.**
+  Symmetric with the AI library's rename. Default (1000) unchanged.
+  `AgentWorkflowInput.MaxHistorySize` is renamed to match.
+
+- **`TemporalAgentsOptions.HistoryReducer` shape changed** from
+  `Func<IList<TemporalAgentStateEntry>, IList<TemporalAgentStateEntry>>?`
+  to `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?`.
+  Existing reducer delegates need their generic argument updated to the
+  new entry type. The reducer is invoked at continue-as-new boundaries
+  with the full pre-trim history; the returned subset becomes the initial
+  history of the new workflow run.
 
 ### Fixed
 

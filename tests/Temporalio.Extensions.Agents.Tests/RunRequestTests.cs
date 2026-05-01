@@ -149,19 +149,19 @@ public class RunRequestTests
     }
 
     [Fact]
-    public void AgentWorkflowInput_MaxHistorySizeDefaultIs1000()
+    public void AgentWorkflowInput_MaxEntryCountDefaultIs1000()
     {
         var input = new AgentWorkflowInput { AgentName = "test", TaskQueue = "q" };
-        Assert.Equal(1000, input.MaxHistorySize);
+        Assert.Equal(1000, input.MaxEntryCount);
     }
 
     [Fact]
-    public void AgentWorkflowInput_MaxHistorySizeRoundTrips()
+    public void AgentWorkflowInput_MaxEntryCountRoundTrips()
     {
-        var input = new AgentWorkflowInput { AgentName = "test", TaskQueue = "q", MaxHistorySize = 250 };
+        var input = new AgentWorkflowInput { AgentName = "test", TaskQueue = "q", MaxEntryCount = 250 };
         var json = JsonSerializer.Serialize(input);
         var deserialized = JsonSerializer.Deserialize<AgentWorkflowInput>(json);
-        Assert.Equal(250, deserialized!.MaxHistorySize);
+        Assert.Equal(250, deserialized!.MaxEntryCount);
     }
 
     [Fact]
@@ -178,8 +178,8 @@ public class RunRequestTests
     public void AgentWorkflowInput_HistoryReducerIsNotSerialized()
     {
         // HistoryReducer is [JsonIgnore] — delegate must not round-trip through JSON
-        Func<IList<Temporalio.Extensions.Agents.State.TemporalAgentStateEntry>,
-             IList<Temporalio.Extensions.Agents.State.TemporalAgentStateEntry>> reducer = h => h;
+        Func<IList<Temporalio.Extensions.AI.DurableSessionEntry>,
+             IList<Temporalio.Extensions.AI.DurableSessionEntry>> reducer = h => h;
         var input = new AgentWorkflowInput { AgentName = "test", TaskQueue = "q", HistoryReducer = reducer };
         var json = JsonSerializer.Serialize(input);
         var deserialized = JsonSerializer.Deserialize<AgentWorkflowInput>(json);

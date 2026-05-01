@@ -21,7 +21,7 @@ How conversation history grows in TemporalAgents, how the framework manages it a
 
 Every agent session in TemporalAgents maintains a conversation history — the full sequence of user messages, assistant responses, tool calls, and tool results. This history is:
 
-1. **Stored in workflow state** (`AgentWorkflow._history`) as a `List<TemporalAgentStateEntry>`, where each entry's `Messages` is `IReadOnlyList<ChatMessage>` (MEAI type, stored directly)
+1. **Stored in workflow state** (`AgentWorkflow._history`) as a `List<DurableSessionEntry>` populated with `AgentSessionRequest` / `AgentSessionResponse` instances (MAF subclasses of the shared `DurableSessionRequest` / `DurableSessionResponse` types in `Temporalio.Extensions.AI`). Each entry's `Messages` is `IReadOnlyList<ChatMessage>` (MEAI type, stored directly).
 2. **Passed to the activity** on every turn as part of `ExecuteAgentInput.ConversationHistory`
 3. **Flattened into a single `List<ChatMessage>`** inside `AgentActivities.ExecuteAgentAsync` and sent to the LLM
 4. **Carried across continue-as-new boundaries** via `AgentWorkflowInput.CarriedHistory`
@@ -64,14 +64,14 @@ foreach (var entry in input.ConversationHistory)
 
 ## History Serialization Format
 
-History entries use a polymorphic JSON format with a `$type` discriminator at the entry layer (`request` / `response`). Within each entry's `messages`, individual `AIContent` items carry MEAI's own `$type` discriminator (e.g., `text`, `functionCall`, `functionResult`) emitted by `AIJsonUtilities.DefaultOptions`:
+History entries use a polymorphic JSON format with a `$type` discriminator at the entry layer. The MAF-specific subclasses use the discriminators `agent_request` / `agent_response`; the AI library's own concrete types (in mixed-library scenarios) use `ai_request` / `ai_response`. Within each entry's `messages`, individual `AIContent` items carry MEAI's own `$type` discriminator (e.g., `text`, `functionCall`, `functionResult`) emitted by `AIJsonUtilities.DefaultOptions`:
 
 ```json
 [
   {
-    "$type": "request",
+    "$type": "agent_request",
     "correlationId": "abc123",
-    "createdAt": "2026-03-13T10:00:00Z",
+    "createdAt": "2026-04-30T10:00:00Z",
     "messages": [
       {
         "role": "user",
@@ -80,9 +80,9 @@ History entries use a polymorphic JSON format with a `$type` discriminator at th
     ]
   },
   {
-    "$type": "response",
+    "$type": "agent_response",
     "correlationId": "abc123",
-    "createdAt": "2026-03-13T10:00:01Z",
+    "createdAt": "2026-04-30T10:00:01Z",
     "messages": [
       {
         "role": "assistant",
@@ -166,17 +166,19 @@ Agent activity completed for 'WeatherAgent' (workflow: ta-weatheragent-abc123).
 
 ### Per-Response: History State
 
-Token usage is stored in the serialized history as `TemporalAgentStateUsage`, making it available for retrospective analysis via the `GetHistory` workflow query:
+Token usage is stored on each response entry as `Microsoft.Extensions.AI.UsageDetails` (the MEAI type, used directly — no wrapper), making it available for retrospective analysis via the `GetHistory` workflow query. The query returns `IReadOnlyList<DurableSessionEntry>`; pattern-match on `DurableSessionResponse` (or its MAF subclass `AgentSessionResponse`) to access typed `Usage`:
 
 ```csharp
 var handle = client.GetWorkflowHandle<AgentWorkflow>(workflowId);
 var history = await handle.QueryAsync(wf => wf.GetHistory());
 
-foreach (var entry in history.OfType<TemporalAgentStateResponse>())
+foreach (var entry in history.OfType<DurableSessionResponse>())
 {
     Console.WriteLine($"Turn: {entry.Usage?.TotalTokenCount} tokens");
 }
 ```
+
+The `OfType<DurableSessionResponse>()` filter matches both `DurableSessionResponse` and the MAF-specific `AgentSessionResponse` subclass (inheritance-based). Cast individual entries to `AgentSessionRequest` to access the MAF-only fields (`OrchestrationId`, `ResponseType`, `ResponseSchema`).
 
 ### Aggregate: Search Attributes
 
@@ -260,9 +262,9 @@ Or use `AgentJobWorkflow` via scheduling, which always starts with empty history
 
 > **Note:** The `RunAgentAsync(string agentName, string message)` convenience overload is deprecated. Use `RunAgentAsync(TemporalAgentSessionId, RunRequest)` directly.
 
-### 5b. Cap History at a Fixed Size with MaxHistorySize
+### 5b. Cap History at a Fixed Size with MaxEntryCount
 
-`TemporalAgentsOptions.MaxHistorySize` sets a hard cap on the number of history entries kept in the workflow. When the cap is reached, the workflow triggers continue-as-new, discarding the oldest entries:
+`TemporalAgentsOptions.MaxEntryCount` sets a hard cap on the number of history entries kept in the workflow. When the cap is reached, the workflow triggers continue-as-new, discarding the oldest entries:
 
 ```csharp
 builder.Services
@@ -270,18 +272,22 @@ builder.Services
     .AddTemporalAgents(opts =>
     {
         opts.AddAIAgent(agent);
-        opts.MaxHistorySize = 50;  // keep at most 50 entries across continue-as-new
+        opts.MaxEntryCount = 50;  // keep at most 50 entries across continue-as-new
     });
 ```
 
-Pair with a `HistoryReducer` to control which entries are retained at the boundary:
+Pair with a `HistoryReducer` to control which entries are retained at the boundary. The reducer signature is now `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` — entry-shaped on both libraries, matching the unified entry-layer wire format:
 
 ```csharp
-opts.MaxHistorySize = 50;
-opts.HistoryReducer = new SummarizingHistoryReducer(summarizerAgent);
+opts.MaxEntryCount = 50;
+opts.HistoryReducer = entries =>
+{
+    // Keep the most recent 30 entries; drop older ones
+    return entries.TakeLast(30).ToList();
+};
 ```
 
-`HistoryReducer` is called with the full history immediately before continue-as-new. The returned subset becomes the initial history for the new run. A `null` reducer (the default) retains all entries up to `MaxHistorySize`, dropping the oldest.
+`HistoryReducer` is called with the full history immediately before continue-as-new. The returned subset becomes the initial history for the new run. A `null` reducer (the default) retains all entries up to `MaxEntryCount`, dropping the oldest. The reducer must be synchronous and deterministic — it runs in workflow context.
 
 ### 5. Use ResponseFormat to Get Structured Output
 
@@ -348,4 +354,4 @@ Continue-as-New:
 
 ---
 
-_Last updated: 2026-03-13_
+_Last updated: 2026-04-30_

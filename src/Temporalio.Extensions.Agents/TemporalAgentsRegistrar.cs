@@ -93,13 +93,19 @@ internal static class TemporalAgentsRegistrar
             }
         }
 
-        // Auto-wire DurableAIDataConverter — mirrors what AddDurableAI() does.
+        // Auto-wire TemporalAgentDataConverter. Mirrors what AddDurableAI() does for the AI
+        // library — except the MAF converter is a strict superset that also handles the
+        // agent-specific session-entry subclasses (AgentSessionRequest / AgentSessionResponse).
+        // The MAF converter accepts and overrides DurableAIDataConverter via its plugin's
+        // dual-precondition guard, so mixing AddTemporalAgents() with AddDurableAI() on the
+        // same builder produces the MAF-aware converter (which is what we want — it preserves
+        // all AI-library serialization behavior plus the agent extensions).
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IConfigureOptions<TemporalClientConnectOptions>,
-            DurableAIClientOptionsConfigurator>());
+            TemporalAgentClientOptionsConfigurator>());
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IPostConfigureOptions<TemporalWorkerServiceOptions>,
-            DurableAIWorkerClientConfigurator>());
+            TemporalAgentWorkerClientConfigurator>());
     }
 }

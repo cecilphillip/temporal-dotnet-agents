@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Agents.Session;
-using Temporalio.Extensions.Agents.State;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
@@ -13,7 +13,7 @@ internal sealed class ExecuteAgentInput
     public ExecuteAgentInput(
         string agentName,
         RunRequest request,
-        IReadOnlyList<TemporalAgentStateEntry> conversationHistory,
+        IReadOnlyList<DurableSessionEntry> conversationHistory,
         JsonElement? serializedStateBag = null,
         TemporalAgentSessionId? sessionId = null)
     {
@@ -41,9 +41,10 @@ internal sealed class ExecuteAgentInput
 
     /// <summary>
     /// Gets the full conversation history at the time of the activity call,
-    /// including the new <see cref="TemporalAgentStateRequest"/> entry for this turn.
+    /// including the new request entry for this turn (an
+    /// <see cref="State.AgentSessionRequest"/>).
     /// </summary>
-    public IReadOnlyList<TemporalAgentStateEntry> ConversationHistory { get; }
+    public IReadOnlyList<DurableSessionEntry> ConversationHistory { get; }
 
     /// <summary>
     /// Gets the serialized <see cref="AgentSessionStateBag"/> from the previous turn,

@@ -40,6 +40,12 @@ public sealed class IntegrationTestFixture : IAsyncLifetime
     {
         Environment = await TestEnvironmentHelper.StartLocalAsync();
 
+        // The local dev-server's client is created with DataConverter.Default — replace it
+        // with TemporalAgentDataConverter.Instance so MAF session-entry subclasses
+        // (AgentSessionRequest / AgentSessionResponse) round-trip with their $type
+        // discriminators intact across the workflow → activity payload boundary.
+        Environment.Client.Options.DataConverter = TemporalAgentDataConverter.Instance;
+
         _host = BuildHost();
         await _host.StartAsync();
 

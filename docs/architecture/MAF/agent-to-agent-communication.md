@@ -75,7 +75,7 @@ public class ResearchWorkflow
 
 ### History Accumulation
 
-Each `TemporalAIAgent` instance maintains its own conversation history (`List<TemporalAgentStateEntry>`). When `RunAsync` is called, the full history is sent to `AgentActivities.ExecuteAgentAsync` as part of the input. Each entry already exposes its messages as `IReadOnlyList<ChatMessage>` (MEAI types), so the activity flattens the entries into a single `List<ChatMessage>` and passes it to the real `AIAgent` without any per-message conversion step. The agent sees the complete conversation context on every turn.
+Each `TemporalAIAgent` instance maintains its own conversation history (`List<DurableSessionEntry>`, populated with `AgentSessionRequest` / `AgentSessionResponse` instances). The request entries are constructed via `AgentSessionRequest.FromRunRequest`. When `RunAsync` is called, the full history is sent to `AgentActivities.ExecuteAgentAsync` as part of the input. Each entry already exposes its messages as `IReadOnlyList<ChatMessage>` (MEAI types), so the activity flattens the entries into a single `List<ChatMessage>` and passes it to the real `AIAgent` without any per-message conversion step. The agent sees the complete conversation context on every turn.
 
 ### Deterministic Session IDs
 
@@ -430,4 +430,4 @@ public async Task<string> RunAsync(string question)
 
 ---
 
-_Last updated: 2026-03-13_
+_Last updated: 2026-04-30_

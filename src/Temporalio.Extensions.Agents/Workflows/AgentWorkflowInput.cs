@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Temporalio.Common;
-using Temporalio.Extensions.Agents.State;
+using Temporalio.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
@@ -23,7 +23,7 @@ internal sealed record AgentWorkflowInput
     /// <summary>
     /// Gets conversation history carried forward from a previous run (for continue-as-new scenarios).
     /// </summary>
-    public IReadOnlyList<TemporalAgentStateEntry> CarriedHistory { get; init; } = [];
+    public IReadOnlyList<DurableSessionEntry> CarriedHistory { get; init; } = [];
 
     /// <summary>
     /// Gets the serialized <see cref="AgentSessionStateBag"/> carried forward from a
@@ -61,14 +61,14 @@ internal sealed record AgentWorkflowInput
     public bool EnableSearchAttributes { get; init; }
 
     /// <summary>Default 1000. Workflow triggers continue-as-new when history reaches this count.</summary>
-    public int MaxHistorySize { get; init; } = 1000;
+    public int MaxEntryCount { get; init; } = 1000;
 
     /// <summary>
     /// Not serialized. Re-supplied on each <c>StartWorkflowAsync</c> call.
     /// The library carries it in memory across continue-as-new on the same worker.
     /// </summary>
     [JsonIgnore]
-    public Func<IList<TemporalAgentStateEntry>, IList<TemporalAgentStateEntry>>? HistoryReducer { get; init; }
+    public Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>? HistoryReducer { get; init; }
 
     /// <summary>
     /// Null on the first run. Set to the original session start time on continue-as-new

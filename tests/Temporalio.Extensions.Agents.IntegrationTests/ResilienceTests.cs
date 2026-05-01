@@ -37,6 +37,7 @@ public class ResilienceTests
         // Start a local server and worker, do one successful turn,
         // then shut down the server and verify the next call fails.
         var env = await TestEnvironmentHelper.StartLocalAsync();
+        env.Client.Options.DataConverter = TemporalAgentDataConverter.Instance;
         var taskQueue = $"resilience-server-{Guid.NewGuid():N}";
 
         var builder = Host.CreateApplicationBuilder();
@@ -93,6 +94,7 @@ public class ResilienceTests
         // a network partition), send a request (which will hang), start a new
         // worker, and verify the request completes.
         var env = await TestEnvironmentHelper.StartLocalAsync();
+        env.Client.Options.DataConverter = TemporalAgentDataConverter.Instance;
         var taskQueue = $"resilience-partition-{Guid.NewGuid():N}";
 
         try
@@ -152,6 +154,7 @@ public class ResilienceTests
         // start a fresh worker, query the workflow history, and verify
         // state consistency. Then send one more turn to prove continuity.
         var env = await TestEnvironmentHelper.StartLocalAsync();
+        env.Client.Options.DataConverter = TemporalAgentDataConverter.Instance;
         var taskQueue = $"resilience-state-{Guid.NewGuid():N}";
 
         try
@@ -191,14 +194,14 @@ public class ResilienceTests
                 Assert.Equal(6, history.Count); // 3 requests + 3 responses
 
                 // Verify the first request contains "Turn 1".
-                var firstRequest = Assert.IsType<TemporalAgentStateRequest>(history[0]);
+                var firstRequest = Assert.IsType<AgentSessionRequest>(history[0]);
                 var textContent = firstRequest.Messages[0].Contents
                     .OfType<TextContent>()
                     .First();
                 Assert.Equal("Turn 1", textContent.Text);
 
                 // Verify the last response is for Turn 3.
-                var lastResponse = Assert.IsType<TemporalAgentStateResponse>(history[5]);
+                var lastResponse = Assert.IsType<AgentSessionResponse>(history[5]);
                 var responseText = lastResponse.Messages[0].Contents
                     .OfType<TextContent>()
                     .First();

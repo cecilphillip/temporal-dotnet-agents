@@ -26,7 +26,7 @@ internal class AgentWorkflow
     internal static readonly SearchAttributeKey<long> TurnCountSearchAttribute =
         DurableSessionAttributes.TurnCount;
 
-    private List<TemporalAgentStateEntry> _history = new(16);
+    private List<DurableSessionEntry> _history = new(16);
     private int _turnCount;
     private bool _isProcessing;
     private bool _shutdownRequested;
@@ -50,7 +50,7 @@ internal class AgentWorkflow
                 _history.Capacity = input.CarriedHistory.Count;
             _history.AddRange(input.CarriedHistory);
             foreach (var e in input.CarriedHistory)
-                if (e is TemporalAgentStateResponse) _turnCount++;
+                if (e is DurableSessionResponse) _turnCount++;
         }
 
         // Restore StateBag carried across continue-as-new.
@@ -75,7 +75,7 @@ internal class AgentWorkflow
 
         // Wait until shutdown is requested, TTL elapses, or history is large enough to warrant continue-as-new.
         bool conditionMet = await Workflow.WaitConditionAsync(
-            () => _shutdownRequested || (!_isProcessing && (Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxHistorySize)),
+            () => _shutdownRequested || (!_isProcessing && (Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxEntryCount)),
             timeout: ttl);
 
         if (!conditionMet)
@@ -83,12 +83,12 @@ internal class AgentWorkflow
             // TTL elapsed without condition being met — session complete.
             Workflow.Logger.LogWorkflowTTLExpired(input.AgentName, Workflow.Info.WorkflowId);
         }
-        else if ((Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxHistorySize) && !_shutdownRequested)
+        else if ((Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxEntryCount) && !_shutdownRequested)
         {
             Workflow.Logger.LogWorkflowContinueAsNew(input.AgentName, Workflow.Info.WorkflowId, _history.Count);
 
             // Apply the optional history reducer before carrying history forward.
-            IReadOnlyList<TemporalAgentStateEntry> carriedHistory =
+            IReadOnlyList<DurableSessionEntry> carriedHistory =
                 input.HistoryReducer?.Invoke(_history.ToList()).ToList() ?? _history.ToList();
             var carriedStateBag = _currentStateBag;
             var canInput = new AgentWorkflowInput
@@ -102,7 +102,7 @@ internal class AgentWorkflow
                 ActivityHeartbeatTimeout = input.ActivityHeartbeatTimeout,
                 ApprovalTimeout = input.ApprovalTimeout,
                 RetryPolicy = input.RetryPolicy,
-                MaxHistorySize = input.MaxHistorySize,
+                MaxEntryCount = input.MaxEntryCount,
                 HistoryReducer = input.HistoryReducer,
                 EnableSearchAttributes = input.EnableSearchAttributes,
                 OriginalCreatedAt = sessionCreatedAt,
@@ -142,7 +142,7 @@ internal class AgentWorkflow
             // Intentional: request is added before the activity executes because the activity
             // input includes the full history (the request must be part of it). If the activity
             // fails, this entry remains in history without a matching response.
-            _history.Add(TemporalAgentStateRequest.FromRunRequest(request, Workflow.UtcNow));
+            _history.Add(AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow));
 
             // GAP 6: pass the stored StateBag so the activity can restore provider state.
             // _history is passed directly (not copied) — the activity input is serialized
@@ -166,7 +166,7 @@ internal class AgentWorkflow
             // GAP 6: persist the updated StateBag for the next turn.
             _currentStateBag = result.SerializedStateBag;
 
-            _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
+            _history.Add(AgentSessionResponse.FromAgentResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
             _turnCount++;
 
             // Update turn count for operational queries (opt-in only).
@@ -215,7 +215,7 @@ internal class AgentWorkflow
     /// Returns the current conversation history.
     /// </summary>
     [WorkflowQuery("GetHistory")]
-    public IReadOnlyList<TemporalAgentStateEntry> GetHistory() => _history;
+    public IReadOnlyList<DurableSessionEntry> GetHistory() => _history;
 
     // ── GAP 3: Human-in-the-Loop ────────────────────────────────────────────
 
@@ -276,7 +276,7 @@ internal class AgentWorkflow
         int historyCountBefore = _history.Count;   // snapshot before add
         try
         {
-            _history.Add(TemporalAgentStateRequest.FromRunRequest(request, Workflow.UtcNow));
+            _history.Add(AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow));
 
             var activityInput = new ExecuteAgentInput(
                 _input!.AgentName,
@@ -295,7 +295,7 @@ internal class AgentWorkflow
                 });
 
             _currentStateBag = result.SerializedStateBag;
-            _history.Add(TemporalAgentStateResponse.FromResponse(
+            _history.Add(AgentSessionResponse.FromAgentResponse(
                 request.CorrelationId!, result.Response, Workflow.UtcNow));
         }
         catch (Exception ex)

@@ -287,13 +287,26 @@ await proxy.RunAsync("Tell me more", session);
 
 ## ResponseFormat in Workflow State
 
-When `ChatResponseFormat` is used, it's serialized into the conversation history as part of `TemporalAgentStateRequest`:
+When `ChatResponseFormat` is used, it's serialized into the conversation history as part of `AgentSessionRequest` (the MAF-specific subclass of `DurableSessionRequest` from `Temporalio.Extensions.AI`):
 
 - `ResponseType`: `"json"` or `"text"`
 - `ResponseSchema`: the JSON schema as a `JsonElement` (for `ChatResponseFormatJson`)
-- `Messages`: the request messages as `ChatMessage[]` (MEAI type, stored directly)
+- `Messages`: the request messages as `ChatMessage[]` (MEAI type, stored directly on the shared `DurableSessionEntry` base)
 
-This ensures that on replay, the same format hint and messages are sent to the LLM, preserving determinism. `ChatMessage`/`AIContent` polymorphism is preserved end-to-end via `DurableAIDataConverter`.
+These two response-format fields are MAF-specific — they live on `AgentSessionRequest`, not on the shared base type, since the AI library has no analog for structured output today. On replay the same format hint and messages are sent to the LLM, preserving determinism. `ChatMessage`/`AIContent` polymorphism is preserved end-to-end via `DurableAIDataConverter`.
+
+### Threading a correlation ID through structured-output runs
+
+`StructuredOutputExtensions.RunAsync<T>` accepts an optional `correlationId` parameter directly (it's an extension surface owned by this library, so the correlation ID is a first-class parameter rather than going through `TemporalAgentRunOptions`):
+
+```csharp
+var report = await proxy.RunAsync<WeatherReport>(
+    messages,
+    session,
+    correlationId: "request-abc-123");  // appears on the AgentSessionRequest entry
+```
+
+When omitted, the workflow auto-generates one via `Workflow.NewGuid()` (or `Guid.NewGuid()` outside workflow context).
 
 ---
 
@@ -308,4 +321,4 @@ This ensures that on replay, the same format hint and messages are sent to the L
 
 ---
 
-_Last updated: 2026-03-13_
+_Last updated: 2026-04-30_

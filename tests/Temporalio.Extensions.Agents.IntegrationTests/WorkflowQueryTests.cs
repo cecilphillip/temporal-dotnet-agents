@@ -41,10 +41,10 @@ public class WorkflowQueryTests : IClassFixture<IntegrationTestFixture>
         Assert.Equal(4, history.Count);
 
         // Entries alternate: request, response, request, response.
-        Assert.IsType<TemporalAgentStateRequest>(history[0]);
-        Assert.IsType<TemporalAgentStateResponse>(history[1]);
-        Assert.IsType<TemporalAgentStateRequest>(history[2]);
-        Assert.IsType<TemporalAgentStateResponse>(history[3]);
+        Assert.IsType<AgentSessionRequest>(history[0]);
+        Assert.IsType<AgentSessionResponse>(history[1]);
+        Assert.IsType<AgentSessionRequest>(history[2]);
+        Assert.IsType<AgentSessionResponse>(history[3]);
 
         _output.WriteLine(
             $"Query returned {history.Count} entries for 2 turns — correct alternating pattern.");
@@ -64,7 +64,7 @@ public class WorkflowQueryTests : IClassFixture<IntegrationTestFixture>
         Assert.Equal(2, history.Count);
 
         // First entry is the request — should contain the user message.
-        var request = Assert.IsType<TemporalAgentStateRequest>(history[0]);
+        var request = Assert.IsType<AgentSessionRequest>(history[0]);
         Assert.NotEmpty(request.Messages);
 
         var requestMsg = request.Messages[0];
@@ -76,7 +76,7 @@ public class WorkflowQueryTests : IClassFixture<IntegrationTestFixture>
         Assert.Equal("What is Temporal?", requestText.Text);
 
         // Second entry is the response — should contain the echo reply.
-        var response = Assert.IsType<TemporalAgentStateResponse>(history[1]);
+        var response = Assert.IsType<AgentSessionResponse>(history[1]);
         Assert.NotEmpty(response.Messages);
 
         var responseMsg = response.Messages[0];

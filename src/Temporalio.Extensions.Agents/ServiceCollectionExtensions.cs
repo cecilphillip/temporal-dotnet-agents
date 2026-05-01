@@ -60,13 +60,13 @@ public static class ServiceCollectionExtensions
             services.AddTemporalClient(targetHost, @namespace ?? "default");
         }
 
-        // Auto-wire DurableAIDataConverter so that AgentResponse ChatMessage/AIContent subtypes
-        // (e.g. TextContent) round-trip correctly through the WorkflowUpdate return path.
-        // Without this, the Client process uses DataConverter.Default which drops $type
-        // discriminators, causing all messages to deserialize as base AIContent with no text.
+        // Auto-wire TemporalAgentDataConverter so that AgentResponse ChatMessage/AIContent
+        // subtypes (e.g. TextContent) AND the MAF-specific session-entry subclasses round-trip
+        // correctly. Without this, the client process uses DataConverter.Default which drops
+        // $type discriminators, causing messages to deserialize as base types with no payload.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IConfigureOptions<TemporalClientConnectOptions>,
-            DurableAIClientOptionsConfigurator>());
+            TemporalAgentClientOptionsConfigurator>());
 
         services.AddSingleton<ITemporalAgentClient>(sp =>
             new DefaultTemporalAgentClient(

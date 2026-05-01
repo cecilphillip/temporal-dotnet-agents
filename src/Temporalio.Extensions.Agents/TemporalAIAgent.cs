@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Agents.Session;
 using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.Agents.Workflows;
@@ -24,7 +25,7 @@ namespace Temporalio.Extensions.Agents;
 public sealed class TemporalAIAgent : AIAgent
 {
     private readonly string _agentName;
-    private readonly List<TemporalAgentStateEntry> _history = [];
+    private readonly List<DurableSessionEntry> _history = [];
     private readonly ActivityOptions _activityOptions;
     private int _requestCount;
 
@@ -80,12 +81,14 @@ public sealed class TemporalAIAgent : AIAgent
 
         IList<string>? enableToolNames = null;
         bool enableToolCalls = true;
+        string? callerCorrelationId = null;
         ChatResponseFormat? responseFormat = null;
 
         if (options is TemporalAgentRunOptions temporalOptions)
         {
             enableToolCalls = temporalOptions.EnableToolCalls;
             enableToolNames = temporalOptions.EnableToolNames;
+            callerCorrelationId = temporalOptions.CorrelationId;
         }
         else if (options is ChatClientAgentRunOptions chatOptions)
         {
@@ -100,10 +103,12 @@ public sealed class TemporalAIAgent : AIAgent
         var request = new RunRequest([.. messages], responseFormat, enableToolCalls, enableToolNames)
         {
             OrchestrationId = Workflow.Info.WorkflowId,
-            CorrelationId = Workflow.NewGuid().ToString("N"),
+            CorrelationId = string.IsNullOrEmpty(callerCorrelationId)
+                ? Workflow.NewGuid().ToString("N")
+                : callerCorrelationId,
         };
 
-        _history.Add(TemporalAgentStateRequest.FromRunRequest(request, Workflow.UtcNow));
+        _history.Add(AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow));
         _requestCount++;
 
         // TemporalAIAgent lives inside a workflow and creates sessions in-process,
@@ -120,7 +125,7 @@ public sealed class TemporalAIAgent : AIAgent
             (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
             _activityOptions);
 
-        _history.Add(TemporalAgentStateResponse.FromResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
+        _history.Add(AgentSessionResponse.FromAgentResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
         return result.Response;
     }
 

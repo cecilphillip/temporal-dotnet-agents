@@ -59,7 +59,7 @@ internal sealed class DefaultTemporalAgentClient(
                 ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
                 ApprovalTimeout = options.ApprovalTimeout,
                 RetryPolicy = options.RetryPolicy,
-                MaxHistorySize = options.MaxHistorySize,
+                MaxEntryCount = options.MaxEntryCount,
                 HistoryReducer = options.HistoryReducer,
                 EnableSearchAttributes = options.EnableSearchAttributes,
                 // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
@@ -105,7 +105,7 @@ internal sealed class DefaultTemporalAgentClient(
                 ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
                 ApprovalTimeout = options.ApprovalTimeout,
                 RetryPolicy = options.RetryPolicy,
-                MaxHistorySize = options.MaxHistorySize,
+                MaxEntryCount = options.MaxEntryCount,
                 HistoryReducer = options.HistoryReducer,
                 EnableSearchAttributes = options.EnableSearchAttributes,
                 // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
@@ -191,7 +191,7 @@ internal sealed class DefaultTemporalAgentClient(
                     ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
                     ApprovalTimeout = options.ApprovalTimeout,
                     RetryPolicy = options.RetryPolicy,
-                    MaxHistorySize = options.MaxHistorySize,
+                    MaxEntryCount = options.MaxEntryCount,
                     HistoryReducer = options.HistoryReducer,
                     EnableSearchAttributes = options.EnableSearchAttributes,
                     // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN

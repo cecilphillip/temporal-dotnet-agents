@@ -155,6 +155,79 @@ public class TemporalAIAgentProxyTests
         Assert.Empty(response.Messages);
     }
 
+    // ─── CorrelationId on TemporalAgentRunOptions ────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_WithCorrelationIdInOptions_PropagatesToRunRequest()
+    {
+        // Caller-supplied correlation ID via TemporalAgentRunOptions must be passed through
+        // to the RunRequest so it lands on the workflow-history entry — the proxy must NOT
+        // overwrite it with a fresh GUID.
+        RunRequest? capturedRequest = null;
+        var fakeClient = A.Fake<ITemporalAgentClient>();
+        A.CallTo(() => fakeClient.RunAgentAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
+            .Invokes((TemporalAgentSessionId _, RunRequest r, CancellationToken _) => capturedRequest = r)
+            .Returns(Task.FromResult(new AgentResponse()));
+
+        var proxy = new TemporalAIAgentProxy("TestAgent", fakeClient);
+        var session = (TemporalAgentSession)await proxy.CreateSessionAsync();
+
+        var options = new TemporalAgentRunOptions { CorrelationId = "upstream-trace-42" };
+        await proxy.RunAsync("Hello", session, options);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("upstream-trace-42", capturedRequest!.CorrelationId);
+    }
+
+    [Fact]
+    public async Task RunAsync_WithoutCorrelationIdInOptions_AutoGenerates()
+    {
+        // When no CorrelationId is supplied, the proxy must auto-generate one — no null leak,
+        // workflow code downstream relies on a non-empty correlation ID.
+        RunRequest? capturedRequest = null;
+        var fakeClient = A.Fake<ITemporalAgentClient>();
+        A.CallTo(() => fakeClient.RunAgentAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
+            .Invokes((TemporalAgentSessionId _, RunRequest r, CancellationToken _) => capturedRequest = r)
+            .Returns(Task.FromResult(new AgentResponse()));
+
+        var proxy = new TemporalAIAgentProxy("TestAgent", fakeClient);
+        var session = (TemporalAgentSession)await proxy.CreateSessionAsync();
+
+        await proxy.RunAsync("Hello", session);
+
+        Assert.NotNull(capturedRequest);
+        Assert.False(string.IsNullOrEmpty(capturedRequest!.CorrelationId));
+    }
+
+    [Fact]
+    public async Task RunAsync_WithEmptyCorrelationIdInOptions_AutoGenerates()
+    {
+        // Empty string is treated the same as null — auto-generate a fresh GUID.
+        RunRequest? capturedRequest = null;
+        var fakeClient = A.Fake<ITemporalAgentClient>();
+        A.CallTo(() => fakeClient.RunAgentAsync(
+                A<TemporalAgentSessionId>._,
+                A<RunRequest>._,
+                A<CancellationToken>._))
+            .Invokes((TemporalAgentSessionId _, RunRequest r, CancellationToken _) => capturedRequest = r)
+            .Returns(Task.FromResult(new AgentResponse()));
+
+        var proxy = new TemporalAIAgentProxy("TestAgent", fakeClient);
+        var session = (TemporalAgentSession)await proxy.CreateSessionAsync();
+
+        var options = new TemporalAgentRunOptions { CorrelationId = string.Empty };
+        await proxy.RunAsync("Hello", session, options);
+
+        Assert.NotNull(capturedRequest);
+        Assert.False(string.IsNullOrEmpty(capturedRequest!.CorrelationId));
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
     private static TemporalAIAgentProxy CreateProxy(string name)

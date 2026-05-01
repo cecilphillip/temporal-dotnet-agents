@@ -1,13 +1,18 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Temporalio.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
 
 [JsonSourceGenerationOptions(WriteIndented = false)]
-[JsonSerializable(typeof(TemporalAgentStateEntry))]
-[JsonSerializable(typeof(TemporalAgentStateRequest))]
-[JsonSerializable(typeof(TemporalAgentStateResponse))]
+[JsonSerializable(typeof(DurableSessionEntry))]
+[JsonSerializable(typeof(DurableSessionRequest))]
+[JsonSerializable(typeof(DurableSessionResponse))]
+[JsonSerializable(typeof(AgentSessionRequest))]
+[JsonSerializable(typeof(AgentSessionResponse))]
+[JsonSerializable(typeof(IReadOnlyList<DurableSessionEntry>))]
+[JsonSerializable(typeof(List<DurableSessionEntry>))]
 // Function call and result content
 [JsonSerializable(typeof(Dictionary<string, object>))]
 [JsonSerializable(typeof(IDictionary<string, object?>))]
@@ -18,8 +23,6 @@ namespace Temporalio.Extensions.Agents.State;
 [JsonSerializable(typeof(JsonValue))]
 [JsonSerializable(typeof(JsonArray))]
 [JsonSerializable(typeof(IEnumerable<string>))]
-[JsonSerializable(typeof(IReadOnlyList<TemporalAgentStateEntry>))]
-[JsonSerializable(typeof(List<TemporalAgentStateEntry>))]
 [JsonSerializable(typeof(char))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(int))]
@@ -35,4 +38,4 @@ namespace Temporalio.Extensions.Agents.State;
 [JsonSerializable(typeof(TimeSpan))]
 [JsonSerializable(typeof(DateTime))]
 [JsonSerializable(typeof(DateTimeOffset))]
-internal sealed partial class TemporalAgentStateJsonContext : JsonSerializerContext;
+internal sealed partial class AgentSessionJsonContext : JsonSerializerContext;

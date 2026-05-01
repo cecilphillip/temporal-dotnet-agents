@@ -132,7 +132,7 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
             session.SessionId.WorkflowId);
         var history = await handle.QueryAsync(wf => wf.GetHistory());
 
-        var request = Assert.IsType<TemporalAgentStateRequest>(history[0]);
+        var request = Assert.IsType<AgentSessionRequest>(history[0]);
         var textContent = request.Messages[0].Contents
             .OfType<TextContent>()
             .First();
@@ -236,8 +236,8 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
 
         Assert.Equal(4, history.Count); // 2 turns × (request + response)
 
-        var request1 = Assert.IsType<TemporalAgentStateRequest>(history[0]);
-        var request2 = Assert.IsType<TemporalAgentStateRequest>(history[2]);
+        var request1 = Assert.IsType<AgentSessionRequest>(history[0]);
+        var request2 = Assert.IsType<AgentSessionRequest>(history[2]);
 
         // Turn 1 should have "json" response type.
         Assert.Equal("json", request1.ResponseType);
@@ -307,7 +307,7 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
             session.SessionId.WorkflowId);
         var history = await handle.QueryAsync(wf => wf.GetHistory());
 
-        var request = Assert.IsType<TemporalAgentStateRequest>(history[0]);
+        var request = Assert.IsType<AgentSessionRequest>(history[0]);
         Assert.Equal("json", request.ResponseType);
         Assert.NotNull(request.ResponseSchema);
 
@@ -380,7 +380,7 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
         // History should have 2 entries: 1 request (with 2 user messages) + 1 response.
         Assert.Equal(2, history.Count);
 
-        var request = Assert.IsType<TemporalAgentStateRequest>(history[0]);
+        var request = Assert.IsType<AgentSessionRequest>(history[0]);
         Assert.Equal(2, request.Messages.Count);
         Assert.All(request.Messages, m => Assert.Equal(ChatRole.User, m.Role));
 
@@ -410,14 +410,14 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
         Assert.Equal(4, history.Count);
 
         // Entries alternate: request, response, request, response.
-        Assert.IsType<TemporalAgentStateRequest>(history[0]);
-        Assert.IsType<TemporalAgentStateResponse>(history[1]);
-        Assert.IsType<TemporalAgentStateRequest>(history[2]);
-        Assert.IsType<TemporalAgentStateResponse>(history[3]);
+        Assert.IsType<AgentSessionRequest>(history[0]);
+        Assert.IsType<AgentSessionResponse>(history[1]);
+        Assert.IsType<AgentSessionRequest>(history[2]);
+        Assert.IsType<AgentSessionResponse>(history[3]);
 
         // Each request has a user message, each response has an assistant message.
-        var req1 = (TemporalAgentStateRequest)history[0];
-        var resp1 = (TemporalAgentStateResponse)history[1];
+        var req1 = (AgentSessionRequest)history[0];
+        var resp1 = (AgentSessionResponse)history[1];
         Assert.Equal(ChatRole.User, req1.Messages[0].Role);
         Assert.Equal(ChatRole.Assistant, resp1.Messages[0].Role);
 
@@ -458,7 +458,7 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
             var history = await handle.QueryAsync(wf => wf.GetHistory());
 
             Assert.Equal(2, history.Count); // request + response
-            var storedResponse = Assert.IsType<TemporalAgentStateResponse>(history[1]);
+            var storedResponse = Assert.IsType<AgentSessionResponse>(history[1]);
             Assert.Empty(storedResponse.Messages);
 
             _output.WriteLine("Empty agent response round-tripped without crash.");
