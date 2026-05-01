@@ -56,29 +56,31 @@ These types are defined in `Temporalio.Extensions.AI` and used by both libraries
 | `ChatMessage.AdditionalProperties` round-trip | After Layer 1, this field survives serialization through the agent history pipeline as well as the chat pipeline — both libraries delegate to `AIJsonUtilities.DefaultOptions` and pick up new MEAI fields automatically. |
 | `DurableSessionEntry` / `DurableSessionRequest` / `DurableSessionResponse` | After Layer 2, the entry layer itself is shared. Both `DurableChatWorkflow._history` and `AgentWorkflow._history` are `List<DurableSessionEntry>`. The MAF library's `AgentSessionRequest` / `AgentSessionResponse` are subclasses of the AI library's concrete types, contributing MAF-specific fields (`OrchestrationId`, `ResponseType`, `ResponseSchema`) without forking the base shape. Polymorphism is wired across the assembly boundary via a runtime `JsonTypeInfoResolver` modifier in `TemporalAgentJsonUtilities`. |
 | Per-turn `Usage` and `CorrelationId` | `DurableSessionResponse.Usage` (`Microsoft.Extensions.AI.UsageDetails`, no wrapper) and `DurableSessionEntry.CorrelationId` are queryable on both libraries' `GetHistory()` results. |
+| `DurableChatWorkflowBase<TOutput>` — workflow base class | After Layer 3, `AgentWorkflow : DurableChatWorkflowBase<AgentResponse>`. The base owns the session-loop body (turn mutex, `_isProcessing` gate, history append/reduce, continue-as-new triggering), the `[WorkflowQuery("GetHistory")]` handler, the `[WorkflowSignal("RequestShutdown")]` handler, all four HITL approval methods + their validators, and the standard `TurnCount` / `SessionCreatedAt` search-attribute upserts (gated by `EnableSearchAttributes`). The MAF subclass implements four hooks (`BuildResponseEntry`, `ExecuteTurnAsync`, `CreateContinueAsNewException`, `UpsertCustomSearchAttributes`) and adds a `[WorkflowUpdate("RunAgent")]` + `[WorkflowSignal("RunFireAndForget")]` for MAF-specific entry points. `AgentWorkflow` shrinks by ~150 lines vs. Layer 2. |
+| `DurableChatWorkflowInput` — workflow-input base record | After Layer 3, `AgentWorkflowInput : DurableChatWorkflowInput`. Shared fields (`MaxEntryCount`, `HistoryReducer`, `OriginalCreatedAt`, `EnableSearchAttributes`, `CarriedHistory`) come from the base. MAF-only fields (`AgentName`, `TaskQueue`, `CarriedStateBag`, `RetryPolicy`) live on the subclass. |
 
 ### What cannot be unified (today)
 
-After Layers 1 and 2, the message, content, and entry layers are all shared. The remaining divergence is concentrated below the entry layer — specifically, in the activity implementation and a few workflow-instance-level concerns.
+After Layers 1, 2, and 3, the message, content, entry, workflow-input, and workflow-loop layers are all shared. The remaining divergence is concentrated in two places: the activity implementation, and a small handful of subclass-only workflow members.
 
 **Activity layer:** The two libraries dispatch fundamentally different calls in their core activities.
 
 - `DurableChatActivities` calls `IChatClient.GetResponseAsync()` — stateless, returns `ChatResponse`, no session object.
 - `AgentActivities.ExecuteAgentAsync` calls `AIAgent.RunStreamingAsync()` — stateful, manages `TemporalAgentSession`, serializes `AgentSessionStateBag`, streams `AgentResponseUpdate`, and runs `AIContextProvider` hooks.
 
-These require separate activity classes. A unified base class would need to abstract over the session lifecycle, StateBag serialization, streaming vs. non-streaming response handling, and provider hooks — the result would be more complex than either class alone. The divergence here is about **session lifecycle and StateBag**, not about how messages are represented or how entries are shaped.
+These require separate activity classes. A unified activity base class would need to abstract over the session lifecycle, StateBag serialization, streaming vs. non-streaming response handling, and provider hooks — the result would be more complex than either class alone. The activity-shape divergence is about **session lifecycle and StateBag**, not about how messages are represented or how entries are shaped.
 
-**Workflow-instance layer:** `AgentWorkflow` carries several pieces of state that `DurableChatWorkflow` does not:
+**Subclass-only workflow members.** Three concerns live exclusively on `AgentWorkflow` and would need to live somewhere on a MAF subclass regardless of how much further the base evolves:
 
-- `_currentStateBag` — serialized `AgentSessionStateBag` carried forward across turns and continue-as-new boundaries (decoupling provider state from the entry-layer payload).
-- A fire-and-forget signal handler (`RunFireAndForget`) that kicks off a background task without an Update return path.
-- The `AgentName` search-attribute upsert (when `EnableSearchAttributes = true`), absent from the chat workflow because chat sessions are not named.
+- `_currentStateBag` — serialized `AgentSessionStateBag` carried forward across turns and continue-as-new boundaries (decoupling provider state from the entry-layer payload). Restored at the top of `AgentWorkflow.RunAsync`; persisted at the end of the subclass's `ExecuteTurnAsync` override; threaded through the subclass's `CreateContinueAsNewException` override.
+- The fire-and-forget signal handler (`[WorkflowSignal("RunFireAndForget")] RunAgentFireAndForgetAsync`) that kicks off a background task without an Update return path. No analog in the chat library.
+- The `AgentName` search-attribute upsert (via the new `UpsertCustomSearchAttributes` virtual hook on the base). The base's default is a no-op; `DurableChatWorkflow` does not override it because chat sessions are not named.
 
-These are MAF-specific session-lifecycle concerns. They live above the entry layer and would still need to live somewhere even if a shared workflow base existed.
+These are deliberately scoped to the subclass and are not candidates for further base-class promotion.
 
 **MAF-specific entry fields:** The `AgentSessionRequest` subclass adds `OrchestrationId`, `ResponseType`, and `ResponseSchema` to the shared `DurableSessionRequest` base. These are MAF-only because they correspond to MAF-specific concepts (sub-agent orchestration, structured-output format hints) that have no analog in the chat library today. They're a clean extension point — additive on the subclass, invisible to AI-library readers.
 
-**One option deferred to Layer 3:** A shared `DurableChatWorkflowBase<TOutput>` from which both `DurableChatWorkflow` and `AgentWorkflow` inherit the session loop, continue-as-new logic, and HITL handling. After Layer 2, both workflows have the same history shape, so the type-parameter explosion that previously made this awkward (one parameter for the entry type, one for the input, one for the output) collapses to something more tractable. The `[Workflow]` attribute has `Inherited = false`, which prevents base classes from carrying the attribute — the subclass must redeclare it — but that's a minor mechanical cost. Whether the shared loop is worth extracting is the natural next decision once Layer 2 settles in production.
+**`[Workflow]` attribute is not inheritable.** `[Workflow(Inherited = false)]` means the workflow attribute cannot be declared on a base class and inherited by a subclass. The shared base (`DurableChatWorkflowBase<TOutput>`) is therefore not itself a workflow type — only the concrete subclasses (`DurableChatWorkflow`, `AgentWorkflow`) carry `[Workflow(...)]`. Each subclass redeclares the attribute and the `[WorkflowRun]`-annotated entry-point method. This is a minor mechanical cost rather than a structural blocker; the inherited members (queries, signals, updates, validators) are picked up by the SDK's reflection scan on the concrete subclass.
 
 ---
 
@@ -210,9 +212,9 @@ These directions indicate that `AIAgent` and `IChatClient` will continue to be p
 - `Temporalio.Extensions.AI` serves `IChatClient` users who do not need named agents, routing, StateBag, or `AIContextProvider`. It is the right choice for most MEAI-native projects.
 - `Temporalio.Extensions.Agents` serves `AIAgent` users who need the full MAF session model, search attributes, routing, parallel fan-out, and `TemporalAgentContext`. It is the right choice for MAF-native projects.
 
-**Share at the type level — not the activity or workflow-instance level.**
+**Share at the type level and the workflow-loop level — but not at the activity level.**
 
-After Layers 1 and 2, the shared surface is significantly broader than it was at the start of this analysis. It now includes:
+After Layers 1 through 3, the shared surface is substantially broader than it was at the start of this analysis. It now includes:
 
 - HITL types — `DurableApprovalRequest`, `DurableApprovalDecision`, `DurableApprovalMixin`.
 - The data converter and its DI auto-wiring — `DurableAIDataConverter`, `DurableAIClientOptionsConfigurator`, `DurableAIWorkerClientConfigurator`.
@@ -220,14 +222,26 @@ After Layers 1 and 2, the shared surface is significantly broader than it was at
 - Message and content types — `Microsoft.Extensions.AI.ChatMessage` and the full `AIContent` hierarchy (Layer 1).
 - The entry layer — `DurableSessionEntry`, `DurableSessionRequest`, `DurableSessionResponse`, with MAF subclasses `AgentSessionRequest` / `AgentSessionResponse` extending the shared base (Layer 2). Both libraries' workflow history is now `List<DurableSessionEntry>`, with polymorphism wired across the assembly boundary via a runtime `JsonTypeInfoResolver` modifier.
 - Per-turn observability fields — `CorrelationId` and `Usage` (`Microsoft.Extensions.AI.UsageDetails`, used directly with no wrapper) on every response entry, queryable via `GetHistory()` on either library's session client.
+- The workflow-loop body and the workflow-input record (Layer 3). `AgentWorkflow : DurableChatWorkflowBase<AgentResponse>` and `AgentWorkflowInput : DurableChatWorkflowInput`. The session-loop body — turn mutex, history append/reduce, continue-as-new triggering, monotonic turn-count derivation, the `[WorkflowQuery("GetHistory")]` handler, the `[WorkflowSignal("RequestShutdown")]` handler, and all four HITL approval methods + their validators — lives once on the base. The MAF subclass implements four hooks (`BuildResponseEntry`, `ExecuteTurnAsync`, `CreateContinueAsNewException`, `UpsertCustomSearchAttributes`) and contributes a `[WorkflowUpdate("RunAgent")]` plus a `[WorkflowSignal("RunFireAndForget")]` for MAF-specific entry points. Public API surface for both libraries is unchanged from Layer 2.
 
-What remains divergent: the activity implementations themselves (session lifecycle, StateBag serialization, streaming, `AIContextProvider` hooks) and a handful of workflow-instance concerns (StateBag carry-forward, fire-and-forget signal, `AgentName` upsert). The argument for two libraries today is the activity-layer fork plus those MAF-specific session-lifecycle pieces — not the type system, which has converged substantially.
+What remains divergent after Layer 3:
+
+- **The activity implementations themselves.** `DurableChatActivities` and `AgentActivities` have fundamentally different shapes — stateless `IChatClient.GetResponseAsync` vs. stateful `AIAgent.RunStreamingAsync` with session lifecycle, StateBag serialization, streaming, and `AIContextProvider` hooks. The subclass owns activity-input construction in its `ExecuteTurnAsync` override, which is the right seam: the activity payload (`DurableChatInput` vs. `ExecuteAgentInput`) reflects the activity shape.
+- **Subclass-only workflow members on `AgentWorkflow`.** The `_currentStateBag` carry-forward, the fire-and-forget signal handler, and the `AgentName` search-attribute upsert. These are intentionally scoped to the subclass.
+
+The argument for two libraries today is the activity-layer fork plus those subclass-only workflow members — not the type system, the workflow-loop body, or the workflow-input shape, all of which have converged.
 
 **Compose MEAI features into MAF agents via `clientFactory` and DI — no deeper coupling required or recommended.**
 
 A plain `IChatReducer` in `clientFactory` gives in-pipeline LLM-context reduction. An `IEmbeddingGenerator` injected into a tool class gives embeddings. Both patterns work without `AddDurableAI()`, without `DurableChatWorkflow`, and without any new abstractions. (Workflow-level history reduction is now the entry-shaped `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` on `HistoryReducer`, symmetric across both libraries.)
 
-**Forward-looking note (Layer 3).** With Layers 1 and 2 complete, the natural next decision is whether to share the workflow base class itself — `AgentWorkflow : DurableChatWorkflowBase<...>`. The entry-layer convergence makes this materially more tractable than it was previously. The open questions are around StateBag carry-forward, the fire-and-forget signal, and the `AgentName` search-attribute upsert — concerns that would need to live somewhere on the MAF subclass even if the session loop / continue-as-new / HITL plumbing moved up to a shared base. The decision is deferred to a separate plan; this document does not commit to it.
+**Forward-looking note (post-Layer-3).** Layer 3 collapsed the workflow-loop fork point. The remaining seams worth considering, in roughly increasing order of difficulty:
+
+- **Workflow-update payload type unification.** `DurableChatWorkflow` accepts `DurableChatInput` from its update; `AgentWorkflow` accepts `RunRequest`. These shapes diverge intentionally (`RunRequest` carries `OrchestrationId`, `ResponseFormat`, etc.), but a shared base or a sealed-hierarchy approach could reduce duplication on the request side. Modest payoff; modest risk.
+- **Granular tool dispatch in the Agents library.** The MEAI library already supports per-tool durability via `AddDurableTools()` (no `UseFunctionInvocation`); the Agents library does not. The blocker is `AIContextProvider.InvokingAsync` semantics under a workflow-managed loop, not the workflow loop itself. Different motivation, different design surface — defer until a real production use case surfaces.
+- **A shared activity base class.** Hardest of the three. `DurableChatActivities.GetResponseAsync` and `AgentActivities.ExecuteAgentAsync` have very different shapes (the latter manages session lifecycle, StateBag, streaming, `AIContextProvider`). Unifying them would require abstracting over significantly more behavior than the workflow loops did. Possible in principle; not obviously a win.
+
+This document does not commit to any of the above. They are listed for completeness; the natural pause point after Layer 3 is to let the new shared base settle in production before extracting more.
 
 ---
 

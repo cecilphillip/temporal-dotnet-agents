@@ -90,6 +90,47 @@ The session effectively *is* the workflow. Creating a session doesn't start the 
 
 ## The Agent Loop Inside AgentWorkflow
 
+### Inheritance: shared session loop, MAF-specific overrides
+
+`AgentWorkflow` inherits from `DurableChatWorkflowBase<AgentResponse>` (declared in
+`Temporalio.Extensions.AI`). The base class owns the session-loop body — the turn
+mutex, continue-as-new triggering, history reduction, the `[WorkflowQuery("GetHistory")]`
+handler, the `[WorkflowSignal("RequestShutdown")]` handler, and all four HITL
+approval methods (`RequestApproval`, `SubmitApproval`, `GetPendingApproval`, plus
+the `[WorkflowUpdateValidator]` for `SubmitApproval`). These are inherited verbatim;
+the MAF library no longer carries its own copies.
+
+The shared shape:
+
+```
+DurableChatWorkflowBase<TOutput>           ← in Temporalio.Extensions.AI
+    ├─ _history: List<DurableSessionEntry> (private)
+    ├─ session-loop body (turn mutex, CAN trigger, history reducer)
+    ├─ [WorkflowQuery("GetHistory")]
+    ├─ [WorkflowSignal("RequestShutdown")]
+    ├─ [WorkflowUpdate("RequestApproval" | "SubmitApproval")] + validators
+    ├─ [WorkflowQuery("GetPendingApproval")]
+    ├─ protected abstract BuildResponseEntry(...)         ← MAF override below
+    ├─ protected abstract ExecuteTurnAsync(...)           ← MAF override below
+    ├─ protected abstract CreateContinueAsNewException(...) ← MAF override below
+    └─ protected virtual UpsertCustomSearchAttributes()   ← MAF override below
+
+AgentWorkflow : DurableChatWorkflowBase<AgentResponse>     ← in Temporalio.Extensions.Agents
+    ├─ _currentStateBag: JsonElement?  (MAF-specific)
+    ├─ _input: AgentWorkflowInput?     (MAF-specific)
+    ├─ [WorkflowUpdate("RunAgent")] + [WorkflowUpdateValidator]
+    ├─ [WorkflowSignal("RunFireAndForget")]
+    ├─ override BuildResponseEntry → AgentSessionResponse.FromAgentResponse(...)
+    ├─ override ExecuteTurnAsync   → builds ExecuteAgentInput, dispatches AgentActivities
+    ├─ override CreateContinueAsNewException → carries _currentStateBag forward
+    └─ override UpsertCustomSearchAttributes → upserts AgentName
+```
+
+`AgentWorkflowInput` itself inherits from `DurableChatWorkflowInput`, so the
+shared fields (`MaxEntryCount`, `HistoryReducer`, `EnableSearchAttributes`, etc.)
+come from the base, while MAF-only fields (`AgentName`, `TaskQueue`,
+`CarriedStateBag`, `RetryPolicy`) live on the subclass.
+
 ### Lifecycle Overview
 
 `AgentWorkflow` is the durable backbone of every agent session. It is a long-lived Temporal workflow that:
@@ -101,32 +142,51 @@ The session effectively *is* the workflow. Creating a session doesn't start the 
 5. **Continues-as-new** when history grows too large
 6. **Shuts down** when a Shutdown signal arrives or the TTL expires
 
+Steps 2, 4, 5, and 6 are implemented by the base class. Step 3 is the
+subclass's `ExecuteTurnAsync` override (which dispatches `AgentActivities`
+rather than `DurableChatActivities`).
+
 ### The Main Run Loop
+
+`AgentWorkflow.RunAsync` is a thin shim that wires up the MAF-specific
+state and then delegates to the base:
 
 ```csharp
 [WorkflowRun]
-public async Task RunAsync(AgentWorkflowInput input)
+public Task RunAsync(AgentWorkflowInput input)
 {
     _input = input;
-    _history.AddRange(input.CarriedHistory);      // Restore history from continue-as-new
-
-    TimeSpan ttl = input.TimeToLive ?? TimeSpan.FromDays(14);
-
-    bool conditionMet = await Workflow.WaitConditionAsync(
-        () => _shutdownRequested || (!_isProcessing && Workflow.ContinueAsNewSuggested),
-        timeout: ttl);
-
-    if (!conditionMet)
-        // TTL expired — workflow completes naturally
-    else if (Workflow.ContinueAsNewSuggested && !_shutdownRequested)
-        // History too large — continue-as-new with carried history
-    // else: shutdown was requested — workflow completes
+    _currentStateBag = input.CarriedStateBag;   // MAF-only: restore StateBag
+    return base.RunAsync(input);                // Base owns the loop
 }
+```
+
+Inside the base, the loop looks like this (paraphrased — see
+`DurableChatWorkflowBase<TOutput>` for the canonical implementation):
+
+```csharp
+// In DurableChatWorkflowBase<TOutput>.RunAsync(DurableChatWorkflowInput input):
+_history.AddRange(input.CarriedHistory);            // Restore from CAN
+_turnCount = InitializeTurnCount(input.CarriedHistory); // Re-derive from history
+
+if (input.EnableSearchAttributes)
+{
+    Workflow.UpsertTypedSearchAttributes(/* TurnCount, SessionCreatedAt */);
+    UpsertCustomSearchAttributes();                 // Subclass hook (MAF: AgentName)
+}
+
+TimeSpan ttl = input.TimeToLive ?? TimeSpan.FromDays(14);
+bool conditionMet = await Workflow.WaitConditionAsync(
+    () => _shutdownRequested || (!_isProcessing && Workflow.ContinueAsNewSuggested),
+    timeout: ttl);
+
+if (Workflow.ContinueAsNewSuggested && !_shutdownRequested)
+    throw CreateContinueAsNewException(input);      // Subclass hook
 ```
 
 This is **not** a tight polling loop. `WaitConditionAsync` is an event-driven primitive that parks the workflow until one of these conditions becomes true:
 
-- `_shutdownRequested` — set by the `Shutdown` signal
+- `_shutdownRequested` — set by the `RequestShutdown` signal (handler is on the base)
 - `Workflow.ContinueAsNewSuggested` — set by Temporal when history approaches size limits
 - The TTL timeout elapses
 
@@ -134,26 +194,47 @@ While the workflow is parked, it is **not consuming compute resources**. It sits
 
 ### The Processing Gate: `_isProcessing`
 
-The workflow serializes concurrent requests with a boolean gate:
+The base serializes concurrent requests with a boolean gate. The subclass's
+`[WorkflowUpdate("RunAgent")]` handler delegates the actual turn execution
+to the base's `RunTurnAsync` helper, which acquires the gate, appends the
+request entry, calls `ExecuteTurnAsync` (the subclass override), appends
+the response entry, and releases the gate:
 
 ```csharp
-private bool _isProcessing;
-
-[WorkflowUpdate("Run")]
+// In AgentWorkflow:
+[WorkflowUpdate("RunAgent")]
 public async Task<AgentResponse> RunAgentAsync(RunRequest request)
 {
-    await Workflow.WaitConditionAsync(() => !_isProcessing);   // Wait if busy
-    _isProcessing = true;
+    Workflow.Logger.LogWorkflowUpdateReceived(_input!.AgentName, /* ... */);
 
-    try
-    {
-        // ... execute activity ...
-        return response;
-    }
-    finally
-    {
-        _isProcessing = false;     // Release the gate
-    }
+    var requestEntry = AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow);
+    var (output, _) = await RunTurnAsync(requestEntry, chatOptions: null);
+
+    Workflow.Logger.LogWorkflowUpdateCompleted(_input!.AgentName, /* ... */);
+    return output;
+}
+```
+
+`RunTurnAsync` (on the base) wraps the body in the mutex:
+
+```csharp
+// In DurableChatWorkflowBase<TOutput>.RunTurnAsync(...):
+await Workflow.WaitConditionAsync(() => !_isProcessing);
+_isProcessing = true;
+try
+{
+    _history.Add(requestEntry);
+    _turnCount++;
+
+    var output = await ExecuteTurnAsync(activityOptions, requestEntry, chatOptions);
+    var responseEntry = BuildResponseEntry(requestEntry.CorrelationId, output, Workflow.UtcNow);
+
+    _history.Add(responseEntry);
+    return (output, responseEntry);
+}
+finally
+{
+    _isProcessing = false;
 }
 ```
 
@@ -162,6 +243,28 @@ If two Updates arrive simultaneously, the second one **blocks** on `WaitConditio
 - Conversation history is appended in order
 - The activity receives a consistent snapshot of prior messages
 - No race conditions on `_history`
+
+### MAF-specific subclass hooks
+
+The four overrides on `AgentWorkflow`:
+
+| Hook | Purpose |
+|---|---|
+| `BuildResponseEntry(correlationId, AgentResponse output, createdAt)` | Returns `AgentSessionResponse.FromAgentResponse(...)` so the entry on the wire is the MAF subclass with `OrchestrationId`/`ResponseType`/`ResponseSchema` discrimination preserved. |
+| `ExecuteTurnAsync(activityOptions, requestEntry, chatOptions)` | Constructs `ExecuteAgentInput` from the request entry, the in-memory `_history`, the carried `_currentStateBag`, and `_input.AgentName`. Dispatches `AgentActivities.ExecuteAgentAsync` (not `DurableChatActivities`). Persists the updated StateBag back into `_currentStateBag` after the activity returns. |
+| `CreateContinueAsNewException(input)` | Casts `input` to `AgentWorkflowInput` (safe — `AgentWorkflowInput : DurableChatWorkflowInput`) and constructs a new `AgentWorkflowInput` carrying `_currentStateBag` forward as `CarriedStateBag` so the StateBag survives continue-as-new boundaries. |
+| `UpsertCustomSearchAttributes()` | Upserts the `AgentName` typed search attribute. Called by the base after the standard `TurnCount` / `SessionCreatedAt` upserts. Default in the base is a no-op; `DurableChatWorkflow` (the MEAI sibling) does not override it because chat sessions are not named. |
+
+The fire-and-forget path is unique to MAF and stays on the subclass:
+
+```csharp
+[WorkflowSignal("RunFireAndForget")]
+public Task RunAgentFireAndForgetAsync(RunRequest request) { /* ... */ }
+```
+
+Signals do not return a value to the caller, so this handler kicks off a
+detached task that follows the same pattern as `RunAgentAsync` but with no
+return path. It uses the same `RunTurnAsync` helper internally.
 
 ### Conversation History as Workflow State
 
@@ -216,12 +319,14 @@ foreach (var entry in input.ConversationHistory)
 
 Temporal workflows have a practical limit on event history size (typically ~50K events). When the history grows large, `Workflow.ContinueAsNewSuggested` becomes true. The workflow then:
 
-1. Snapshots `_history` into a list
-2. Throws `Workflow.CreateContinueAsNewException(...)` with the history as input
-3. Temporal starts a **new run** of the same workflow ID
-4. The new run restores `_history` from `input.CarriedHistory`
+1. Snapshots `_history` into a list (base does this)
+2. Calls `CreateContinueAsNewException(input)` (subclass override produces the typed exception)
+3. The MAF override builds a fresh `AgentWorkflowInput` carrying `_history` as `CarriedHistory` **and** `_currentStateBag` as `CarriedStateBag`, then returns `Workflow.CreateContinueAsNewException<AgentWorkflow>(...)`
+4. Temporal starts a **new run** of the same workflow ID
+5. The new run restores `_history` from `input.CarriedHistory` (in the base) and `_currentStateBag` from `input.CarriedStateBag` (in `AgentWorkflow.RunAsync`)
+6. The base's `InitializeTurnCount` re-derives `_turnCount` from the carried history (counting `DurableSessionResponse` entries), so the `TurnCount` search attribute monotonically grows across CAN boundaries
 
-From the caller's perspective, nothing changes — the workflow ID is the same, and the conversation continues seamlessly.
+From the caller's perspective, nothing changes — the workflow ID is the same, and the conversation continues seamlessly. The StateBag carry-forward is the MAF-specific piece; everything else is shared with `DurableChatWorkflow`.
 
 ---
 
@@ -270,13 +375,33 @@ Here is the complete path a message takes from an external caller to the LLM and
             │
             ↓
 ┌──────────────────────────────────────────────────────────────┐
-│   AgentWorkflow  [WorkflowUpdate("Run")]                     │
+│   AgentWorkflow.RunAgentAsync                                │
+│   [WorkflowUpdate("RunAgent")]                               │
 │                                                              │
-│   6. await WaitConditionAsync(() => !_isProcessing)          │  ← Serialize
-│   7. _isProcessing = true                                    │
-│   8. _history.Add(AgentSessionRequest.FromRunRequest(...))   │  ← Record request
+│   6. requestEntry =                                          │
+│        AgentSessionRequest.FromRunRequest(request, ...)      │
+│   7. await base.RunTurnAsync(requestEntry, chatOptions: null)│
+│        Inside the inherited base helper:                     │
+│          await WaitConditionAsync(() => !_isProcessing)      │  ← Serialize
+│          _isProcessing = true                                │
+│          _history.Add(requestEntry)                          │  ← Record request
+│          _turnCount++                                        │
+│          output = await ExecuteTurnAsync(...) ───────────────┼─┐
+│                                                              │ │
+└──────────────────────────────────────────────────────────────┘ │
+                                                                 │
+            (subclass override, in AgentWorkflow)                │
+            ↓ ───────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│   AgentWorkflow.ExecuteTurnAsync (override)                  │
 │                                                              │
-│   9. Workflow.ExecuteActivityAsync(                           │
+│   8. activityInput = new ExecuteAgentInput(                  │
+│        agentName:          _input.AgentName,                 │
+│        request:            requestEntry,                     │
+│        history:            _history.ToList(),                │
+│        serializedStateBag: _currentStateBag)                 │
+│                                                              │
+│   9. Workflow.ExecuteActivityAsync(                          │
 │        (AgentActivities a) => a.ExecuteAgentAsync(input))    │
 │                                                              │
 └───────────┬──────────────────────────────────────────────────┘
@@ -305,11 +430,19 @@ Here is the complete path a message takes from an external caller to the LLM and
             │
             ↓
 ┌──────────────────────────────────────────────────────────────┐
-│   AgentWorkflow (continued)                                  │
+│   AgentWorkflow.ExecuteTurnAsync (continued)                 │
 │                                                              │
-│   19. _history.Add(AgentSessionResponse.FromAgentResponse(...)) ← Record response
-│   20. _isProcessing = false                                  │  ← Release gate
-│   21. return response                                        │  ← Update returns
+│   17. _currentStateBag = result.SerializedStateBag           │  ← MAF: persist
+│   18. return result.Response  (AgentResponse)                │
+│                                                              │
+│   Back in the base's RunTurnAsync:                           │
+│   19. responseEntry =                                        │
+│        BuildResponseEntry(corrId, output, Workflow.UtcNow)   │
+│        ├─ Subclass override returns                          │
+│        │   AgentSessionResponse.FromAgentResponse(...)       │
+│   20. _history.Add(responseEntry)                            │  ← Record response
+│   21. _isProcessing = false                                  │  ← Release gate
+│   22. return response                                        │  ← Update returns
 └───────────┬──────────────────────────────────────────────────┘
             │
             ↓

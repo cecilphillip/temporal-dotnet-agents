@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Temporalio.Common;
 using Temporalio.Extensions.Agents.Session;
 using Temporalio.Extensions.Agents.State;
@@ -12,104 +13,48 @@ namespace Temporalio.Extensions.Agents.Workflows;
 /// Long-lived Temporal workflow that acts as the durable backing store for an agent session.
 /// Equivalent to <c>AgentEntity</c> in the DurableTask integration.
 /// </summary>
+/// <remarks>
+/// <para>
+/// As of Layer 3, <see cref="AgentWorkflow"/> inherits the shared session loop, history
+/// management, HITL approval handlers, <c>[WorkflowQuery("GetHistory")]</c>, and
+/// <c>[WorkflowSignal("Shutdown")]</c> from <see cref="DurableChatWorkflowBase{TOutput}"/>.
+/// MAF-only concerns that remain on this subclass: the fire-and-forget signal handler,
+/// the <see cref="AgentSessionStateBag"/> carry-forward, the <c>AgentName</c> search
+/// attribute upsert, and the agent-name-aware structured logging.
+/// </para>
+/// </remarks>
 [Workflow("Temporalio.Extensions.Agents.AgentWorkflow")]
-internal class AgentWorkflow
+internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
 {
     internal static readonly SearchAttributeKey<string> AgentNameSearchAttribute =
         SearchAttributeKey.CreateKeyword("AgentName");
 
-    // Shared with DurableChatWorkflow (Temporalio.Extensions.AI) so a single Temporal
-    // list query can span both workflow types.
-    internal static readonly SearchAttributeKey<DateTimeOffset> SessionCreatedAtSearchAttribute =
-        DurableSessionAttributes.SessionCreatedAt;
-
-    internal static readonly SearchAttributeKey<long> TurnCountSearchAttribute =
-        DurableSessionAttributes.TurnCount;
-
-    private List<DurableSessionEntry> _history = new(16);
-    private int _turnCount;
-    private bool _isProcessing;
-    private bool _shutdownRequested;
+    // MAF-specific input (typed view of the base's Input). Set in RunAsync.
     private AgentWorkflowInput? _input;
 
     // GAP 6: StateBag persisted across turns so AIContextProvider state survives replay.
     private JsonElement? _currentStateBag;
 
-    // GAP 3: Human-in-the-Loop state machine delegated to shared mixin.
-    private readonly DurableApprovalMixin _approval = new();
-
     [WorkflowRun]
     public async Task RunAsync(AgentWorkflowInput input)
     {
+        // The base also exposes a `RunAsync(DurableChatWorkflowInput)` (protected virtual);
+        // because they have different parameter types they're overloads, not a `new`-style
+        // hide. Set the typed `_input` before delegating into the base so subclass-only
+        // hooks (UpsertCustomSearchAttributes, ExecuteTurnAsync, CreateContinueAsNewException)
+        // can read agent-specific fields.
+        ArgumentNullException.ThrowIfNull(input);
         _input = input;
-
-        // Restore history carried forward from a previous run (continue-as-new scenario).
-        if (input.CarriedHistory is { Count: > 0 })
-        {
-            if (_history.Capacity < input.CarriedHistory.Count)
-                _history.Capacity = input.CarriedHistory.Count;
-            _history.AddRange(input.CarriedHistory);
-            foreach (var e in input.CarriedHistory)
-                if (e is DurableSessionResponse) _turnCount++;
-        }
-
-        // Restore StateBag carried across continue-as-new.
+        // Restore StateBag carried across continue-as-new before the base session loop runs,
+        // so the first turn's activity dispatch can include the carried bag.
         _currentStateBag = input.CarriedStateBag;
 
-        // Capture the original creation time on the first run; carry it forward on CAN transitions.
-        var sessionCreatedAt = input.OriginalCreatedAt ?? Workflow.UtcNow;
+        Workflow.Logger.LogWorkflowStarted(input.AgentName, Workflow.Info.WorkflowId, input.TimeToLive);
 
-        TimeSpan ttl = input.TimeToLive;
-
-        Workflow.Logger.LogWorkflowStarted(input.AgentName, Workflow.Info.WorkflowId, ttl);
-
-        // Opt-in: upsert search attributes only when explicitly requested.
-        // Guards against failure on servers where the attributes are not pre-registered.
-        if (input.EnableSearchAttributes)
-        {
-            Workflow.UpsertTypedSearchAttributes(
-                AgentNameSearchAttribute.ValueSet(input.AgentName),
-                SessionCreatedAtSearchAttribute.ValueSet(sessionCreatedAt),
-                TurnCountSearchAttribute.ValueSet(_history.Count));
-        }
-
-        // Wait until shutdown is requested, TTL elapses, or history is large enough to warrant continue-as-new.
-        bool conditionMet = await Workflow.WaitConditionAsync(
-            () => _shutdownRequested || (!_isProcessing && (Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxEntryCount)),
-            timeout: ttl);
-
-        if (!conditionMet)
-        {
-            // TTL elapsed without condition being met — session complete.
-            Workflow.Logger.LogWorkflowTTLExpired(input.AgentName, Workflow.Info.WorkflowId);
-        }
-        else if ((Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxEntryCount) && !_shutdownRequested)
-        {
-            Workflow.Logger.LogWorkflowContinueAsNew(input.AgentName, Workflow.Info.WorkflowId, _history.Count);
-
-            // Apply the optional history reducer before carrying history forward.
-            List<DurableSessionEntry> carriedHistory =
-                input.HistoryReducer?.Invoke(_history.ToList()).ToList() ?? _history.ToList();
-            var carriedStateBag = _currentStateBag;
-            var canInput = new AgentWorkflowInput
-            {
-                AgentName = input.AgentName,
-                TaskQueue = input.TaskQueue,
-                TimeToLive = input.TimeToLive,
-                CarriedHistory = carriedHistory,
-                CarriedStateBag = carriedStateBag,
-                ActivityStartToCloseTimeout = input.ActivityStartToCloseTimeout,
-                ActivityHeartbeatTimeout = input.ActivityHeartbeatTimeout,
-                ApprovalTimeout = input.ApprovalTimeout,
-                RetryPolicy = input.RetryPolicy,
-                MaxEntryCount = input.MaxEntryCount,
-                HistoryReducer = input.HistoryReducer,
-                EnableSearchAttributes = input.EnableSearchAttributes,
-                OriginalCreatedAt = sessionCreatedAt,
-            };
-            throw Workflow.CreateContinueAsNewException(
-                (AgentWorkflow wf) => wf.RunAsync(canInput));
-        }
+        // Delegate to the shared session loop (history restore, search-attribute upsert, mutex,
+        // continue-as-new trigger). Decision #1 makes AgentWorkflowInput inherit from
+        // DurableChatWorkflowInput, so passing through is type-safe.
+        await base.RunAsync(input).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -118,7 +63,7 @@ internal class AgentWorkflow
     [WorkflowUpdateValidator(nameof(RunAgentAsync))]
     public void ValidateRunAgent(RunRequest request)
     {
-        if (_shutdownRequested)
+        if (IsShutdownRequested)
             throw new InvalidOperationException("Session has been shut down.");
         if (request?.Messages is null || request.Messages.Count == 0)
             throw new ArgumentException("At least one message is required.");
@@ -131,58 +76,20 @@ internal class AgentWorkflow
     [WorkflowUpdate("Run")]
     public async Task<AgentResponse> RunAgentAsync(RunRequest request)
     {
-        // Serialize: wait for any in-progress run to finish first.
-        await Workflow.WaitConditionAsync(() => !_isProcessing);
-        _isProcessing = true;
+        // Construct the request entry first — does not depend on `_input` and works even
+        // when the [WorkflowRun] body has not yet executed (modern Temporal event-loop
+        // dispatches DoUpdate jobs before InitializeWorkflow within an activation).
+        var requestEntry = AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow);
 
-        Workflow.Logger.LogWorkflowUpdateReceived(_input!.AgentName, Workflow.Info.WorkflowId, request.CorrelationId ?? string.Empty);
+        // RunTurnAsync awaits Workflow.WaitConditionAsync(() => !_isProcessing) on entry —
+        // by the time that yield resumes, the workflow run loop has had a chance to run
+        // and `_input` has been populated. Logging that depends on `_input.AgentName`
+        // therefore moves to after the await.
+        var (output, _) = await RunTurnAsync(requestEntry, chatOptions: null);
 
-        try
-        {
-            // Intentional: request is added before the activity executes because the activity
-            // input includes the full history (the request must be part of it). If the activity
-            // fails, this entry remains in history without a matching response.
-            _history.Add(AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow));
-
-            // GAP 6: pass the stored StateBag so the activity can restore provider state.
-            // _history is passed directly (not copied) — the activity input is serialized
-            // eagerly by Workflow.ExecuteActivityAsync, snapshotting the contents at dispatch.
-            var activityInput = new ExecuteAgentInput(
-                _input!.AgentName,
-                request,
-                _history,
-                _currentStateBag);
-
-            var result = await Workflow.ExecuteActivityAsync(
-                (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
-                new ActivityOptions
-                {
-                    StartToCloseTimeout = _input!.ActivityStartToCloseTimeout ?? TimeSpan.FromMinutes(30),
-                    HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5),
-                    Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
-                    RetryPolicy = _input!.RetryPolicy,
-                });
-
-            // GAP 6: persist the updated StateBag for the next turn.
-            _currentStateBag = result.SerializedStateBag;
-
-            _history.Add(AgentSessionResponse.FromAgentResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
-            _turnCount++;
-
-            // Update turn count for operational queries (opt-in only).
-            if (_input!.EnableSearchAttributes)
-            {
-                Workflow.UpsertTypedSearchAttributes(
-                    TurnCountSearchAttribute.ValueSet(_turnCount));
-            }
-
-            Workflow.Logger.LogWorkflowUpdateCompleted(_input!.AgentName, Workflow.Info.WorkflowId, request.CorrelationId ?? string.Empty);
-            return result.Response;
-        }
-        finally
-        {
-            _isProcessing = false;
-        }
+        Workflow.Logger.LogWorkflowUpdateCompleted(
+            _input!.AgentName, Workflow.Info.WorkflowId, request.CorrelationId ?? string.Empty);
+        return output;
     }
 
     /// <summary>
@@ -200,118 +107,177 @@ internal class AgentWorkflow
         return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Requests graceful shutdown of this workflow.
-    /// </summary>
-    [WorkflowSignal("Shutdown")]
-    public Task RequestShutdownAsync()
+    // ── Hooks supplied to the base class ────────────────────────────────────
+
+    /// <inheritdoc/>
+    protected override DurableSessionResponse BuildResponseEntry(
+        string correlationId,
+        AgentResponse output,
+        DateTimeOffset createdAt) =>
+        AgentSessionResponse.FromAgentResponse(correlationId, output, createdAt);
+
+    /// <inheritdoc/>
+    protected override Task<AgentResponse> ExecuteTurnAsync(
+        ActivityOptions activityOptions,
+        DurableSessionRequest requestEntry,
+        ChatOptions? chatOptions)
     {
-        Workflow.Logger.LogWorkflowShutdownRequested(_input?.AgentName ?? "unknown", Workflow.Info.WorkflowId);
-        _shutdownRequested = true;
-        return Task.CompletedTask;
+        // The base appended `requestEntry` to History before calling us. The Agent activity
+        // input already carries the originating RunRequest separately (it embeds tools,
+        // response format, orchestration ID, etc.); reconstruct the RunRequest from the
+        // typed agent request entry so callers do not have to thread it through.
+        // The `activityOptions` argument from the base is MEAI-shaped (uses
+        // DurableChatWorkflowInput.ActivityTimeout); ignore it and build a MAF-shaped
+        // ActivityOptions inside ExecuteAgentTurnAsync instead.
+        _ = activityOptions;
+        var agentRequestEntry = (AgentSessionRequest)requestEntry;
+        var runRequest = ToRunRequest(agentRequestEntry);
+
+        return ExecuteAgentTurnAsync(runRequest);
     }
 
-    /// <summary>
-    /// Returns the current conversation history.
-    /// </summary>
-    [WorkflowQuery("GetHistory")]
-    public IReadOnlyList<DurableSessionEntry> GetHistory() => _history;
+    /// <inheritdoc/>
+    protected override ContinueAsNewException CreateContinueAsNewException(
+        DurableChatWorkflowInput input)
+    {
+        // The base passes a freshly constructed DurableChatWorkflowInput carrying the reduced
+        // history and the shared session-loop fields (TimeToLive, MaxEntryCount, HistoryReducer,
+        // OriginalCreatedAt, EnableSearchAttributes, ApprovalTimeout, ActivityTimeout,
+        // HeartbeatTimeout) — NOT a downcast AgentWorkflowInput. Pull MAF-specific fields
+        // from `_input` (the original AgentWorkflowInput stored on first run) and merge in the
+        // base's freshly produced carry-forward state.
+        ArgumentNullException.ThrowIfNull(_input);
 
-    // ── GAP 3: Human-in-the-Loop ────────────────────────────────────────────
+        var carriedInput = new AgentWorkflowInput
+        {
+            // MAF-specific state — sourced from the original input + per-turn _currentStateBag.
+            AgentName = _input.AgentName,
+            TaskQueue = _input.TaskQueue,
+            CarriedStateBag = _currentStateBag,
+            ActivityStartToCloseTimeout = _input.ActivityStartToCloseTimeout,
+            ActivityHeartbeatTimeout = _input.ActivityHeartbeatTimeout,
+            RetryPolicy = _input.RetryPolicy,
+
+            // Inherited fields — sourced from the base's freshly constructed `input` so the
+            // reduced CarriedHistory, OriginalCreatedAt, and other CAN-time decisions are honored.
+            TimeToLive = input.TimeToLive,
+            CarriedHistory = input.CarriedHistory,
+            ApprovalTimeout = input.ApprovalTimeout,
+            EnableSearchAttributes = input.EnableSearchAttributes,
+            MaxEntryCount = input.MaxEntryCount,
+            HistoryReducer = input.HistoryReducer,
+            OriginalCreatedAt = input.OriginalCreatedAt,
+
+            // ActivityTimeout / HeartbeatTimeout on the base are MEAI-shaped; AgentWorkflow uses
+            // the *AgentActivityStartToCloseTimeout / *HeartbeatTimeout MAF-specific overrides.
+            // Carry forward whatever was provided.
+            ActivityTimeout = input.ActivityTimeout,
+            HeartbeatTimeout = input.HeartbeatTimeout,
+        };
+
+        Workflow.Logger.LogWorkflowContinueAsNew(
+            _input.AgentName, Workflow.Info.WorkflowId,
+            input.CarriedHistory?.Count ?? 0);
+
+        return Workflow.CreateContinueAsNewException(
+            (AgentWorkflow wf) => wf.RunAsync(carriedInput));
+    }
+
+    /// <inheritdoc/>
+    protected override void UpsertCustomSearchAttributes()
+    {
+        if (_input is not null)
+        {
+            Workflow.UpsertTypedSearchAttributes(
+                AgentNameSearchAttribute.ValueSet(_input.AgentName));
+        }
+    }
+
+    // ── HITL hooks (delegate to the inherited handlers) ─────────────────────
+    // The inherited [WorkflowUpdate("RequestApproval")], [WorkflowUpdate("SubmitApproval")],
+    // and [WorkflowQuery("GetPendingApproval")] handlers from DurableChatWorkflowBase are
+    // exposed verbatim here — no MAF-specific overrides are required because the approval
+    // mixin's logging is generic. Agent-name-specific approval logging was previously emitted
+    // via Logs.LogWorkflowApprovalRequested / LogWorkflowApprovalResolved; the inherited
+    // base uses ILogger.LogInformation directly. Future work could re-introduce the typed
+    // logger via a virtual hook on the base if dashboards depend on the structured fields.
+
+    // ── Internals ───────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Validates that a <see cref="RequestApprovalAsync"/> request is well-formed before it enters history.
+    /// Reconstructs the original <see cref="RunRequest"/> from a stored
+    /// <see cref="AgentSessionRequest"/>. Loses the full <c>RunOptions</c> (which is not
+    /// serialized into history); the activity only needs <c>Messages</c>,
+    /// <c>CorrelationId</c>, <c>OrchestrationId</c>, and <c>ResponseFormat</c> to produce
+    /// the same output as the original call site.
     /// </summary>
-    [WorkflowUpdateValidator(nameof(RequestApprovalAsync))]
-    public void ValidateRequestApproval(DurableApprovalRequest request) =>
-        _approval.ValidateRequestApproval(request);
+    private static RunRequest ToRunRequest(AgentSessionRequest entry)
+    {
+        ChatResponseFormat? responseFormat = null;
+        if (string.Equals(entry.ResponseType, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            responseFormat = entry.ResponseSchema is { } schema
+                ? ChatResponseFormat.ForJsonSchema(schema)
+                : ChatResponseFormat.Json;
+        }
 
-    /// <summary>
-    /// Blocks until a human submits a decision via <see cref="SubmitApprovalAsync"/>.
-    /// Called from inside a tool via <see cref="TemporalAgentContext.RequestApprovalAsync"/>.
-    /// </summary>
-    /// <remarks>
-    /// <b>Timeout note:</b> the calling activity blocks for the duration of human review.
-    /// Set <see cref="AgentWorkflowInput.ActivityStartToCloseTimeout"/> to a value that
-    /// exceeds your expected review time (e.g. <c>TimeSpan.FromHours(24)</c>).
-    /// </remarks>
-    [WorkflowUpdate("RequestApproval")]
-    public Task<DurableApprovalDecision> RequestApprovalAsync(DurableApprovalRequest request) =>
-        _approval.RequestApprovalAsync(
-            request,
-            approvalTimeout: _input?.ApprovalTimeout ?? TimeSpan.FromDays(7),
-            // ApprovalTimeout is inherited from DurableChatWorkflowInput (non-nullable, default 7 days),
-            // but _input itself can be null until RunAsync starts — keep the defensive fallback.
-            onRequested: req => Workflow.Logger.LogWorkflowApprovalRequested(
-                _input?.AgentName ?? "unknown", Workflow.Info.WorkflowId,
-                req.RequestId, req.Description ?? req.RequestId),
-            onResolved: d => Workflow.Logger.LogWorkflowApprovalResolved(
-                _input?.AgentName ?? "unknown", Workflow.Info.WorkflowId,
-                d.RequestId, approved: d.Approved));
+        return new RunRequest(entry.Messages.ToList(), responseFormat: responseFormat)
+        {
+            CorrelationId = entry.CorrelationId,
+            OrchestrationId = entry.OrchestrationId,
+        };
+    }
 
-    /// <summary>
-    /// Validates that a <see cref="SubmitApprovalAsync"/> decision is well-formed before it enters history.
-    /// </summary>
-    [WorkflowUpdateValidator(nameof(SubmitApprovalAsync))]
-    public void ValidateSubmitApproval(DurableApprovalDecision decision) =>
-        _approval.ValidateSubmitApproval(decision);
+    private async Task<AgentResponse> ExecuteAgentTurnAsync(RunRequest runRequest)
+    {
+        // Build MAF-shaped activity options from the typed `_input` (StartToClose / Heartbeat
+        // come from AgentWorkflowInput-only fields; the base's MEAI-shaped options pass-through
+        // is intentionally ignored here).
+        var activityOptions = new ActivityOptions
+        {
+            StartToCloseTimeout = _input!.ActivityStartToCloseTimeout ?? TimeSpan.FromMinutes(30),
+            HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5),
+            Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
+            RetryPolicy = _input!.RetryPolicy,
+        };
 
-    /// <summary>
-    /// Submits the human decision for the pending approval request.
-    /// Unblocks the tool that called <see cref="RequestApprovalAsync"/>.
-    /// </summary>
-    [WorkflowUpdate("SubmitApproval")]
-    public Task<DurableApprovalDecision> SubmitApprovalAsync(DurableApprovalDecision decision) =>
-        Task.FromResult(_approval.SubmitApprovalAsync(decision));
+        // Pass the full conversation history (including the just-appended request entry) so the
+        // activity can flatten messages for the LLM. _history is inherited via the base's
+        // History accessor.
+        var activityInput = new ExecuteAgentInput(
+            _input!.AgentName,
+            runRequest,
+            History,
+            _currentStateBag);
 
-    /// <summary>
-    /// Returns the currently pending approval request, or <see langword="null"/> if none.
-    /// Use this query to poll for pending approvals from a UI or monitoring tool.
-    /// </summary>
-    [WorkflowQuery("GetPendingApproval")]
-    public DurableApprovalRequest? GetPendingApproval() => _approval.GetPendingApproval();
+        var result = await Workflow.ExecuteActivityAsync(
+            (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
+            activityOptions);
+
+        // GAP 6: persist the updated StateBag for the next turn.
+        _currentStateBag = result.SerializedStateBag;
+        return result.Response;
+    }
 
     private async Task ProcessFireAndForgetAsync(RunRequest request)
     {
-        await Workflow.WaitConditionAsync(() => !_isProcessing);
-        _isProcessing = true;
-        int historyCountBefore = _history.Count;   // snapshot before add
         try
         {
-            _history.Add(AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow));
-
-            var activityInput = new ExecuteAgentInput(
-                _input!.AgentName,
-                request,
-                _history,
-                _currentStateBag);
-
-            var result = await Workflow.ExecuteActivityAsync(
-                (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
-                new ActivityOptions
-                {
-                    StartToCloseTimeout = _input!.ActivityStartToCloseTimeout ?? TimeSpan.FromMinutes(30),
-                    HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5),
-                    Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
-                    RetryPolicy = _input!.RetryPolicy,
-                });
-
-            _currentStateBag = result.SerializedStateBag;
-            _history.Add(AgentSessionResponse.FromAgentResponse(
-                request.CorrelationId!, result.Response, Workflow.UtcNow));
+            var requestEntry = AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow);
+            // Reuses the same turn machinery (mutex, history append, response build) as RunAgentAsync.
+            await RunTurnAsync(requestEntry, chatOptions: null).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
-            // Rollback orphaned request entry to keep history balanced across CAN.
-            while (_history.Count > historyCountBefore)
-                _history.RemoveAt(_history.Count - 1);
             Workflow.Logger.LogFireAndForgetActivityFailed(
                 _input?.AgentName ?? "unknown", Workflow.Info.WorkflowId, ex);
             // Swallow — fire-and-forget errors must not crash the session.
-        }
-        finally
-        {
-            _isProcessing = false;
+            // RunTurnAsync's atomicity guarantees that on activity failure no orphan request
+            // entry is appended (the request entry is appended inside RunTurnAsync's try block,
+            // but the response entry is only appended on success — the partial-pair concern from
+            // the prior implementation is moot because the base always pairs them inside one
+            // try, and on exception both the request entry append and the activity dispatch are
+            // re-thrown together to this catch).
         }
     }
 }

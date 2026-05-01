@@ -66,6 +66,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the base. MAF-specific fields (`AgentName`, `TaskQueue`,
   `CarriedStateBag`, `RetryPolicy`) stay on the subclass.
 
+### Changed
+
+- **`AgentWorkflow` now inherits from `DurableChatWorkflowBase<AgentResponse>`.**
+  Internal refactor — public API surface (`TemporalAIAgentProxy.RunAsync`,
+  `DefaultTemporalAgentClient`, `[WorkflowQuery("GetHistory")]`,
+  `[WorkflowSignal("RequestShutdown")]`, HITL approval methods) is unchanged.
+  The session-loop body, turn mutex, continue-as-new triggering, and HITL
+  handlers are now provided by the base class. `AgentWorkflow` shrinks by
+  ~150 lines; future session-loop improvements land once and benefit both
+  libraries.
+
+  MAF-specific concerns retained on the `AgentWorkflow` subclass:
+  fire-and-forget signal handler (`RunAgentFireAndForgetAsync`), StateBag
+  carry-forward across continue-as-new, and agent-name structured logging.
+  The `AgentName` search attribute is upserted via the new
+  `UpsertCustomSearchAttributes` virtual hook. Activity-input construction
+  (`ExecuteAgentInput`) lives in the subclass's `ExecuteTurnAsync` override;
+  `BuildResponseEntry` produces an `AgentSessionResponse` from the
+  `AgentResponse` output via `AgentSessionResponse.FromAgentResponse(...)`.
+
 ---
 
 ## [0.2.0] - 2026-04-30
