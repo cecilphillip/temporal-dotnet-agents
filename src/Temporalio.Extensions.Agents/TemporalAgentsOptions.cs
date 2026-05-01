@@ -108,7 +108,8 @@ public sealed class TemporalAgentsOptions
     /// Receives the activity's <see cref="IServiceProvider"/>.
     /// </param>
     /// <param name="timeToLive">
-    /// Per-agent session TTL. When null, <see cref="DefaultTimeToLive"/> is used.
+    /// Per-agent session TTL. When null, falls back to <see cref="DefaultTimeToLive"/>
+    /// (14 days by default).
     /// </param>
     /// <returns>This options instance, for fluent chaining.</returns>
     public TemporalAgentsOptions AddAIAgentFactory(string name, Func<IServiceProvider, AIAgent> factory, TimeSpan? timeToLive = null)
@@ -150,7 +151,8 @@ public sealed class TemporalAgentsOptions
     /// non-null, non-whitespace, and unique within this options instance.
     /// </param>
     /// <param name="timeToLive">
-    /// Per-agent session TTL. When null, <see cref="DefaultTimeToLive"/> is used.
+    /// Per-agent session TTL. When null, falls back to <see cref="DefaultTimeToLive"/>
+    /// (14 days by default).
     /// </param>
     /// <returns>This options instance, for fluent chaining.</returns>
     public TemporalAgentsOptions AddAIAgent(AIAgent agent, TimeSpan? timeToLive = null)
@@ -233,7 +235,8 @@ public sealed class TemporalAgentsOptions
     /// workflow thread. Receives the activity's <see cref="IServiceProvider"/>.
     /// </param>
     /// <param name="timeToLive">
-    /// Per-agent session TTL. When null, <see cref="DefaultTimeToLive"/> is used.
+    /// Per-agent session TTL. When null, falls back to <see cref="DefaultTimeToLive"/>
+    /// (14 days by default).
     /// </param>
     /// <returns>This options instance, for fluent chaining.</returns>
     /// <remarks>
