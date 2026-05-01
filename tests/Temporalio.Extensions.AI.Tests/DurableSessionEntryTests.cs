@@ -310,15 +310,54 @@ public class DurableSessionEntryTests
     }
 
     [Fact]
-    public void FromMessages_ThrowsWhenCorrelationIdNullOrEmpty()
+    public void FromMessages_AutoGeneratesCorrelationId_WhenNullOrEmpty()
     {
         var messages = new List<ChatMessage> { new(ChatRole.User, "hi") };
 
-        Assert.Throws<ArgumentException>(() =>
-            DurableSessionRequest.FromMessages(messages, "", DateTimeOffset.UtcNow));
+        // Per Layer 3 Decision #12, the factory absorbs correlation-ID null-fallback —
+        // outside a workflow context it falls back to Guid.NewGuid().ToString("N").
+        var fromEmpty = DurableSessionRequest.FromMessages(messages, "", DateTimeOffset.UtcNow);
+        Assert.False(string.IsNullOrEmpty(fromEmpty.CorrelationId));
+        Assert.Equal(32, fromEmpty.CorrelationId.Length);
 
-        Assert.Throws<ArgumentException>(() =>
-            DurableSessionRequest.FromMessages(messages, null!, DateTimeOffset.UtcNow));
+        var fromNull = DurableSessionRequest.FromMessages(messages, correlationId: null);
+        Assert.False(string.IsNullOrEmpty(fromNull.CorrelationId));
+        Assert.Equal(32, fromNull.CorrelationId.Length);
+
+        // Two consecutive auto-generations should yield distinct IDs.
+        Assert.NotEqual(fromEmpty.CorrelationId, fromNull.CorrelationId);
+    }
+
+    [Fact]
+    public void FromMessages_PreservesExplicitCorrelationId()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "hi") };
+        var entry = DurableSessionRequest.FromMessages(messages, "explicit-corr-id");
+        Assert.Equal("explicit-corr-id", entry.CorrelationId);
+    }
+
+    [Fact]
+    public void FromMessages_UsesExplicitTimestamp_WhenSupplied()
+    {
+        var ts = new DateTimeOffset(2026, 4, 30, 12, 0, 0, TimeSpan.Zero);
+        var messages = new List<ChatMessage> { new(ChatRole.User, "hi") };
+
+        var entry = DurableSessionRequest.FromMessages(messages, "corr", timestamp: ts);
+        Assert.Equal(ts, entry.CreatedAt);
+    }
+
+    [Fact]
+    public void FromMessages_FallsBackToUtcNow_OutsideWorkflow_WhenTimestampOmitted()
+    {
+        // Outside workflow context, the factory falls back to DateTimeOffset.UtcNow
+        // when no timestamp is supplied. We just check the value is recent.
+        var messages = new List<ChatMessage> { new(ChatRole.User, "hi") };
+        var before = DateTimeOffset.UtcNow.AddSeconds(-5);
+
+        var entry = DurableSessionRequest.FromMessages(messages, "corr");
+        var after = DateTimeOffset.UtcNow.AddSeconds(5);
+
+        Assert.InRange(entry.CreatedAt, before, after);
     }
 
     [Fact]

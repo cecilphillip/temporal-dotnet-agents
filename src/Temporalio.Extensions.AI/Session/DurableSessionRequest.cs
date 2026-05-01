@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
+using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.AI;
 
@@ -15,37 +16,38 @@ public class DurableSessionRequest : DurableSessionEntry
     /// </summary>
     /// <param name="messages">The user-supplied messages for this turn.</param>
     /// <param name="correlationId">
-    /// Per-turn correlation ID. Must be non-null and non-empty. Workflow callers should
-    /// pass <c>Workflow.NewGuid().ToString("N")</c>; non-workflow callers should pass
-    /// <c>Guid.NewGuid().ToString("N")</c>.
+    /// Optional per-turn correlation ID. When null or empty, an ID is auto-generated using
+    /// <c>Workflow.NewGuid().ToString("N")</c> when called inside a Temporal workflow context
+    /// (replay-safe, deterministic) or <c>Guid.NewGuid().ToString("N")</c> otherwise.
     /// </param>
     /// <param name="timestamp">
-    /// Fallback creation timestamp used when none of the supplied <paramref name="messages"/>
-    /// have a <see cref="ChatMessage.CreatedAt"/>. Workflow callers must pass
-    /// <c>Workflow.UtcNow</c>; activity / external callers should pass
-    /// <see cref="DateTimeOffset.UtcNow"/>.
+    /// Optional fallback creation timestamp used when none of the supplied <paramref name="messages"/>
+    /// have a <see cref="ChatMessage.CreatedAt"/>. When null, defaults to <c>Workflow.UtcNow</c>
+    /// inside a workflow context (replay-safe) or <see cref="DateTimeOffset.UtcNow"/> otherwise.
     /// </param>
     public static DurableSessionRequest FromMessages(
         IReadOnlyList<ChatMessage> messages,
-        string correlationId,
-        DateTimeOffset timestamp)
+        string? correlationId = null,
+        DateTimeOffset? timestamp = null)
     {
         ArgumentNullException.ThrowIfNull(messages);
 
-        if (string.IsNullOrEmpty(correlationId))
-        {
-            throw new ArgumentException(
-                "correlationId is required and must be non-empty. Use Workflow.NewGuid() in workflow context, Guid.NewGuid() in external context.",
-                nameof(correlationId));
-        }
+        string effectiveCorrelationId = !string.IsNullOrEmpty(correlationId)
+            ? correlationId
+            : (Workflow.InWorkflow
+                ? Workflow.NewGuid().ToString("N")
+                : Guid.NewGuid().ToString("N"));
+
+        DateTimeOffset effectiveTimestamp = timestamp
+            ?? (Workflow.InWorkflow ? Workflow.UtcNow : DateTimeOffset.UtcNow);
 
         DateTimeOffset createdAt = messages.Count > 0
-            ? messages.Min(m => m.CreatedAt) ?? timestamp
-            : timestamp;
+            ? messages.Min(m => m.CreatedAt) ?? effectiveTimestamp
+            : effectiveTimestamp;
 
         return new DurableSessionRequest
         {
-            CorrelationId = correlationId,
+            CorrelationId = effectiveCorrelationId,
             CreatedAt = createdAt,
             Messages = messages.ToList(),
         };

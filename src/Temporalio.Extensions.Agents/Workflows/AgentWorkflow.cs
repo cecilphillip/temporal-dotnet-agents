@@ -59,7 +59,7 @@ internal class AgentWorkflow
         // Capture the original creation time on the first run; carry it forward on CAN transitions.
         var sessionCreatedAt = input.OriginalCreatedAt ?? Workflow.UtcNow;
 
-        TimeSpan ttl = input.TimeToLive ?? TimeSpan.FromDays(14);
+        TimeSpan ttl = input.TimeToLive;
 
         Workflow.Logger.LogWorkflowStarted(input.AgentName, Workflow.Info.WorkflowId, ttl);
 
@@ -88,7 +88,7 @@ internal class AgentWorkflow
             Workflow.Logger.LogWorkflowContinueAsNew(input.AgentName, Workflow.Info.WorkflowId, _history.Count);
 
             // Apply the optional history reducer before carrying history forward.
-            IReadOnlyList<DurableSessionEntry> carriedHistory =
+            List<DurableSessionEntry> carriedHistory =
                 input.HistoryReducer?.Invoke(_history.ToList()).ToList() ?? _history.ToList();
             var carriedStateBag = _currentStateBag;
             var canInput = new AgentWorkflowInput
@@ -240,6 +240,8 @@ internal class AgentWorkflow
         _approval.RequestApprovalAsync(
             request,
             approvalTimeout: _input?.ApprovalTimeout ?? TimeSpan.FromDays(7),
+            // ApprovalTimeout is inherited from DurableChatWorkflowInput (non-nullable, default 7 days),
+            // but _input itself can be null until RunAsync starts — keep the defensive fallback.
             onRequested: req => Workflow.Logger.LogWorkflowApprovalRequested(
                 _input?.AgentName ?? "unknown", Workflow.Info.WorkflowId,
                 req.RequestId, req.Description ?? req.RequestId),

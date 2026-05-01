@@ -11,6 +11,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DurableChatWorkflowBase<TOutput>` virtual hooks** for subclass extension:
+  `InitializeTurnCount(carriedHistory)`, `UpsertCustomSearchAttributes()`, and a
+  `protected int CurrentTurnNumber { get; }` accessor. Enables future workflow
+  subclasses (e.g., the agents library's `AgentWorkflow` in Layer 3 Phase 2) to
+  share the session-loop body while customizing turn-count semantics, search
+  attributes, and per-turn metadata access.
+
+- **`DurableSessionRequest.FromMessages` auto-generates correlation ID and
+  timestamp** when arguments are null. Uses `Workflow.NewGuid()`/`Workflow.UtcNow`
+  inside workflow context, `Guid.NewGuid()`/`DateTimeOffset.UtcNow` otherwise.
+  Collapses the null-fallback boilerplate that previously lived at every
+  call site.
+
+### Changed (BREAKING)
+
+- **`SearchAttributes` field renamed to `EnableSearchAttributes`** on
+  `DurableExecutionOptions`, `DurableChatWorkflowInput`, and the equivalent
+  fields on the agents library's `TemporalAgentsOptions` and `AgentWorkflowInput`.
+  Type changes from a nullable opt-in object to a `bool` (default `false`).
+  Same opt-in semantics, more discoverable name, simpler type.
+
+  **Migration:** wherever you set `opts.SearchAttributes = ...` (or the
+  equivalent), change to `opts.EnableSearchAttributes = true`.
+
+- **`TurnCount` search attribute now monotonically grows** across
+  continue-as-new boundaries. Previously reset to 0 on each CAN. The new
+  behavior is more useful for monitoring (turn count over a workflow's
+  lifetime, not per-CAN-segment). Affects both `DurableChatWorkflow` and
+  `AgentWorkflow`.
+
+  **Migration:** if you have dashboards or queries against the `TurnCount`
+  search attribute that assumed CAN-segment semantics, update them to expect
+  monotonic growth.
+
+- **`DurableChatWorkflowBase<TOutput>.RunTurnAsync` signature changed.**
+  From `(IReadOnlyList<ChatMessage> userMessages, string? correlationId,
+  ChatOptions? chatOptions, ...)` to `(DurableSessionRequest requestEntry,
+  ChatOptions? chatOptions = null, CancellationToken cancellationToken =
+  default)`. Caller constructs the request entry directly via
+  `DurableSessionRequest.FromMessages(...)`.
+
+- **`DurableChatWorkflowBase<TOutput>.ExecuteTurnAsync` abstract signature
+  changed.** From `(ActivityOptions, DurableChatInput)` to `(ActivityOptions,
+  DurableSessionRequest, ChatOptions?)`. Subclass overrides own activity-input
+  construction.
+
+- **`BuildRequestEntry` virtual hook removed** from `DurableChatWorkflowBase`.
+  Subclasses construct request entries at the `[WorkflowUpdate]` call site
+  via `DurableSessionRequest.FromMessages(...)` or library-specific factories.
+
+- **`AgentWorkflowInput` inherits from `DurableChatWorkflowInput`.** Shared
+  fields (`MaxEntryCount`, `HistoryReducer`, `OriginalCreatedAt`, etc.) come
+  from the base. MAF-specific fields (`AgentName`, `TaskQueue`,
+  `CarriedStateBag`, `RetryPolicy`) stay on the subclass.
+
+---
+
+## [0.2.0] - 2026-04-30
+
+### Added
+
 - **`Temporalio.Extensions.AI` per-turn observability.**
   `DurableChatSessionClient.GetHistoryAsync()` now returns
   `IReadOnlyList<DurableSessionEntry>` instead of `IReadOnlyList<ChatMessage>`.

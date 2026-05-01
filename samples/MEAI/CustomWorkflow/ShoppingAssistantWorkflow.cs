@@ -13,6 +13,10 @@ namespace CustomWorkflow;
 [Workflow("CustomWorkflow.ShoppingAssistant")]
 public sealed class ShoppingAssistantWorkflow : DurableChatWorkflowBase<ShoppingTurnOutput>
 {
+    // Per-turn metadata captured by ShopAsync before the base session loop dispatches
+    // the activity. Read inside ExecuteTurnAsync to populate the activity input.
+    private string? _lastConversationId;
+
     [WorkflowRun]
     public new Task RunAsync(DurableChatWorkflowInput input) => base.RunAsync(input);
 
@@ -35,11 +39,15 @@ public sealed class ShoppingAssistantWorkflow : DurableChatWorkflowBase<Shopping
     [WorkflowUpdate("Shop")]
     public async Task<ShoppingTurnOutput> ShopAsync(DurableChatInput input)
     {
-        var (output, _) = await RunTurnAsync(
-            input.Messages,
-            input.Options,
-            input.ConversationId,
-            correlationId: input.CorrelationId);
+        // Capture per-turn metadata for ExecuteTurnAsync.
+        _lastConversationId = input.ConversationId;
+
+        // Build the request entry — factory auto-generates the correlation ID via
+        // Workflow.NewGuid() when the caller did not supply one.
+        var messages = input.Messages as IReadOnlyList<ChatMessage> ?? input.Messages.ToList();
+        var requestEntry = DurableSessionRequest.FromMessages(messages, input.CorrelationId);
+
+        var (output, _) = await RunTurnAsync(requestEntry, input.Options);
         return output;
     }
 
@@ -57,10 +65,27 @@ public sealed class ShoppingAssistantWorkflow : DurableChatWorkflowBase<Shopping
 
     protected override Task<ShoppingTurnOutput> ExecuteTurnAsync(
         ActivityOptions activityOptions,
-        DurableChatInput activityInput) =>
-        Workflow.ExecuteActivityAsync(
+        DurableSessionRequest requestEntry,
+        ChatOptions? chatOptions)
+    {
+        // Flatten the entire history (including the just-appended request entry) into a
+        // single message list so the LLM sees the full conversation each turn.
+        var activityMessages = History
+            .SelectMany(e => e.Messages)
+            .ToList();
+
+        var activityInput = new DurableChatInput
+        {
+            Messages = activityMessages,
+            Options = chatOptions,
+            ConversationId = _lastConversationId ?? Workflow.Info.WorkflowId,
+            TurnNumber = CurrentTurnNumber,
+            CorrelationId = requestEntry.CorrelationId,
+        };
+        return Workflow.ExecuteActivityAsync(
             (ShoppingActivities a) => a.GetShoppingResponseAsync(activityInput),
             activityOptions);
+    }
 
     protected override ContinueAsNewException CreateContinueAsNewException(
         DurableChatWorkflowInput input) =>

@@ -13,6 +13,7 @@ This document covers the internal architecture of the pipeline: how the componen
 3. [The `Workflow.InWorkflow` Dispatch Guard](#3-the-workflowinworkflow-dispatch-guard)
 4. [`[WorkflowUpdate]` — Why Not Signal + Query?](#4-workflowupdate--why-not-signal--query)
 5. [Conversation History Lifecycle](#5-conversation-history-lifecycle)
+5b. [`DurableChatWorkflowBase<TOutput>` — Virtual Hook Surface](#5b-durablechatworkflowbasetoutput--virtual-hook-surface)
 6. [Turn Serialization](#6-turn-serialization)
 7. [`DurableAIDataConverter` — Why It's Required](#7-durableaidataconverter--why-its-required)
 8. [`DurableFunctionRegistry` — How Tools Are Resolved](#8-durablefunctionregistry--how-tools-are-resolved)
@@ -86,24 +87,35 @@ DurableChatSessionClient.ChatAsync
 DurableChatWorkflow.ChatAsync   [WorkflowUpdate]
   │  ValidateChat() runs first (validator rejects empty messages or shut-down sessions)
   │
-  │  WaitConditionAsync(() => !_isProcessing)   ← wait for any concurrent turn to finish
-  │  _isProcessing = true
+  │  // Subclass owns request-entry construction (Decision #9).
+  │  // FromMessages auto-generates correlationId + timestamp when null (Decision #12).
+  │  requestEntry = DurableSessionRequest.FromMessages(input.Messages, input.CorrelationId)
   │
-  │  correlationId = input.CorrelationId ?? Workflow.NewGuid().ToString("N")
-  │  requestEntry  = DurableSessionRequest.FromMessages(input.Messages, correlationId, Workflow.UtcNow)
-  │  _history.Add(requestEntry)            ← append request entry to history
-  │  _turnCount++
+  │  // Hand off to the base's shared turn helper.
+  │  await RunTurnAsync(requestEntry, input.ChatOptions)
   │
-  │  flatMessages = _history.SelectMany(e => e.Messages).ToList()
-  │  activityInput = DurableChatInput
-  │      { Messages = flatMessages,    ← FULL history flattened to ChatMessage[] for the LLM
-  │        Options  = input.Options,
-  │        ConversationId = WorkflowId,
-  │        TurnNumber = _turnCount }
+  │    └─ inside base.RunTurnAsync:
+  │       WaitConditionAsync(() => !_isProcessing)   ← wait for any concurrent turn to finish
+  │       _isProcessing = true
+  │       _history.Add(requestEntry)                 ← append request entry to history
+  │       _turnCount++  (accessible to subclasses via CurrentTurnNumber)
   │
-  │  ExecuteActivityAsync(DurableChatActivities.GetResponseAsync, activityInput,
-  │      StartToCloseTimeout = _input.ActivityTimeout,
-  │      HeartbeatTimeout    = _input.HeartbeatTimeout)
+  │       // Subclass implements ExecuteTurnAsync (abstract; Decision #10).
+  │       // The subclass owns activity-input construction.
+  │       output = await ExecuteTurnAsync(activityOptions, requestEntry, chatOptions)
+  │
+  │         └─ inside DurableChatWorkflow.ExecuteTurnAsync (override):
+  │            flatMessages = _history.SelectMany(e => e.Messages).ToList()
+  │            activityInput = DurableChatInput
+  │                { Messages = flatMessages,    ← FULL history flattened to ChatMessage[] for the LLM
+  │                  Options  = chatOptions,
+  │                  CorrelationId = requestEntry.CorrelationId,
+  │                  ConversationId = Input!.ConversationId,
+  │                  TurnNumber = CurrentTurnNumber }   ← read via the base accessor
+  │
+  │            ExecuteActivityAsync(DurableChatActivities.GetResponseAsync, activityInput,
+  │                StartToCloseTimeout = Input.ActivityTimeout,
+  │                HeartbeatTimeout    = Input.HeartbeatTimeout)
   │
   ▼
 DurableChatActivities.GetResponseAsync   [Activity]
@@ -123,11 +135,14 @@ DurableChatActivities
   │  return chatResponse
   │  (result checkpointed to Temporal event history)
   │
-DurableChatWorkflow.ChatAsync  (resumes from ExecuteActivityAsync)
-  │  responseEntry = BuildResponseEntry(correlationId, chatResponse, Workflow.UtcNow)
+base.RunTurnAsync resumes (after ExecuteTurnAsync returns the TOutput)
+  │  responseEntry = BuildResponseEntry(requestEntry.CorrelationId, chatResponse, Workflow.UtcNow)
   │                = DurableSessionResponse.FromChatResponse(...)
   │  _history.Add(responseEntry)   ← append response entry (carries Usage + CorrelationId)
   │  _isProcessing = false
+  │  returns (TOutput, DurableSessionResponse) tuple to the subclass [WorkflowUpdate]
+  │
+DurableChatWorkflow.ChatAsync  (subclass returns the response entry)
   │  return responseEntry          ← DurableSessionResponse
   │
 DurableChatSessionClient.ChatAsync  (ExecuteUpdateAsync returns)
@@ -296,7 +311,22 @@ if (input.CarriedHistory is { Count: > 0 })
 {
     _history.AddRange(input.CarriedHistory);
 }
+
+// Turn-count is re-derived from the carried history (Decision #3).
+// The default counts response entries; subclasses may override.
+_turnCount = InitializeTurnCount(_history);
 ```
+
+#### Turn-Count Behavior — Monotonic Across `ContinueAsNew`
+
+The `_turnCount` field is now re-derived from carried history at the start of each workflow run rather than reset to 0. The base's default `InitializeTurnCount` counts `DurableSessionResponse` entries in the carried history:
+
+```csharp
+protected virtual int InitializeTurnCount(IReadOnlyList<DurableSessionEntry> carriedHistory) =>
+    carriedHistory.Count(e => e is DurableSessionResponse);
+```
+
+The `TurnCount` search attribute (when opted in via `EnableSearchAttributes = true`) therefore grows monotonically over a workflow's lifetime instead of resetting to 0 on every `ContinueAsNew`. Operational queries against `TurnCount` reflect the cumulative turn count for the conversation, not the count for the current CAN-segment. Subclasses can override `InitializeTurnCount` if they need different semantics.
 
 From `DurableChatSessionClient`'s perspective this is transparent. The handle is obtained without a pinned `RunId`:
 
@@ -349,21 +379,83 @@ See [docs/how-to/MEAI/usage.md](../../how-to/MEAI/usage.md) for complete registr
 
 ---
 
+## 5b. `DurableChatWorkflowBase<TOutput>` — Virtual Hook Surface
+
+The session-loop body is implemented once in `DurableChatWorkflowBase<TOutput>` and reused by both `DurableChatWorkflow` (this library) and the agents library's `AgentWorkflow`. Subclasses customize behavior by implementing required abstract hooks and optionally overriding the virtual ones.
+
+### Abstract hooks (subclass must implement)
+
+| Hook | Purpose |
+|---|---|
+| `Task<TOutput> ExecuteTurnAsync(ActivityOptions activityOptions, DurableSessionRequest requestEntry, ChatOptions? chatOptions)` | Owns activity-input construction and dispatch. Receives the pre-built request entry plus per-turn `ChatOptions`. The subclass builds whatever activity payload it needs (e.g., `DurableChatInput` for MEAI, `ExecuteAgentInput` for MAF) and calls `Workflow.ExecuteActivityAsync`. |
+| `DurableSessionResponse BuildResponseEntry(string correlationId, TOutput output, DateTimeOffset createdAt)` | Converts the typed activity output (`TOutput`) into a `DurableSessionResponse` (or a library-specific subclass such as `AgentSessionResponse`). |
+| `ContinueAsNewException CreateContinueAsNewException(DurableChatWorkflowInput input)` | Builds a typed `ContinueAsNew` exception preserving any subclass-specific carry-forward fields. |
+
+### Virtual hooks (subclass may override)
+
+| Hook | Default | Override when |
+|---|---|---|
+| `int InitializeTurnCount(IReadOnlyList<DurableSessionEntry> carriedHistory)` | Counts `DurableSessionResponse` entries in the carried history | You need different turn-count semantics (e.g., per-CAN-segment reset). |
+| `void UpsertCustomSearchAttributes()` | No-op | You want to upsert library-specific search attributes (e.g., MAF's `AgentName`). Called after the base upserts the standard `TurnCount` and `SessionCreatedAt` attributes (only when `EnableSearchAttributes = true`). |
+
+### Subclass-accessible state
+
+| Member | Purpose |
+|---|---|
+| `protected int CurrentTurnNumber { get; }` | Read-only accessor for `_turnCount`. Subclasses use this when constructing activity input payloads (e.g., `TurnNumber` field on `DurableChatInput`). The underlying field stays `private` to the base. |
+| `protected Task<(TOutput, DurableSessionResponse)> RunTurnAsync(DurableSessionRequest requestEntry, ChatOptions? chatOptions = null, CancellationToken cancellationToken = default)` | The shared turn-helper. Subclass `[WorkflowUpdate]` handlers construct the request entry and call this; the base manages the turn mutex, history append, turn-count increment, dispatch into `ExecuteTurnAsync`, and response-entry construction. |
+
+### Removed from the base in Layer 3 Phase 1
+
+- The `BuildRequestEntry` virtual hook is gone. Subclasses construct request entries at the `[WorkflowUpdate]` call site via `DurableSessionRequest.FromMessages(...)` (this library) or `AgentSessionRequest.FromRunRequest(...)` (agents library) before calling `RunTurnAsync`. This keeps subclass-specific request metadata (`OrchestrationId`, `ResponseSchema`, etc. in the agents library) on the call-site path rather than threaded through extra base-class context parameters.
+
+### `DurableSessionRequest.FromMessages` — auto-generation
+
+The `FromMessages` factory absorbs the correlation-ID and timestamp null-fallback that previously lived at every call site:
+
+```csharp
+public static DurableSessionRequest FromMessages(
+    IReadOnlyList<ChatMessage> messages,
+    string? correlationId = null,
+    DateTimeOffset? timestamp = null);
+```
+
+When `correlationId` is null/empty: uses `Workflow.NewGuid().ToString("N")` if `Workflow.InWorkflow == true`, otherwise `Guid.NewGuid().ToString("N")`. When `timestamp` is null: uses `Workflow.UtcNow` in workflow context, otherwise `DateTimeOffset.UtcNow`. Subclass `[WorkflowUpdate]` handlers no longer need explicit null-coalescing at every call site.
+
+### Search-attribute opt-in
+
+Both `DurableExecutionOptions` and `DurableChatWorkflowInput` expose an `EnableSearchAttributes` boolean (default `false`). When `true`, the base upserts the standard `TurnCount` and `SessionCreatedAt` attributes on every run, then calls `UpsertCustomSearchAttributes()` so subclasses can layer on their own. Production clusters must pre-register the attributes; the embedded test environment registers them via `TestEnvironmentHelper.StartLocalAsync()`.
+
+---
+
 ## 6. Turn Serialization
 
 A workflow receives incoming updates asynchronously. If two callers both call `sessionClient.ChatAsync` on the same `conversationId` at the same moment, both updates arrive at the workflow nearly simultaneously. Running them concurrently would corrupt history — the second turn would start building its activity input before the first turn's response had been appended.
 
-`DurableChatWorkflow` uses an `_isProcessing` flag with `WaitConditionAsync` as a gate:
+`DurableChatWorkflowBase<TOutput>` uses an `_isProcessing` flag with `WaitConditionAsync` as a gate inside its shared `RunTurnAsync` helper. Subclasses construct the request entry and call into the base; the base handles the mutex:
 
 ```csharp
 [WorkflowUpdate("Chat")]
-public async Task<DurableChatOutput> ChatAsync(DurableChatInput input)
+public async Task<DurableSessionResponse> ChatAsync(DurableChatInput input)
+{
+    // Subclass constructs the entry; the factory auto-generates correlationId + timestamp when null.
+    var requestEntry = DurableSessionRequest.FromMessages(input.Messages, input.CorrelationId);
+    var (_, responseEntry) = await RunTurnAsync(requestEntry, input.ChatOptions);
+    return responseEntry;
+}
+
+// Inside the base:
+protected async Task<(TOutput, DurableSessionResponse)> RunTurnAsync(
+    DurableSessionRequest requestEntry,
+    ChatOptions? chatOptions = null,
+    CancellationToken cancellationToken = default)
 {
     await Workflow.WaitConditionAsync(() => !_isProcessing);  // wait if busy
     _isProcessing = true;
     try
     {
-        // ... append messages, execute activity, append response
+        // ... append requestEntry, call ExecuteTurnAsync (subclass-implemented),
+        //     build responseEntry via BuildResponseEntry, append it
     }
     finally
     {

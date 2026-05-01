@@ -79,7 +79,7 @@ public sealed class DurableChatSessionClient : IDurableChatSessionClient
                 ActivityTimeout = _options.ActivityTimeout,
                 HeartbeatTimeout = _options.HeartbeatTimeout,
                 ApprovalTimeout = _options.ApprovalTimeout,
-                SearchAttributes = _options.EnableSearchAttributes ? new DurableSessionAttributes() : null,
+                EnableSearchAttributes = _options.EnableSearchAttributes,
                 MaxEntryCount = _options.MaxEntryCount,
                 HistoryReducer = _options.HistoryReducer,
             }),

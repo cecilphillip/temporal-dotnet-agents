@@ -54,7 +54,7 @@ internal sealed class DefaultTemporalAgentClient(
             {
                 AgentName = sessionId.AgentName,
                 TaskQueue = taskQueue,
-                TimeToLive = options.GetTimeToLive(sessionId.AgentName),
+                TimeToLive = options.GetTimeToLive(sessionId.AgentName) ?? TimeSpan.FromDays(14),
                 ActivityStartToCloseTimeout = options.ActivityStartToCloseTimeout,
                 ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
                 ApprovalTimeout = options.ApprovalTimeout,
@@ -100,7 +100,7 @@ internal sealed class DefaultTemporalAgentClient(
             {
                 AgentName = sessionId.AgentName,
                 TaskQueue = taskQueue,
-                TimeToLive = options.GetTimeToLive(sessionId.AgentName),
+                TimeToLive = options.GetTimeToLive(sessionId.AgentName) ?? TimeSpan.FromDays(14),
                 ActivityStartToCloseTimeout = options.ActivityStartToCloseTimeout,
                 ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
                 ApprovalTimeout = options.ApprovalTimeout,
@@ -186,7 +186,7 @@ internal sealed class DefaultTemporalAgentClient(
                 {
                     AgentName = sessionId.AgentName,
                     TaskQueue = taskQueue,
-                    TimeToLive = options.GetTimeToLive(sessionId.AgentName),
+                    TimeToLive = options.GetTimeToLive(sessionId.AgentName) ?? TimeSpan.FromDays(14),
                     ActivityStartToCloseTimeout = options.ActivityStartToCloseTimeout,
                     ActivityHeartbeatTimeout = options.ActivityHeartbeatTimeout,
                     ApprovalTimeout = options.ApprovalTimeout,

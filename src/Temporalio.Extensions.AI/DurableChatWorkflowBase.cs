@@ -33,21 +33,24 @@ public abstract class DurableChatWorkflowBase<TOutput>
     /// </summary>
     protected bool IsShutdownRequested => _shutdownRequested;
 
-    // ── Abstract / virtual hooks ────────────────────────────────────────────
+    /// <summary>
+    /// The current turn count, available to subclass overrides for telemetry or
+    /// activity-input fields. Updated inside <see cref="RunTurnAsync"/> after each turn
+    /// completes, and initialized from carried history at the start of each run via
+    /// <see cref="InitializeTurnCount"/>.
+    /// </summary>
+    protected int CurrentTurnNumber => _turnCount;
 
     /// <summary>
-    /// Builds the request entry that gets appended to history before the activity is dispatched.
-    /// Subclasses can override to attach library-specific request metadata. The default
-    /// implementation calls <see cref="DurableSessionRequest.FromMessages"/>.
+    /// The current conversation history, available to subclass overrides that need to
+    /// pass the full flattened message log to their activity (e.g. so the LLM sees
+    /// prior turns). The request entry for the current turn is appended to history
+    /// <em>before</em> <see cref="ExecuteTurnAsync"/> is invoked, so the latest entry
+    /// in this list is always the request that triggered the activity dispatch.
     /// </summary>
-    /// <param name="userMessages">The user-supplied messages for this turn.</param>
-    /// <param name="correlationId">Per-turn correlation identifier.</param>
-    /// <param name="createdAt">Workflow-time creation timestamp.</param>
-    protected virtual DurableSessionRequest BuildRequestEntry(
-        IReadOnlyList<ChatMessage> userMessages,
-        string correlationId,
-        DateTimeOffset createdAt) =>
-        DurableSessionRequest.FromMessages(userMessages, correlationId, createdAt);
+    protected IReadOnlyList<DurableSessionEntry> History => _history;
+
+    // ── Abstract / virtual hooks ────────────────────────────────────────────
 
     /// <summary>
     /// Builds the response entry that gets appended to history after the activity completes.
@@ -64,11 +67,28 @@ public abstract class DurableChatWorkflowBase<TOutput>
 
     /// <summary>
     /// Dispatches the LLM call (or equivalent) as a Temporal activity.
-    /// Called by <see cref="RunTurnAsync"/> on each turn.
+    /// Called by <see cref="RunTurnAsync"/> on each turn. The base no longer constructs
+    /// a <see cref="DurableChatInput"/> on the subclass's behalf — subclasses own activity-input
+    /// construction so they can include library-specific fields (e.g. MAF's
+    /// <c>SerializedStateBag</c> / <c>AgentName</c>).
     /// </summary>
+    /// <param name="activityOptions">
+    /// Pre-built <see cref="ActivityOptions"/> with timeouts and summary populated from
+    /// <see cref="DurableChatWorkflowInput"/> and <paramref name="chatOptions"/>.
+    /// </param>
+    /// <param name="requestEntry">
+    /// The request entry that was just appended to history. Subclasses can extract
+    /// <see cref="DurableSessionEntry.Messages"/>, <see cref="DurableSessionEntry.CorrelationId"/>,
+    /// or library-specific fields from a derived entry type.
+    /// </param>
+    /// <param name="chatOptions">
+    /// Optional chat options for this turn (e.g. model id, tools list). May be null when
+    /// the subclass does not need MEAI-shaped options.
+    /// </param>
     protected abstract Task<TOutput> ExecuteTurnAsync(
         ActivityOptions activityOptions,
-        DurableChatInput activityInput);
+        DurableSessionRequest requestEntry,
+        ChatOptions? chatOptions);
 
     /// <summary>
     /// Creates the <see cref="ContinueAsNewException"/> typed to the concrete workflow class.
@@ -77,6 +97,28 @@ public abstract class DurableChatWorkflowBase<TOutput>
     /// </summary>
     protected abstract ContinueAsNewException CreateContinueAsNewException(
         DurableChatWorkflowInput input);
+
+    /// <summary>
+    /// Computes the initial turn count when restoring carried history at workflow start.
+    /// Default implementation re-derives the count by counting <see cref="DurableSessionResponse"/>
+    /// entries in <paramref name="carriedHistory"/>, ensuring the <c>TurnCount</c> search
+    /// attribute monotonically grows across continue-as-new boundaries instead of resetting.
+    /// Subclasses can override for different semantics (e.g., per-CAN reset).
+    /// </summary>
+    /// <param name="carriedHistory">
+    /// History entries carried forward from a prior run. Empty on the first run of a session.
+    /// </param>
+    protected virtual int InitializeTurnCount(IReadOnlyList<DurableSessionEntry> carriedHistory) =>
+        carriedHistory.Count(e => e is DurableSessionResponse);
+
+    /// <summary>
+    /// Hook invoked after the base upserts the standard <c>TurnCount</c> and
+    /// <c>SessionCreatedAt</c> search attributes. Subclasses override to upsert
+    /// additional library-specific attributes (e.g. MAF's <c>AgentName</c>).
+    /// Only called when <see cref="DurableChatWorkflowInput.EnableSearchAttributes"/>
+    /// is <see langword="true"/>. Default implementation is a no-op.
+    /// </summary>
+    protected virtual void UpsertCustomSearchAttributes() { }
 
     // ── Session loop ────────────────────────────────────────────────────────
 
@@ -96,16 +138,22 @@ public abstract class DurableChatWorkflowBase<TOutput>
             _history.AddRange(input.CarriedHistory);
         }
 
+        // Re-derive the turn count from carried history so search attributes and per-turn
+        // diagnostics stay monotonic across continue-as-new transitions. Subclasses override
+        // InitializeTurnCount for different semantics.
+        _turnCount = InitializeTurnCount(_history);
+
         // Capture the original creation time on the first run; carry it forward on CAN transitions.
         var sessionCreatedAt = input.OriginalCreatedAt ?? Workflow.UtcNow;
 
         // Opt-in: upsert search attributes only when explicitly requested.
         // Guards against failure on servers where the attributes are not pre-registered.
-        if (input.SearchAttributes is not null)
+        if (input.EnableSearchAttributes)
         {
             Workflow.UpsertTypedSearchAttributes(
                 DurableSessionAttributes.SessionCreatedAt.ValueSet(sessionCreatedAt),
                 DurableSessionAttributes.TurnCount.ValueSet(_turnCount));
+            UpsertCustomSearchAttributes();
         }
 
         // Wait until shutdown, SDK-suggested CAN, or history has grown to MaxEntryCount.
@@ -133,7 +181,7 @@ public abstract class DurableChatWorkflowBase<TOutput>
                 ActivityTimeout = input.ActivityTimeout,
                 HeartbeatTimeout = input.HeartbeatTimeout,
                 ApprovalTimeout = input.ApprovalTimeout,
-                SearchAttributes = input.SearchAttributes,
+                EnableSearchAttributes = input.EnableSearchAttributes,
                 MaxEntryCount = input.MaxEntryCount,
                 HistoryReducer = input.HistoryReducer,
                 OriginalCreatedAt = sessionCreatedAt,
@@ -143,10 +191,20 @@ public abstract class DurableChatWorkflowBase<TOutput>
     }
 
     /// <summary>
-    /// Executes a single chat turn: serializes concurrent turns, appends a request entry,
-    /// dispatches the LLM call via <see cref="ExecuteTurnAsync"/>, appends a response entry,
-    /// and updates the turn count search attribute if opted in.
+    /// Executes a single chat turn: serializes concurrent turns, appends the supplied
+    /// request entry, dispatches the LLM call via <see cref="ExecuteTurnAsync"/>, appends
+    /// a response entry, and updates the turn count search attribute if opted in.
     /// </summary>
+    /// <param name="requestEntry">
+    /// The request entry to append to history before the activity is dispatched. Subclass
+    /// <c>[WorkflowUpdate]</c> handlers construct this via library-specific factories
+    /// (<see cref="DurableSessionRequest.FromMessages"/> for chat workflows;
+    /// <c>AgentSessionRequest.FromRunRequest</c> for MAF agent workflows).
+    /// </param>
+    /// <param name="chatOptions">
+    /// Optional chat options for the activity dispatch. May be null.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token for the workflow update.</param>
     /// <returns>
     /// A tuple containing the activity's raw <typeparamref name="TOutput"/> and the
     /// <see cref="DurableSessionResponse"/> entry that was appended to history.
@@ -154,12 +212,12 @@ public abstract class DurableChatWorkflowBase<TOutput>
     /// shape they want to expose to callers.
     /// </returns>
     protected async Task<(TOutput Output, DurableSessionResponse ResponseEntry)> RunTurnAsync(
-        IEnumerable<ChatMessage> userMessages,
-        ChatOptions? options,
-        string? conversationId,
-        string? clientKey = null,
-        string? correlationId = null)
+        DurableSessionRequest requestEntry,
+        ChatOptions? chatOptions = null,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(requestEntry);
+
         // Serialize: wait for any in-progress turn to finish.
         // Safety note: after WaitConditionAsync returns, the workflow is in a synchronous
         // execution window. Temporal's single-threaded scheduler cannot interleave another
@@ -171,52 +229,26 @@ public abstract class DurableChatWorkflowBase<TOutput>
 
         try
         {
-            var userMessageList = userMessages as IReadOnlyList<ChatMessage> ?? userMessages.ToList();
-
-            // Auto-generate correlation ID via Workflow.NewGuid() (deterministic, replay-safe)
-            // when caller did not supply one.
-            var effectiveCorrelationId = string.IsNullOrEmpty(correlationId)
-                ? Workflow.NewGuid().ToString("N")
-                : correlationId;
-
-            var nowUtc = Workflow.UtcNow;
-
-            // Build and append the request entry for this turn.
-            var requestEntry = BuildRequestEntry(userMessageList, effectiveCorrelationId, nowUtc);
+            // Append the request entry for this turn.
             _history.Add(requestEntry);
 
             _turnCount++;
-
-            // Build the activity input with the flattened message list (request + prior history).
-            var activityMessages = _history
-                .SelectMany(e => e.Messages)
-                .ToList();
-
-            var activityInput = new DurableChatInput
-            {
-                Messages = activityMessages,
-                Options = options,
-                ConversationId = conversationId ?? Workflow.Info.WorkflowId,
-                TurnNumber = _turnCount,
-                ClientKey = clientKey,
-                CorrelationId = effectiveCorrelationId,
-            };
 
             var activityOptions = new ActivityOptions
             {
                 StartToCloseTimeout = Input!.ActivityTimeout,
                 HeartbeatTimeout = Input!.HeartbeatTimeout,
-                Summary = DurableChatClient.BuildActivitySummary(options),
+                Summary = DurableChatClient.BuildActivitySummary(chatOptions),
             };
 
-            var output = await ExecuteTurnAsync(activityOptions, activityInput);
+            var output = await ExecuteTurnAsync(activityOptions, requestEntry, chatOptions);
 
             // Build and append the response entry.
-            var responseEntry = BuildResponseEntry(effectiveCorrelationId, output, Workflow.UtcNow);
+            var responseEntry = BuildResponseEntry(requestEntry.CorrelationId, output, Workflow.UtcNow);
             _history.Add(responseEntry);
 
             // Update turn count search attribute if opt-in was requested.
-            if (Input!.SearchAttributes is not null)
+            if (Input!.EnableSearchAttributes)
             {
                 Workflow.UpsertTypedSearchAttributes(
                     DurableSessionAttributes.TurnCount.ValueSet(_turnCount));
