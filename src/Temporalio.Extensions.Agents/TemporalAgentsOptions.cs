@@ -258,7 +258,7 @@ public sealed class TemporalAgentsOptions
     /// Useful for health-check endpoints, admin dashboards, and startup validation.
     /// </summary>
     public IReadOnlyList<string> GetRegisteredAgentNames() =>
-        _agentFactories.Keys.ToList().AsReadOnly();
+        [.. _agentFactories.Keys];
 
     /// <summary>
     /// Returns <see langword="true"/> if an agent with the given name is registered.

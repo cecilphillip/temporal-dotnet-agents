@@ -171,9 +171,12 @@ public abstract class DurableChatWorkflowBase<TOutput>
 
         if ((Workflow.ContinueAsNewSuggested || _history.Count >= input.MaxEntryCount) && !_shutdownRequested)
         {
+            // No-reducer path: pass _history directly — the workflow exits after this throw,
+            // so there is no aliasing risk. Reducer path: pass _history as IList<T> (no copy
+            // needed), then materialize the reducer's result once into a List<T>.
             var carriedHistory = input.HistoryReducer is not null
-                ? input.HistoryReducer(_history.ToList()).ToList()
-                : _history.ToList();
+                ? input.HistoryReducer(_history).ToList()
+                : _history;
             var carriedInput = new DurableChatWorkflowInput
             {
                 TimeToLive = input.TimeToLive,

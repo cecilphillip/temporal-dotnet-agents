@@ -21,11 +21,7 @@ internal sealed class AgentWorkflowWrapper(
     TemporalAgentSession session,
     IServiceProvider? services = null) : DelegatingAIAgent(innerAgent)
 {
-    private readonly RunRequest _runRequest = runRequest;
-    private readonly TemporalAgentSession _session = session;
-    private readonly IServiceProvider? _services = services;
-
-    protected override string? IdCore => _session.SessionId.WorkflowId;
+    protected override string? IdCore => session.SessionId.WorkflowId;
 
     protected override async Task<AgentResponse> RunCoreAsync(
         IEnumerable<ChatMessage> messages,
@@ -64,15 +60,15 @@ internal sealed class AgentWorkflowWrapper(
     {
         if (serviceType == typeof(TemporalAgentSessionId))
         {
-            return _session.SessionId;
+            return session.SessionId;
         }
 
         object? result = null;
-        if (_services is not null)
+        if (services is not null)
         {
-            result = (serviceKey is not null && _services is IKeyedServiceProvider ksp)
+            result = (serviceKey is not null && services is IKeyedServiceProvider ksp)
                 ? ksp.GetKeyedService(serviceType, serviceKey)
-                : _services.GetService(serviceType);
+                : services.GetService(serviceType);
         }
 
         return result ?? base.GetService(serviceType, serviceKey);
@@ -106,19 +102,19 @@ internal sealed class AgentWorkflowWrapper(
             return builder.ConfigureOptions(newOptions =>
             {
                 // Apply response format override from the request.
-                if (_runRequest.ResponseFormat is not null)
+                if (runRequest.ResponseFormat is not null)
                 {
-                    newOptions.ResponseFormat = _runRequest.ResponseFormat;
+                    newOptions.ResponseFormat = runRequest.ResponseFormat;
                 }
 
                 // Apply tool filtering from the request.
-                if (_runRequest.EnableToolCalls)
+                if (runRequest.EnableToolCalls)
                 {
                     IList<AITool>? tools = chatAgentRunOptions.ChatOptions?.Tools;
-                    if (tools is not null && _runRequest.EnableToolNames?.Count > 0)
+                    if (tools is not null && runRequest.EnableToolNames?.Count > 0)
                     {
                         newOptions.Tools = [.. tools.Where(tool =>
-                            _runRequest.EnableToolNames.Contains(tool.Name))];
+                            runRequest.EnableToolNames.Contains(tool.Name))];
                     }
                 }
                 else

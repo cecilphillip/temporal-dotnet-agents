@@ -11,27 +11,25 @@ namespace Temporalio.Extensions.AI;
 /// External entry point for managed durable chat sessions.
 /// Each conversation maps to a Temporal workflow that persists history across turns.
 /// </summary>
-public sealed class DurableChatSessionClient : IDurableChatSessionClient
+/// <param name="client">The Temporal client used to start and update workflows.</param>
+/// <param name="options">Durable execution configuration. Must pass validation before use.</param>
+/// <param name="logger">Optional logger. Defaults to a no-op logger when null.</param>
+public sealed class DurableChatSessionClient(
+    ITemporalClient client,
+    DurableExecutionOptions options,
+    ILogger<DurableChatSessionClient>? logger = null) : IDurableChatSessionClient
 {
-    private readonly ITemporalClient _client;
-    private readonly DurableExecutionOptions _options;
-    private readonly ILogger _logger;
+    private readonly ITemporalClient _client = client ?? throw new ArgumentNullException(nameof(client));
+    private readonly DurableExecutionOptions _options = ValidateOptions(options);
+    private readonly ILogger _logger = logger ?? NullLogger<DurableChatSessionClient>.Instance;
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="DurableChatSessionClient"/> class.
-    /// </summary>
-    public DurableChatSessionClient(
-        ITemporalClient client,
-        DurableExecutionOptions options,
-        ILogger<DurableChatSessionClient>? logger = null)
+    // Validates and returns the options; used as a field initializer so validation fires
+    // at construction time even though there is no explicit constructor body.
+    private static DurableExecutionOptions ValidateOptions(DurableExecutionOptions opts)
     {
-        ArgumentNullException.ThrowIfNull(client);
-        ArgumentNullException.ThrowIfNull(options);
-        options.Validate();
-
-        _client = client;
-        _options = options;
-        _logger = logger ?? NullLogger<DurableChatSessionClient>.Instance;
+        ArgumentNullException.ThrowIfNull(opts);
+        opts.Validate();
+        return opts;
     }
 
     /// <summary>

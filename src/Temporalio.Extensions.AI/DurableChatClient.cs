@@ -33,21 +33,15 @@ namespace Temporalio.Extensions.AI;
 /// will not be available on the worker side when invoked as an activity.
 /// </para>
 /// </remarks>
-public sealed class DurableChatClient : DelegatingChatClient
+/// <param name="innerClient">The inner chat client to delegate to.</param>
+/// <param name="durableOptions">Durable execution configuration.</param>
+public sealed class DurableChatClient(IChatClient innerClient, DurableExecutionOptions durableOptions)
+    : DelegatingChatClient(innerClient)
 {
-    private readonly DurableExecutionOptions _options;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="DurableChatClient"/> class.
-    /// </summary>
-    /// <param name="innerClient">The inner chat client to delegate to.</param>
-    /// <param name="options">Durable execution configuration.</param>
-    public DurableChatClient(IChatClient innerClient, DurableExecutionOptions options)
-        : base(innerClient)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-        _options = options;
-    }
+    // Field initializer validates durableOptions at construction time — primary constructors
+    // have no body for inline guards. Stored so methods reference a single captured value.
+    private readonly DurableExecutionOptions _durableOptions =
+        durableOptions ?? throw new ArgumentNullException(nameof(durableOptions));
 
     /// <inheritdoc/>
     public override async Task<ChatResponse> GetResponseAsync(
@@ -125,7 +119,7 @@ public sealed class DurableChatClient : DelegatingChatClient
     {
         if (serviceType == typeof(DurableExecutionOptions) && serviceKey is null)
         {
-            return _options;
+            return _durableOptions;
         }
 
         return base.GetService(serviceType, serviceKey);
@@ -143,7 +137,7 @@ public sealed class DurableChatClient : DelegatingChatClient
             Messages = messages as IList<ChatMessage> ?? messages.ToList(),
             Options = StripNonSerializableOptions(options),
             ConversationId = Workflow.Info.WorkflowId,
-            ClientKey = options.GetChatClientKey() ?? _options.DefaultChatClientKey,
+            ClientKey = options.GetChatClientKey() ?? _durableOptions.DefaultChatClientKey,
         };
     }
 
@@ -151,14 +145,14 @@ public sealed class DurableChatClient : DelegatingChatClient
     {
         var activityOptions = new ActivityOptions
         {
-            StartToCloseTimeout = chatOptions.GetActivityTimeout() ?? _options.ActivityTimeout,
-            HeartbeatTimeout = chatOptions.GetHeartbeatTimeout() ?? _options.HeartbeatTimeout,
+            StartToCloseTimeout = chatOptions.GetActivityTimeout() ?? _durableOptions.ActivityTimeout,
+            HeartbeatTimeout = chatOptions.GetHeartbeatTimeout() ?? _durableOptions.HeartbeatTimeout,
             Summary = BuildActivitySummary(chatOptions),
         };
 
-        if (_options.RetryPolicy is not null)
+        if (_durableOptions.RetryPolicy is not null)
         {
-            activityOptions.RetryPolicy = _options.RetryPolicy;
+            activityOptions.RetryPolicy = _durableOptions.RetryPolicy;
         }
 
         // Per-request retry override via AdditionalProperties.

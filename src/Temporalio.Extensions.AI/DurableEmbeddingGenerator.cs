@@ -14,21 +14,16 @@ namespace Temporalio.Extensions.AI;
 ///   <item>Otherwise → passes through to inner generator</item>
 /// </list>
 /// </remarks>
-public sealed class DurableEmbeddingGenerator : DelegatingEmbeddingGenerator<string, Embedding<float>>
+/// <param name="innerGenerator">The inner embedding generator to delegate to.</param>
+/// <param name="durableOptions">Durable execution configuration.</param>
+public sealed class DurableEmbeddingGenerator(
+    IEmbeddingGenerator<string, Embedding<float>> innerGenerator,
+    DurableExecutionOptions durableOptions)
+    : DelegatingEmbeddingGenerator<string, Embedding<float>>(innerGenerator)
 {
-    private readonly DurableExecutionOptions _options;
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="DurableEmbeddingGenerator"/> class.
-    /// </summary>
-    public DurableEmbeddingGenerator(
-        IEmbeddingGenerator<string, Embedding<float>> innerGenerator,
-        DurableExecutionOptions options)
-        : base(innerGenerator)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-        _options = options;
-    }
+    // Field initializer validates durableOptions at construction time.
+    private readonly DurableExecutionOptions _durableOptions =
+        durableOptions ?? throw new ArgumentNullException(nameof(durableOptions));
 
     /// <inheritdoc/>
     public override async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
@@ -51,14 +46,14 @@ public sealed class DurableEmbeddingGenerator : DelegatingEmbeddingGenerator<str
 
         var activityOptions = new ActivityOptions
         {
-            StartToCloseTimeout = _options.ActivityTimeout,
-            HeartbeatTimeout = _options.HeartbeatTimeout,
+            StartToCloseTimeout = _durableOptions.ActivityTimeout,
+            HeartbeatTimeout = _durableOptions.HeartbeatTimeout,
             Summary = BuildActivitySummary(options),
         };
 
-        if (_options.RetryPolicy is not null)
+        if (_durableOptions.RetryPolicy is not null)
         {
-            activityOptions.RetryPolicy = _options.RetryPolicy;
+            activityOptions.RetryPolicy = _durableOptions.RetryPolicy;
         }
 
         // Do NOT use .ConfigureAwait(false) here: this runs inside a Temporal workflow.
@@ -88,7 +83,7 @@ public sealed class DurableEmbeddingGenerator : DelegatingEmbeddingGenerator<str
     {
         if (serviceType == typeof(DurableExecutionOptions) && serviceKey is null)
         {
-            return _options;
+            return _durableOptions;
         }
 
         return base.GetService(serviceType, serviceKey);
