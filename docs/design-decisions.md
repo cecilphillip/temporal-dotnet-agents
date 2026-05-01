@@ -106,6 +106,23 @@ However, **two library features apply only to `ChatClientAgent`-shaped agents**:
 - Set `RunRequest.EnableToolCalls = false` and `RunRequest.EnableToolNames = null` to make the silent feature-skip explicit.
 - For observability, instrument at the agent's own dispatch layer instead of trying `ChatClientFactory` interception — e.g., HTTP-client middleware for `A2AAgent`, an `ActivitySource` exporter for graph-workflow agents, or a custom `DelegatingAIAgent` decorator wrapping the agent at registration time.
 
+**Deferred runtime-validation decision.** The silent feature-skip described above could be upgraded to a startup-time warning or registration-time error: when a non-`ChatClientAgent` is registered, surface a diagnostic so users learn at deploy time (not at first turn) that tool filtering and `ResponseFormat` overrides will not apply. We have not implemented this. The trade-off:
+
+- *Pro*: catches the silent no-op early; users don't wonder why a setting they configured doesn't take effect.
+- *Con*: hard-codes a `is ChatClientAgent` check at registration that needs updating each time MAF adds a new agent subtype. Today the "it works for `ChatClientAgent`" assumption is implicit; a runtime check makes it brittle to upstream evolution.
+
+The current call: leave silent. The compatibility matrix above documents what to expect; if a real user files an issue against the silent no-op, that is the right time to add the runtime check (and at that point we will know what subset of subtypes deserves a tailored message vs. a generic one).
+
+### Rejected directions (preserved for future maintainers)
+
+Two larger redesigns were considered during the Layer-1/2/3 research and explicitly rejected. These are recorded here so a future maintainer evaluating a similar proposal does not have to rediscover the analysis.
+
+**Drop `Microsoft.Agents.AI` for `Microsoft.Agents.AI.Abstractions`.** The TA library only references one concrete (non-abstractions) type from the package: `ChatClientAgentRunOptions`, used in three files (`AgentWorkflowWrapper`, `TemporalAIAgent`, `TemporalAIAgentProxy`). The dependency surface is genuinely narrow. Switching to Abstractions would shrink TA's transitive closure significantly. We rejected this because every TA sample registers agents via `chatClient.AsAIAgent("Name", ...)` — an extension method that lives in the concrete `Microsoft.Agents.AI` package. Forcing every user to add a separate package reference for a method they already use is a real migration cost paid by a whole user base for an upside (smaller transitive surface) that is operational, not architectural. Revisit this only if upstream MAF moves `ChatClientAgentRunOptions` (or an equivalent factory-options shape) to Abstractions.
+
+**Reimplement `ChatClientAgent` as a custom `AIAgent` subclass owned by TA.** This was framed as a way to "own the agent loop" and shed the `ChatClientAgentRunOptions` dependency. We rejected this because `ChatClientAgent.cs` upstream is roughly 1,100 lines that handle `ChatHistoryProvider` resolution, `AIContextProvider` pipeline plumbing, per-service-call persistence, `ContinuationToken` resumption, `AllowBackgroundResponses`, multi-session `ConversationId` management, tool-option merging, and stop-sequence concatenation. Replicating this would either require porting all of it (ongoing maintenance liability) or omitting parts (TA-specific limitations vs. upstream behavior). Worse, owning the loop in TA locks the library out of future MAF features (Compaction, Skills, Evaluation, A2A, graph-workflow agents) — the MAF team is shipping these every quarter, and TA's polymorphic `RunStreamingAsync` dispatch path picks them up for free. Owning the loop is owning a maintenance liability, not a feature.
+
+The pragmatic posture: keep the polymorphic `RunStreamingAsync` dispatch path; document the `ChatClientAgent`-specific seams (this section); add granular dispatch (Tier 2) only when the gate criteria below are met and only for `ChatClientAgent`-shaped agents.
+
 ---
 
 ## Function Invocation: Loop Ownership and Durability Granularity
@@ -347,4 +364,4 @@ This document does not commit to any of the above. They are listed for completen
 
 ---
 
-_Last updated: 2026-04-30 — added exit criteria for granular tool dispatch, pointer to LLM-call interception how-to, the Tier 1 #3 timeout-name harmonization (`ActivityTimeout` / `HeartbeatTimeout` are now inherited from the AI library's base record), and a compatibility matrix for non-`ChatClientAgent` `AIAgent` subtypes._
+_Last updated: 2026-04-30 — added exit criteria for granular tool dispatch, pointer to LLM-call interception how-to, the Tier 1 #3 timeout-name harmonization (`ActivityTimeout` / `HeartbeatTimeout` are now inherited from the AI library's base record), a compatibility matrix for non-`ChatClientAgent` `AIAgent` subtypes, the deferred runtime-validation decision for that compatibility matrix, and the "Rejected directions" subsection (Abstractions-only dependency and `ChatClientAgent` reimplementation)._
