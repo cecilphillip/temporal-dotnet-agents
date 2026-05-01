@@ -22,52 +22,24 @@ This document gives load-bearing project context: structure, gotchas, behavioral
 
 ```
 TemporalAgents/
-├── CLAUDE.md / README.md
-├── TemporalAgents.slnx                     # Solution file (use this, not .sln)
+├── TemporalAgents.slnx        # Solution file (.slnx — use this, not .sln)
 ├── docs/
-│   ├── architecture/                       # Internal design docs (durability, sessions, statebag, a2a, pub/sub, durable-chat-pipeline, cross-library-integration)
-│   └── how-to/                             # Practical guides (usage, routing, testing, observability, scheduling, structured-output, hitl, prompt-caching, dos-and-donts, tool-functions, embeddings, custom-workflow-output)
+│   ├── architecture/          # Internal design docs (durability, sessions, statebag, a2a, pub/sub, etc.)
+│   └── how-to/MAF + MEAI/     # Practical guides per library
 ├── src/
-│   ├── Temporalio.Extensions.Agents/       # Agent Framework integration library
-│   │   ├── ServiceCollectionExtensions.cs  # GetTemporalAgentProxy, AddTemporalAgentProxies
-│   │   ├── TemporalWorkerBuilderExtensions # .AddTemporalAgents() / AddWorkerPlugin(TemporalAgentsPlugin)
-│   │   ├── TemporalAgentsOptions.cs        # internal ctor; GetRegisteredAgentNames(), IsAgentRegistered()
-│   │   ├── TemporalAgentsPlugin.cs         # ITemporalWorkerPlugin entry point [TA001]
-│   │   ├── TemporalAIAgent.cs              # Workflow-context sub-agent
-│   │   ├── TemporalAIAgentProxy.cs         # External-caller proxy
-│   │   ├── TemporalWorkflowExtensions.cs   # GetAgent(), ExecuteAgentsInParallelAsync()
-│   │   ├── TemporalAgentDataConverter*.cs  # Re-exposes AI library's converter
-│   │   ├── StructuredOutputExtensions.cs   # ChatResponseFormat helpers for typed output
-│   │   ├── Session/                        # TemporalAgentContext, TemporalAgentSession, TemporalAgentSessionId
-│   │   ├── State/                          # AgentSessionRequest/Response (extend DurableSession*), AgentDescriptor, source-gen ctx
-│   │   └── Workflows/                      # AgentWorkflow : DurableChatWorkflowBase<AgentResponse>, AgentActivities, scheduling
-│   │
-│   └── Temporalio.Extensions.AI/           # MEAI IChatClient middleware library
-│       ├── DurableChatWorkflow.cs          # : DurableChatWorkflowBase<ChatResponse>
-│       ├── DurableChatWorkflowBase.cs      # Abstract base — shared session loop + HITL + CAN
-│       ├── DurableChatWorkflowInput.cs     # Workflow input record
-│       ├── DurableChatActivities.cs        # [Activity] wrapping IChatClient.GetResponseAsync
-│       ├── DurableChatSessionClient.cs     # External entry — implements IDurableChatSessionClient
-│       ├── DurableExecutionOptions.cs      # ActivityTimeout, MaxEntryCount, HistoryReducer, EnableSearchAttributes, etc.
-│       ├── DurableAIPayloadConverter.cs    # DurableAIDataConverter.Instance (AIJsonUtilities.DefaultOptions)
-│       ├── DurableAIPlugin.cs              # ITemporalWorkerPlugin (parallel to AddDurableAI) [TAI001]
-│       ├── DurableAIFunction.cs            # Wraps tool calls as activities
-│       ├── DurableEmbeddingGenerator.cs    # Wraps embeddings as activities
-│       ├── DurableApprovalMixin.cs         # Shared HITL state machine (used by base)
-│       ├── DurableSessionAttributes.cs     # SearchAttributeKey<> definitions
-│       └── Session/                        # DurableSessionEntry / DurableSessionRequest / DurableSessionResponse
-├── tests/
-│   ├── Temporalio.Extensions.Agents.Tests/         # 225 unit tests; helpers: StubAIAgent, CapturingChatClient
-│   ├── Temporalio.Extensions.Agents.IntegrationTests/ # 53 — embedded server via TestEnvironmentHelper
-│   ├── Temporalio.Extensions.AI.Tests/             # 190 unit tests
-│   └── Temporalio.Extensions.AI.IntegrationTests/  # 13 — embedded server, TestChatClient stub
+│   ├── Temporalio.Extensions.Agents/   # Agent Framework integration (depends on Extensions.AI)
+│   └── Temporalio.Extensions.AI/       # MEAI IChatClient middleware (no Agent Framework)
+├── tests/                     # Four projects: {Agents,AI} × {Tests, IntegrationTests}
 └── samples/
-    ├── MEAI/                # DurableChat, DurableTools, OpenTelemetry (DurableOpenTelemetry.csproj),
-    │                        # HumanInTheLoop, DurableEmbeddings, CustomWorkflow
-    └── MAF/                 # BasicAgent, SplitWorkerClient (Worker + Client),
-                             # WorkflowOrchestration, EvaluatorOptimizer, MultiAgentRouting,
-                             # HumanInTheLoop, WorkflowRouting, AmbientAgent
+    ├── MAF/                   # 8 samples: BasicAgent, SplitWorkerClient, WorkflowOrchestration,
+    │                          # EvaluatorOptimizer, MultiAgentRouting, HumanInTheLoop,
+    │                          # WorkflowRouting, AmbientAgent
+    └── MEAI/                  # 6 samples: DurableChat, DurableTools, OpenTelemetry
+                               # (DurableOpenTelemetry.csproj), HumanInTheLoop,
+                               # DurableEmbeddings, CustomWorkflow
 ```
+
+Use `Glob` / `ls` to discover specific files. Notable types and their locations are documented inline elsewhere in this guide (Key Type Locations, JSON Serialization, etc.).
 
 ---
 
@@ -189,21 +161,12 @@ As of Layer 3, `AgentWorkflow : DurableChatWorkflowBase<AgentResponse>`. The sha
 
 ## Important Dependencies and Notes
 
-### Temporal .NET SDK
-- **Use NuGet packages** (`Temporalio 1.11.1`, `Temporalio.Extensions.Hosting 1.11.1`), NOT project references — Rust native bridge requires Rust toolchain to build from source.
-- **OTel extension**: `Temporalio.Extensions.OpenTelemetry 1.11.1` — match SDK version.
-
 ### Microsoft Agent Framework
 - `Temporalio.Extensions.Agents` depends on `Temporalio.Extensions.AI` (which transitively brings in MEAI).
 - HITL types are MEAI-side: `DurableApprovalRequest` / `DurableApprovalDecision` (from `Temporalio.Extensions.AI`).
 - `AgentResponse`, `AIAgent`, `DelegatingAIAgent`, `AgentRunOptions` → `Microsoft.Agents.AI`.
 - `ChatClientAgentRunOptions` → `Microsoft.Agents.AI` (not the Hosting package).
 - `AgentSessionStateBag.Count` available; `AgentSessionStateBag.Serialize()` uses its own `AgentAbstractionsJsonUtilities.DefaultOptions`.
-
-### MEAI v10 Breaking Changes (relative to old MEAI APIs)
-- `IChatClient.CompleteAsync` → `GetResponseAsync` (returns `Task<ChatResponse>`)
-- `ChatCompletion` → `ChatResponse`
-- `StreamingChatCompletionUpdate` → `ChatResponseUpdate`
 
 ### Key Type Locations (gotchas)
 - `RpcException` — `Temporalio.Exceptions` (NOT `Grpc.Core`)
@@ -269,13 +232,12 @@ Internal types accessible in tests: `ExecuteAgentResult`, `ExecuteAgentInput`.
 Build automation uses [`just`](https://just.systems). All recipes in `justfile`. .NET SDK pinned via `global.json` (10.0.x). Versioning via `minver-cli` (local `dotnet tool restore`).
 
 ```bash
+just --list             # All recipes
 just build              # Restore + Release build (default)
 just test-unit-all      # All unit tests (415) — no server required
 just test-integration   # Agents integration (53) — embedded server
 just test-integration-ai # AI integration (13) — embedded server
 just pack               # clean → build → pack → artifacts/packages/*.nupkg
-just ci                 # Full local pipeline (mirrors GitHub Actions)
-just --list             # All recipes
 ```
 
 **Versions** auto-derive from git tags via MinVer: exactly on `vX.Y.Z` tag → `X.Y.Z`; N commits after → `X.Y.(Z+1)-preview.N`. Cut a release with `git tag -a vX.Y.Z -m "..."` then `just pack`.
@@ -359,7 +321,7 @@ External Caller / Client
 
 - **Temporal Documentation**: https://docs.temporal.io/
 - **Temporal .NET SDK**: https://github.com/temporalio/sdk-dotnet
-- **Microsoft Agent Framework**: https://github.com/microsoft/agents
+- **Microsoft Agent Framework**: https://github.com/microsoft/agent-framework
 
 ### Temporalio.Extensions.Agents (MAF)
 
