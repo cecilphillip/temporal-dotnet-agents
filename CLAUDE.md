@@ -12,9 +12,6 @@ This document gives load-bearing project context: structure, gotchas, behavioral
 
 - **Language**: C# (.NET 10.0)
 - **Solution File**: `TemporalAgents.slnx` (.slnx format, not .sln)
-- **Status**: 415 unit tests + 66 integration tests (481 total, all pass)
-  - Agents: 225 unit + 53 integration; AI: 190 unit + 13 integration
-- **Key Pattern**: `[WorkflowUpdate]` replaces Signal+Query+polling for request/response
 
 ---
 
@@ -61,12 +58,7 @@ Use `Glob` / `ls` to discover specific files. Notable types and their locations 
 
 **Context detection**: All middleware (`DurableChatClient`, `DurableAIFunction`, `DurableEmbeddingGenerator`) uses `Workflow.InWorkflow` as the dispatch guard. `false` = pass through; `true` = dispatch as Temporal activity.
 
-**HITL** (external system):
-```csharp
-var pending = await sessionClient.GetPendingApprovalAsync(conversationId);
-await sessionClient.SubmitApprovalAsync(conversationId,
-    new DurableApprovalDecision { RequestId = pending!.RequestId, Approved = true });
-```
+**HITL**: see `docs/how-to/MEAI/hitl-patterns.md`. Activity timeout on the underlying `[WorkflowUpdate]` must accommodate human review time.
 
 **Activity summaries** (auto-populated for the Temporal Web UI):
 - Chat: `chatOptions.ModelId`
@@ -91,14 +83,7 @@ For full API surface, see `docs/how-to/MEAI/usage.md`.
 - `services.AddHostedTemporalWorker(...).AddTemporalAgents(opts => { opts.AddAIAgent(agent); opts.EnableSearchAttributes = true; })`
 - `services.AddHostedTemporalWorker(...).AddWorkerPlugin(new TemporalAgentsPlugin(opts => ...))` — `[Experimental("TA001")]`. Idempotent if mixed with `AddTemporalAgents()`.
 
-**Configuration knobs on `TemporalAgentsOptions`**:
-
-| Option | Type | Default | Notes |
-|---|---|---|---|
-| `EnableSearchAttributes` | `bool` | `false` | Opt in to upsert `AgentName`, `SessionCreatedAt`, `TurnCount`. Pre-register on production clusters. |
-| `MaxEntryCount` | `int` | `1000` | `DurableSessionEntry` cap before continue-as-new. Renamed from `MaxHistorySize` in 0.2.0. |
-| `HistoryReducer` | `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` | `null` | Trim strategy at CAN boundaries. Operates on entries (preserves per-turn `Usage` / `CorrelationId`) since 0.3.0. |
-| `RetryPolicy` | `RetryPolicy?` | `null` | Override the default retry policy. |
+**Configuration**: see `docs/how-to/MAF/usage.md` for the full `TemporalAgentsOptions` reference (`EnableSearchAttributes`, `MaxEntryCount`, `HistoryReducer`, `RetryPolicy`, etc.). Names worth knowing for migration: `MaxHistorySize` → `MaxEntryCount` in 0.2.0; `HistoryReducer` is `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` since 0.3.0 (operates on entries, not flat messages).
 
 **Two agent types** (use the right one for context):
 - `TemporalAIAgent` — workflow-context sub-agent. Access via `TemporalWorkflowExtensions.GetAgent("Name")`.
@@ -119,13 +104,7 @@ var results = await TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync(new[
 });
 ```
 
-**HITL** (from inside an agent tool — runs in activity context):
-```csharp
-var decision = await TemporalAgentContext.Current.RequestApprovalAsync(
-    new DurableApprovalRequest { RequestId = Guid.NewGuid().ToString("N"), Description = "Delete records — Irreversible." });
-if (!decision.Approved) throw new OperationCanceledException("Rejected.");
-```
-Activity timeout on `RequestApprovalAsync` must accommodate human review time.
+**HITL**: see `docs/how-to/MAF/hitl-patterns.md`. Two flows — from inside a tool (activity context) via `TemporalAgentContext.Current.RequestApprovalAsync(...)`; from external systems via `client.GetPendingApprovalAsync` + `SubmitApprovalAsync`. Activity timeout must accommodate human review time.
 
 **StateBag persistence** (`AgentSessionStateBag` for `AIContextProvider` like `Mem0Provider`):
 - Serialized after each turn via `session.SerializeStateBag()`
@@ -186,25 +165,14 @@ As of Layer 3, `AgentWorkflow : DurableChatWorkflowBase<AgentResponse>`. The sha
 
 ---
 
-## Testing Patterns
+## Testing Gotchas
 
-**Unit tests (415 total — 225 Agents + 190 AI)**:
-- xUnit `[Fact]` attributes
-- `Assert.Throws<T>` requires **exact** type, not subtype (use `Assert.Throws<ArgumentNullException>` for null, not `ArgumentException`)
-- Hand-written stubs/fakes preferred over Moq
-- `StubAIAgent` — `IAIAgent` stub returning `TemporalAgentSession(TemporalAgentSessionId.WithRandomKey(...))`
-- `TestChatClient` — `IChatClient` stub returning `"Response: {lastMessage}"` with token counts
+For full testing patterns, see `docs/how-to/MAF/testing-agents.md` and `docs/how-to/MEAI/testing.md`. Cross-cutting gotchas worth knowing here:
 
-**Integration tests (66 total — 53 Agents + 13 AI)**:
-- Both suites use `WorkflowEnvironment.StartLocalAsync()` (embedded server — no external process)
-- Agents tests use `TestEnvironmentHelper.StartLocalAsync()` to pre-register `AgentName` / `SessionCreatedAt` / `TurnCount` search attributes — only required when `EnableSearchAttributes = true`. Bare `WorkflowEnvironment.StartLocalAsync()` works otherwise.
-- AI tests use bare `WorkflowEnvironment.StartLocalAsync()` — no custom search attributes.
-
-**InternalsVisibleTo** (in `.csproj`):
-```xml
-<InternalsVisibleTo Include="Temporalio.Extensions.Agents.Tests" />
-```
-Internal types accessible in tests: `ExecuteAgentResult`, `ExecuteAgentInput`.
+- **`Assert.Throws<T>` requires exact type, not subtype.** Use `Assert.Throws<ArgumentNullException>` for null, not `ArgumentException`. xUnit will fail the test if the thrown exception is a subtype of the expected.
+- **Hand-written stubs preferred** over FakeItEasy/Moq in this project. See `StubAIAgent` and `TestChatClient` in the test helpers.
+- **Search-attribute pre-registration is conditional.** Agents integration tests only need `TestEnvironmentHelper.StartLocalAsync()` (which pre-registers `AgentName`/`SessionCreatedAt`/`TurnCount`) when `EnableSearchAttributes = true`. Bare `WorkflowEnvironment.StartLocalAsync()` works otherwise. AI integration tests never need pre-registration.
+- **Both suites use embedded server** — `WorkflowEnvironment.StartLocalAsync()`. No external `temporal server start-dev` process.
 
 ---
 
@@ -269,34 +237,6 @@ dotnet run --project samples/MAF/{BasicAgent,WorkflowOrchestration,EvaluatorOpti
 # SplitWorkerClient — Worker first, then Client in a separate terminal
 dotnet run --project samples/MAF/SplitWorkerClient/Worker/Worker.csproj
 dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
-```
-
----
-
-## Architecture Diagram
-
-```
-External Caller / Client
-        │ GetTemporalAgentProxy(name) │ ITemporalAgentClient.RunAsync / SubmitApproval
-        ▼                              ▼
-  TemporalAIAgentProxy         DefaultTemporalAgentClient
-        │                              │
-        └─────── ExecuteUpdateAsync ───┘
-                       ▼
-  AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
-    • _history: List<DurableSessionEntry>      (inherited)
-    • _currentStateBag                         (subclass)
-    • DurableApprovalMixin                     (inherited)
-    • [WorkflowUpdate("Run")] RunAgentAsync    (subclass)
-    • [WorkflowSignal("RunFireAndForget")]     (subclass)
-    • RequestApprovalAsync / SubmitApprovalAsync (inherited)
-                       │ ExecuteActivityAsync
-                       ▼
-  AgentActivities.ExecuteAgentAsync
-    • restores StateBag from input
-    • emits agent.turn span (token counts, correlation ID)
-    • calls real AIAgent (ChatClientAgent)
-    • serializes updated StateBag into result
 ```
 
 ---
