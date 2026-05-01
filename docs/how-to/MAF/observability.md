@@ -287,6 +287,12 @@ This catches agent invocation failures at the outermost layer — including work
 
 Compare `agent.client.send` duration against `agent.turn` duration. The difference is the Temporal overhead (workflow scheduling, activity dispatch, serialization). In healthy systems this overhead is typically < 100ms; significantly higher values may indicate Temporal server pressure or large payload serialization.
 
+### Per-LLM-Call Visibility
+
+The `agent.turn` span captures the whole turn — one LLM call plus any tool rounds the model triggers. To go finer and see each individual LLM round (request, response, token usage, finish reason), wrap the inner `IChatClient` with a `DelegatingChatClient` decorator and register it via the `clientFactory` parameter of `AsAIAgent(...)`.
+
+This is a doc-only pattern with no library opt-in flag. See [Per-LLM-Call Interception via `ChatClientFactory`](./llm-call-interception.md) for the full guide. It is the answer to "I want more visibility into when agents call the model and execute tools" — and it composes cleanly with the rest of the OTel setup described above.
+
 ---
 
 ## References

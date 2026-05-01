@@ -269,6 +269,7 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 - **Routing Patterns**: `docs/how-to/MAF/routing.md`
 - **Testing Agents**: `docs/how-to/MAF/testing-agents.md`
 - **Observability**: `docs/how-to/MAF/observability.md`
+- **LLM-Call Interception**: `docs/how-to/MAF/llm-call-interception.md`
 - **Scheduling**: `docs/how-to/MAF/scheduling.md`
 - **Structured Output**: `docs/how-to/MAF/structured-output.md`
 - **HITL Patterns**: `docs/how-to/MAF/hitl-patterns.md`

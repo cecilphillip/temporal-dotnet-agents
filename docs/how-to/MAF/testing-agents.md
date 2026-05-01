@@ -24,7 +24,7 @@ The test suite is split into two projects:
 
 **General principles:**
 
-- **Hand-written test doubles** over mocking frameworks — `StubAIAgent` and `CapturingChatClient` are preferred over Moq
+- **Hand-written test doubles** over mocking frameworks — `StubAIAgent` and `CapturingChatClient` are preferred over FakeItEasy
 - **xUnit** with `[Fact]` attributes and `Assert.*` assertions
 - **Exact exception types** — `Assert.Throws<T>` matches the exact type (`ArgumentNullException`, not `ArgumentException`)
 - **FakeItEasy** for interfaces that can't easily be stubbed (e.g., `ITemporalClient`)

@@ -185,6 +185,84 @@ model adds implementation complexity and the `AIContextProvider` constraint desc
 If per-tool granularity is needed today, use `Temporalio.Extensions.AI` with `AddDurableTools()`
 (Mode 2 above) and compose with MAF-specific state via `TemporalAgentContext.GetService<T>()`.
 
+If the goal is **per-LLM-call observability** (logs, spans, metrics, custom telemetry around each
+model call) — not per-tool durability — that capability is already available today via the
+`ChatClientFactory` pattern; no library change is required. See the how-to guide at
+`docs/how-to/MAF/llm-call-interception.md`. Maintainers triaging requests for granular dispatch
+should rule out the observability case first.
+
+### Exit criteria — when would granular dispatch be added?
+
+The gate above does not say "never." It says "not yet, and not without a concrete reason." This
+section makes the bar visible so a future maintainer can evaluate a request against a checklist
+rather than re-litigating the design from scratch.
+
+**Granular dispatch becomes a candidate for implementation when at least one of the following is
+true and documented:**
+
+1. **A documented production cost or billing incident.** A real failure where a costly tool
+   error caused a full-turn replay — re-billing the LLM call plus tools 1..N-1 — at a scale that
+   has financial impact. The bar is concrete, not hypothetical:
+   - The incident is reproducible in a test harness (or has at least one customer-supplied trace)
+     showing the wasted spend.
+   - The waste exceeds either ~$100 of recoverable LLM/tool spend per failure occurrence, or
+     occurs at a frequency above ~10 full-turn replays per week on a single agent.
+   - The user has already considered narrower mitigations (smaller turns, fewer tools per turn,
+     more aggressive activity retry policy) and explained why they are insufficient.
+
+2. **A long-running tool that exceeds the activity timeout because the timeout is shared across
+   all tools in the turn.** The full-turn `StartToCloseTimeout` and `HeartbeatTimeout` apply to
+   the entire LLM-plus-tools loop. If a single tool legitimately needs hours but the turn as a
+   whole would not, the user is forced to choose between an unreasonably large turn timeout
+   (masking real failures elsewhere) and breaking the long-running work out of the agent loop.
+   Per-tool dispatch would let each tool have its own timeout.
+
+3. **An audit or compliance requirement for per-tool history with independent retry attempts
+   visible in the workflow event history.** Some regulated environments require that each tool
+   invocation produce a separate, immutable event-history entry with its own retry counter and
+   outcome. The full-loop model produces a single activity entry per turn, with internal tool
+   rounds invisible in event history. If a customer can point to a written compliance requirement
+   (SOX, HIPAA, FedRAMP, internal audit policy) that mandates per-tool granularity, that is a
+   sufficient driver.
+
+4. **A request from a user who has already adopted the constraint.** Specifically: the user has
+   migrated off stateful `AIContextProvider` implementations (no `Mem0Provider` or similar that
+   would double-fire in a workflow-managed loop), is using `ChatClientAgent` (not `A2AAgent` or
+   graph-workflow agents), and explicitly accepts the documented limitation that granular
+   dispatch is incompatible with non-`ChatClientAgent` types. This is the only criterion that
+   does not require an external incident — but it requires the user to have already done the
+   migration work, not merely to want the feature.
+
+**Negative criteria — what would NOT unlock this:**
+
+- "It feels architecturally cleaner." Architectural restlessness is the failure mode this gate
+  exists to prevent.
+- "We should be more like `Temporalio.Extensions.AI` Mode 2 (`AddDurableTools()`)." Mode 2 is
+  already reachable from MAF code via `Temporalio.Extensions.AI` directly; symmetry between
+  libraries is not, by itself, a reason to add a feature.
+- Speculative scaling concerns ("at high enough volume this could matter"). Real volume that
+  matters today qualifies under criterion 1; speculative volume does not.
+- A user who wants "more visibility into LLM calls" but has not yet tried `ChatClientFactory`
+  interception. That is criterion-zero — if interception solves the visibility problem, the user
+  did not need granular dispatch at all. See `docs/how-to/MAF/llm-call-interception.md`.
+- A user who wants per-tool retry policies but has not yet considered tool-level retry inside
+  the tool implementation (e.g., Polly inside the function body). The activity-level retry policy
+  is one knob; the tool-internal retry policy is another, and is reachable today.
+
+**What would NOT be enough on its own:**
+
+- A single user request without an incident or compliance driver.
+- A benchmark showing speed differences. Granular dispatch trades latency for durability
+  granularity; it does not improve throughput in the steady state.
+- An upstream MAF API change that hypothetically *could* be used by a granular implementation.
+  The constraint discussed above is `AIContextProvider.InvokingAsync` semantics, not API surface.
+
+**Process when the bar is met:** Open an issue documenting which criterion the request satisfies,
+quote the incident report or compliance citation, and propose a design that explicitly handles
+the `AIContextProvider` constraint (either documents the incompatibility with stateful providers,
+or uses the `ChatClientFactory` pattern to substitute a stripped client for the LLM-only rounds).
+Then revisit Tier 2 of the recommendation in the team's research log.
+
 ---
 
 ## MAF Library Evolution
@@ -245,4 +323,4 @@ This document does not commit to any of the above. They are listed for completen
 
 ---
 
-_Last updated: 2026-04-30_
+_Last updated: 2026-04-30 — added exit criteria for granular tool dispatch and pointer to LLM-call interception how-to._

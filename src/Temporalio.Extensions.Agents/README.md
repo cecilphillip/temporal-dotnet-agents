@@ -178,6 +178,7 @@ The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) are defined
 - [Routing Patterns](../../docs/how-to/MAF/routing.md) — static and dynamic workflow-based routing
 - [Testing Agents](../../docs/how-to/MAF/testing-agents.md) — unit and integration testing patterns
 - [Observability](../../docs/how-to/MAF/observability.md) — OpenTelemetry spans, search attributes, and operational queries
+- [LLM-Call Interception](../../docs/how-to/MAF/llm-call-interception.md) — per-LLM-call observability via `ChatClientFactory`
 - [Scheduling](../../docs/how-to/MAF/scheduling.md) — recurring and one-time agent runs, lifecycle management
 - [Structured Output](../../docs/how-to/MAF/structured-output.md) — typed responses with `RunAsync<T>`, fence stripping, and retry
 - [Human-in-the-Loop](../../docs/how-to/MAF/hitl-patterns.md) — approval gates, dashboards, timeouts, and testing

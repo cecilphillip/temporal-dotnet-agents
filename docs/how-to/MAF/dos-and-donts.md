@@ -245,6 +245,23 @@ builder.AddSource(
 
 **Why:** Each source emits a different layer of the trace hierarchy. Missing one creates gaps in your distributed traces. See [Observability](./observability.md) for the full setup.
 
+### Do reach for `ChatClientFactory` interception when you need per-LLM-call visibility
+
+The `agent.turn` span captures one whole turn (LLM call plus all tool rounds). If you need to see each individual LLM request/response — token counts per round, finish reason per round, the exact tool-call payloads — wrap the inner `IChatClient` via the `clientFactory` parameter of `AsAIAgent(...)`:
+
+```csharp
+var agent = chatClient.AsAIAgent(
+    name: "Assistant",
+    instructions: "...",
+    tools: [...],
+    clientFactory: client => client.AsBuilder()
+        .Use(inner => new LoggingChatClient(inner, logger))
+        .UseFunctionInvocation()
+        .Build());
+```
+
+**Why:** Per-LLM-call observability is a different problem from per-tool durability. Adding a logging decorator changes nothing about Temporal's checkpoint shape; it just adds round-level detail to your existing telemetry. See [LLM-Call Interception](./llm-call-interception.md) for the full guide and [`docs/design-decisions.md`](../../design-decisions.md) for why granular tool dispatch is deferred.
+
 ### Do opt in to search attributes when you need them
 
 Search attribute upserts are disabled by default. Set `EnableSearchAttributes = true` in `TemporalAgentsOptions` to enable them:
@@ -386,6 +403,7 @@ opts.AddScheduledAgentRun("Agent", "my-schedule", request, updatedSpec);
 - [Durability & Determinism](../architecture/MAF/durability-and-determinism.md) — replay guarantees and failure scenarios
 - [Routing Patterns](./routing.md) — safe vs. unsafe registry access contexts
 - [Observability](./observability.md) — OTel setup and span hierarchy
+- [LLM-Call Interception](./llm-call-interception.md) — per-LLM-call decorators via `ChatClientFactory`
 - [Testing Agents](./testing-agents.md) — test patterns and fixtures
 - [Scheduling](./scheduling.md) — schedule lifecycle and pitfalls
 
