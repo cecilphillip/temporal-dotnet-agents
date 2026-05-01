@@ -214,17 +214,17 @@ new DurableApprovalDecision
 }
 ```
 
-### ActivityStartToCloseTimeout
+### ActivityTimeout
 
 The activity that hosts the tool **also** has a timeout. It must exceed the `ApprovalTimeout`, otherwise the activity times out before the human can respond:
 
 ```csharp
-opts.ActivityStartToCloseTimeout = TimeSpan.FromHours(24); // must exceed ApprovalTimeout
-opts.ActivityHeartbeatTimeout    = TimeSpan.FromMinutes(5);
-opts.ApprovalTimeout             = TimeSpan.FromHours(4);
+opts.ActivityTimeout    = TimeSpan.FromHours(24); // must exceed ApprovalTimeout
+opts.HeartbeatTimeout   = TimeSpan.FromMinutes(5);
+opts.ApprovalTimeout    = TimeSpan.FromHours(4);
 ```
 
-**Rule of thumb:** `ActivityStartToCloseTimeout` > `ApprovalTimeout` + expected LLM processing time.
+**Rule of thumb:** `ActivityTimeout` > `ApprovalTimeout` + expected LLM processing time.
 
 ### Continue-as-New
 
@@ -452,8 +452,8 @@ builder.Services
     .AddHostedTemporalWorker("hitl-sample")
     .AddTemporalAgents(opts =>
     {
-        opts.ActivityStartToCloseTimeout = TimeSpan.FromHours(24);
-        opts.ActivityHeartbeatTimeout    = TimeSpan.FromMinutes(5);
+        opts.ActivityTimeout    = TimeSpan.FromHours(24);
+        opts.HeartbeatTimeout   = TimeSpan.FromMinutes(5);
         opts.AddAIAgent(emailAgent, timeToLive: TimeSpan.FromHours(2));
     });
 ```

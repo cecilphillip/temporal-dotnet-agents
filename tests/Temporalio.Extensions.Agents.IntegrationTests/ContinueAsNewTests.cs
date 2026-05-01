@@ -182,8 +182,8 @@ public class ContinueAsNewTests : IAsyncLifetime
             .AddTemporalAgents(options =>
             {
                 options.AddAIAgent(agent, timeToLive: TimeSpan.FromMinutes(10));
-                options.ActivityStartToCloseTimeout = TimeSpan.FromSeconds(3);
-                options.ActivityHeartbeatTimeout = TimeSpan.FromSeconds(2);
+                options.ActivityTimeout = TimeSpan.FromSeconds(3);
+                options.HeartbeatTimeout = TimeSpan.FromSeconds(2);
             });
 
         using var extraHost = builder.Build();

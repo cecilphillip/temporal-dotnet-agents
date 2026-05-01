@@ -126,9 +126,9 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         // input already carries the originating RunRequest separately (it embeds tools,
         // response format, orchestration ID, etc.); reconstruct the RunRequest from the
         // typed agent request entry so callers do not have to thread it through.
-        // The `activityOptions` argument from the base is MEAI-shaped (uses
-        // DurableChatWorkflowInput.ActivityTimeout); ignore it and build a MAF-shaped
-        // ActivityOptions inside ExecuteAgentTurnAsync instead.
+        // The `activityOptions` argument from the base carries StartToClose/Heartbeat values;
+        // build MAF-flavored ActivityOptions inside ExecuteAgentTurnAsync to add the agent
+        // Summary and RetryPolicy on top.
         _ = activityOptions;
         var agentRequestEntry = (AgentSessionRequest)requestEntry;
         var runRequest = ToRunRequest(agentRequestEntry);
@@ -154,8 +154,6 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             AgentName = _input.AgentName,
             TaskQueue = _input.TaskQueue,
             CarriedStateBag = _currentStateBag,
-            ActivityStartToCloseTimeout = _input.ActivityStartToCloseTimeout,
-            ActivityHeartbeatTimeout = _input.ActivityHeartbeatTimeout,
             RetryPolicy = _input.RetryPolicy,
 
             // Inherited fields — sourced from the base's freshly constructed `input` so the
@@ -168,9 +166,7 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             HistoryReducer = input.HistoryReducer,
             OriginalCreatedAt = input.OriginalCreatedAt,
 
-            // ActivityTimeout / HeartbeatTimeout on the base are MEAI-shaped; AgentWorkflow uses
-            // the *AgentActivityStartToCloseTimeout / *HeartbeatTimeout MAF-specific overrides.
-            // Carry forward whatever was provided.
+            // Activity timeouts are now inherited from DurableChatWorkflowInput — carry forward.
             ActivityTimeout = input.ActivityTimeout,
             HeartbeatTimeout = input.HeartbeatTimeout,
         };
@@ -230,13 +226,13 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
 
     private async Task<AgentResponse> ExecuteAgentTurnAsync(RunRequest runRequest)
     {
-        // Build MAF-shaped activity options from the typed `_input` (StartToClose / Heartbeat
-        // come from AgentWorkflowInput-only fields; the base's MEAI-shaped options pass-through
-        // is intentionally ignored here).
+        // Build MAF-shaped activity options from the typed `_input`. Activity timeouts come from
+        // the base DurableChatWorkflowInput; MAF-specific extras (Summary, RetryPolicy) are
+        // layered on here.
         var activityOptions = new ActivityOptions
         {
-            StartToCloseTimeout = _input!.ActivityStartToCloseTimeout ?? TimeSpan.FromMinutes(30),
-            HeartbeatTimeout = _input!.ActivityHeartbeatTimeout ?? TimeSpan.FromMinutes(5),
+            StartToCloseTimeout = _input!.ActivityTimeout,
+            HeartbeatTimeout = _input!.HeartbeatTimeout,
             Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
             RetryPolicy = _input!.RetryPolicy,
         };

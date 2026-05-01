@@ -107,7 +107,7 @@ public sealed class TemporalAgentContext
     /// </code>
     /// <para>
     /// <b>Timeout note:</b> the calling activity blocks for the duration of human review.
-    /// Ensure <c>ActivityStartToCloseTimeout</c> is set to exceed your expected review time
+    /// Ensure <c>ActivityTimeout</c> is set to exceed your expected review time
     /// (e.g. <c>TimeSpan.FromHours(24)</c>) on the agent's <see cref="TemporalAgentsOptions"/>.
     /// </para>
     /// <para>

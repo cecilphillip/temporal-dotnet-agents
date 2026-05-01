@@ -238,8 +238,8 @@ else if (Workflow.ContinueAsNewSuggested && !_shutdownRequested)
             TimeToLive = input.TimeToLive,
             CarriedHistory = carriedHistory,
             CarriedStateBag = carriedStateBag,
-            ActivityStartToCloseTimeout = input.ActivityStartToCloseTimeout,
-            ActivityHeartbeatTimeout = input.ActivityHeartbeatTimeout,
+            ActivityTimeout = input.ActivityTimeout,
+            HeartbeatTimeout = input.HeartbeatTimeout,
             ApprovalTimeout = input.ApprovalTimeout
         }));
 }

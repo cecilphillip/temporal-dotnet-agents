@@ -29,10 +29,10 @@ public class ErrorHandlingTests : IClassFixture<IntegrationTestFixture>
         _output = output;
     }
 
-    // ── Activity StartToClose Timeout ────────────────────────────────────────
+    // ── Activity Timeout (StartToClose) ──────────────────────────────────────
 
     [Fact]
-    public async Task ActivityStartToCloseTimeout_RetriesAndEventuallySucceeds()
+    public async Task ActivityTimeout_RetriesAndEventuallySucceeds()
     {
         // Agent delays 60s on first call; activity timeout is 2s.
         // First attempt: agent starts delaying → 2s timeout fires → activity cancelled → retry.
@@ -47,7 +47,7 @@ public class ErrorHandlingTests : IClassFixture<IntegrationTestFixture>
             .AddTemporalAgents(options =>
             {
                 options.AddAIAgent(agent);
-                options.ActivityStartToCloseTimeout = TimeSpan.FromSeconds(2);
+                options.ActivityTimeout = TimeSpan.FromSeconds(2);
             });
 
         using var host = builder.Build();
@@ -103,9 +103,9 @@ public class ErrorHandlingTests : IClassFixture<IntegrationTestFixture>
             .AddTemporalAgents(options =>
             {
                 options.AddAIAgent(agent);
-                // Leave StartToClose at a generous value so it doesn't interfere.
-                options.ActivityStartToCloseTimeout = TimeSpan.FromMinutes(5);
-                options.ActivityHeartbeatTimeout = TimeSpan.FromSeconds(2);
+                // Leave the activity timeout at a generous value so it doesn't interfere.
+                options.ActivityTimeout = TimeSpan.FromMinutes(5);
+                options.HeartbeatTimeout = TimeSpan.FromSeconds(2);
             });
 
         using var host = builder.Build();

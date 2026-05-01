@@ -66,6 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the base. MAF-specific fields (`AgentName`, `TaskQueue`,
   `CarriedStateBag`, `RetryPolicy`) stay on the subclass.
 
+- **`TemporalAgentsOptions` and `AgentWorkflowInput` timeout property names harmonized
+  with the AI library.** `ActivityStartToCloseTimeout` → `ActivityTimeout`,
+  `ActivityHeartbeatTimeout` → `HeartbeatTimeout`. The duplicate declarations on
+  `AgentWorkflowInput` are removed; the inherited fields from
+  `DurableChatWorkflowInput` provide the canonical shape. Type changes from
+  `TimeSpan?` (nullable, no default) to `TimeSpan` (non-null, defaults `5 min` /
+  `2 min` matching the AI library).
+
+  **Migration:** rename `opts.ActivityStartToCloseTimeout = X` → `opts.ActivityTimeout = X`
+  and `opts.ActivityHeartbeatTimeout = X` → `opts.HeartbeatTimeout = X`. Callers that
+  relied on the previous null-default semantics now see explicit 5 min / 2 min defaults.
+
 ### Changed
 
 - **`AgentWorkflow` now inherits from `DurableChatWorkflowBase<AgentResponse>`.**

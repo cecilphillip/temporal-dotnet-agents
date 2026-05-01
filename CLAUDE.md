@@ -249,7 +249,7 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 | "Agent not registered" | Verify `.AddTemporalAgents()` includes the agent |
 | `Assert.Throws<ArgumentException>` fails | xUnit requires exact type — use `ArgumentNullException` for null, `ArgumentException` for empty |
 | `GetTypeInfo metadata not provided` for `TemporalAgentSession` | Don't serialize via `DefaultOptions`; use `StateBag.Serialize()` |
-| Activity timeout (HITL) | Increase `ActivityStartToCloseTimeout` to accommodate human review time |
+| Activity timeout (HITL) | Increase `ActivityTimeout` to accommodate human review time |
 | OTel spans missing | Register all 4 `ActivitySource` names with the tracer provider |
 | Worker won't start | `temporal server start-dev` running on `localhost:7233`? |
 | Search attributes missing in UI | `opts.EnableSearchAttributes = true` (opt-in, default `false`); pre-register on production clusters |

@@ -44,8 +44,8 @@ public class TimeoutConfigurationTests : IClassFixture<IntegrationTestFixture>
             .AddTemporalAgents(options =>
             {
                 options.AddAIAgent(new Helpers.EchoAIAgent("TimeoutAgent"));
-                options.ActivityStartToCloseTimeout = TimeSpan.FromMinutes(2);
-                options.ActivityHeartbeatTimeout = TimeSpan.FromSeconds(30);
+                options.ActivityTimeout = TimeSpan.FromMinutes(2);
+                options.HeartbeatTimeout = TimeSpan.FromSeconds(30);
             });
 
         using var host = builder.Build();
@@ -87,8 +87,7 @@ public class TimeoutConfigurationTests : IClassFixture<IntegrationTestFixture>
             .AddTemporalAgents(options =>
             {
                 options.AddAIAgent(new Helpers.EchoAIAgent("DefaultTimeoutAgent"));
-                // ActivityStartToCloseTimeout is null → workflow uses 30-minute default
-                // ActivityHeartbeatTimeout is null → workflow uses 5-minute default
+                // ActivityTimeout / HeartbeatTimeout default to 5 minutes / 2 minutes when unset.
             });
 
         using var host = builder.Build();

@@ -8,7 +8,7 @@ This sample demonstrates:
 - `TemporalAgentContext.Current.RequestApprovalAsync()` suspending a tool inside an activity
 - `ITemporalAgentClient.GetPendingApprovalAsync()` polling for pending approvals from outside the workflow
 - `ITemporalAgentClient.SubmitApprovalAsync()` unblocking the workflow with a decision
-- `ActivityStartToCloseTimeout` set to 24 hours to accommodate human review time
+- `ActivityTimeout` set to 24 hours to accommodate human review time
 
 ## Architecture
 
@@ -41,7 +41,7 @@ proxy.RunAsync(messages, session)        ← [WorkflowUpdate] to AgentWorkflow
 - **Suspension without polling.** The workflow blocks on `WaitConditionAsync` — no spin-wait, no timer. The worker thread is released and other workflows continue normally while waiting.
 - **`GetPendingApprovalAsync` is a `[WorkflowQuery]`.** Queries never block the workflow and are safe to call as frequently as needed. This sample polls every second from outside the workflow while the agent task is in-flight.
 - **`SubmitApprovalAsync` is a `[WorkflowUpdate]`.** Strongly consistent: it validates the `RequestId` matches the pending request before unblocking, preventing stale or duplicate decisions.
-- **Activity timeout must cover human review time.** `ActivityStartToCloseTimeout = TimeSpan.FromHours(24)` gives reviewers a full day. A heartbeat timeout of 5 minutes ensures the worker is still alive. Both are set in `AddTemporalAgents()`.
+- **Activity timeout must cover human review time.** `ActivityTimeout = TimeSpan.FromHours(24)` gives reviewers a full day. A heartbeat timeout of 5 minutes ensures the worker is still alive. Both are set in `AddTemporalAgents()`.
 
 ## Getting Started
 

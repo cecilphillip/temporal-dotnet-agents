@@ -31,18 +31,6 @@ internal sealed class AgentWorkflowInput : DurableChatWorkflowInput
     public JsonElement? CarriedStateBag { get; init; }
 
     /// <summary>
-    /// Gets the <c>StartToCloseTimeout</c> for agent activity invocations.
-    /// When <see langword="null"/>, the workflow falls back to a 30-minute default.
-    /// </summary>
-    public TimeSpan? ActivityStartToCloseTimeout { get; init; }
-
-    /// <summary>
-    /// Gets the <c>HeartbeatTimeout</c> for agent activity invocations.
-    /// When <see langword="null"/>, the workflow falls back to a 5-minute default.
-    /// </summary>
-    public TimeSpan? ActivityHeartbeatTimeout { get; init; }
-
-    /// <summary>
     /// Gets the retry policy applied to every agent activity invocation.
     /// When <see langword="null"/>, Temporal SDK defaults apply (unbounded retries).
     /// </summary>

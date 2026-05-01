@@ -58,10 +58,8 @@ internal sealed class AgentJobWorkflow
             (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
             new ActivityOptions
             {
-                StartToCloseTimeout = input.ActivityStartToCloseTimeout
-                    ?? TimeSpan.FromMinutes(30),
-                HeartbeatTimeout = input.ActivityHeartbeatTimeout
-                    ?? TimeSpan.FromMinutes(5),
+                StartToCloseTimeout = input.ActivityTimeout,
+                HeartbeatTimeout = input.HeartbeatTimeout,
             });
     }
 }
@@ -314,10 +312,10 @@ Or programmatically via `GetAgentScheduleHandle("daily-summary").DeleteAsync()`.
 
 ### Activity Timeouts for Scheduled Runs
 
-`AgentJobWorkflow` inherits `ActivityStartToCloseTimeout` and `ActivityHeartbeatTimeout` from `TemporalAgentsOptions`. If your scheduled agent makes long-running tool calls, ensure the timeout is sufficient:
+`AgentJobWorkflow` inherits `ActivityTimeout` and `HeartbeatTimeout` from `TemporalAgentsOptions`. If your scheduled agent makes long-running tool calls, ensure the timeout is sufficient:
 
 ```csharp
-opts.ActivityStartToCloseTimeout = TimeSpan.FromMinutes(60);
+opts.ActivityTimeout = TimeSpan.FromMinutes(60);
 ```
 
 This timeout applies to both interactive and scheduled runs. There is currently no per-schedule timeout override — the global option is used.

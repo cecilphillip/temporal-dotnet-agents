@@ -300,13 +300,13 @@ workflow run.
 
 Every agent turn — one call to `RunAsync` — executes inside a Temporal activity. Two timeouts govern that activity:
 
-| Option                        | Default    | What it limits                                                                                           |
-|-------------------------------|------------|----------------------------------------------------------------------------------------------------------|
-| `ActivityStartToCloseTimeout` | 30 minutes | Total wall-clock time for one turn, including tool calls and retries                                     |
-| `ActivityHeartbeatTimeout`    | 5 minutes  | Maximum gap between heartbeats; Temporal retries the activity if exceeded (most relevant when streaming) |
+| Option              | Default   | What it limits                                                                                           |
+|---------------------|-----------|----------------------------------------------------------------------------------------------------------|
+| `ActivityTimeout`   | 5 minutes | Total wall-clock time for one turn, including tool calls and retries                                     |
+| `HeartbeatTimeout`  | 2 minutes | Maximum gap between heartbeats; Temporal retries the activity if exceeded (most relevant when streaming) |
 
-Both are nullable `TimeSpan?` on `TemporalAgentsOptions`. When `null`, the workflow falls back to the defaults shown
-above.
+Both are non-nullable `TimeSpan` properties on `TemporalAgentsOptions` with the defaults shown above. Override either
+to tune for slow models, long tool-call chains, or streaming workloads.
 
 ```csharp
 builder.Services
@@ -316,10 +316,10 @@ builder.Services
         opts.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1));
 
         // Increase for slow models or long tool-call chains
-        opts.ActivityStartToCloseTimeout = TimeSpan.FromMinutes(10);
+        opts.ActivityTimeout = TimeSpan.FromMinutes(10);
 
         // Increase if streaming heartbeats arrive slowly
-        opts.ActivityHeartbeatTimeout = TimeSpan.FromMinutes(2);
+        opts.HeartbeatTimeout = TimeSpan.FromMinutes(2);
     });
 ```
 
@@ -488,10 +488,10 @@ public class DataDeletionTool
 Because the tool runs inside a Temporal activity, the pause is fully durable. If the worker restarts while waiting for
 approval, the activity resumes from exactly the same point once a new worker picks it up.
 
-Set `ActivityStartToCloseTimeout` to a value that exceeds your expected review time:
+Set `ActivityTimeout` to a value that exceeds your expected review time:
 
 ```csharp
-opts.ActivityStartToCloseTimeout = TimeSpan.FromHours(24);
+opts.ActivityTimeout = TimeSpan.FromHours(24);
 ```
 
 ### Checking for Pending Approvals (External System)

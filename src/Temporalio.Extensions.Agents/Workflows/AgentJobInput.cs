@@ -19,16 +19,16 @@ internal sealed record AgentJobInput
     public required RunRequest Request { get; init; }
 
     /// <summary>
-    /// Gets the <c>StartToCloseTimeout</c> for the agent activity invocation.
-    /// When <see langword="null"/>, the workflow falls back to a 30-minute default.
+    /// Gets the activity timeout for the agent activity invocation.
+    /// Defaults to 5 minutes.
     /// </summary>
-    public TimeSpan? ActivityStartToCloseTimeout { get; init; }
+    public TimeSpan ActivityTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Gets the <c>HeartbeatTimeout</c> for the agent activity invocation.
-    /// When <see langword="null"/>, the workflow falls back to a 5-minute default.
+    /// Gets the heartbeat timeout for the agent activity invocation.
+    /// Defaults to 2 minutes.
     /// </summary>
-    public TimeSpan? ActivityHeartbeatTimeout { get; init; }
+    public TimeSpan HeartbeatTimeout { get; init; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// Gets the retry policy applied to the agent activity invocation.

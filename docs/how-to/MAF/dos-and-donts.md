@@ -191,25 +191,25 @@ var serializedBag = session.StateBag.Serialize();
 ### Do set appropriate timeouts for your use case
 
 ```csharp
-opts.ActivityStartToCloseTimeout = TimeSpan.FromMinutes(10); // for fast models
-opts.ActivityStartToCloseTimeout = TimeSpan.FromHours(24);   // for HITL approval
+opts.ActivityTimeout = TimeSpan.FromMinutes(10); // for fast models
+opts.ActivityTimeout = TimeSpan.FromHours(24);   // for HITL approval
 ```
 
-The default (30 minutes) is reasonable for most LLM calls, but HITL approval flows need much longer timeouts to accommodate human review time.
+The default (5 minutes) is reasonable for most LLM calls, but HITL approval flows need much longer timeouts to accommodate human review time.
 
-### Do set HeartbeatTimeout shorter than StartToCloseTimeout
+### Do set HeartbeatTimeout shorter than ActivityTimeout
 
 ```csharp
 // GOOD — heartbeats every 5 min, total timeout 30 min
-opts.ActivityStartToCloseTimeout = TimeSpan.FromMinutes(30);
-opts.ActivityHeartbeatTimeout    = TimeSpan.FromMinutes(5);
+opts.ActivityTimeout    = TimeSpan.FromMinutes(30);
+opts.HeartbeatTimeout   = TimeSpan.FromMinutes(5);
 
-// BAD — heartbeat timeout longer than start-to-close defeats the purpose
-opts.ActivityStartToCloseTimeout = TimeSpan.FromMinutes(5);
-opts.ActivityHeartbeatTimeout    = TimeSpan.FromMinutes(30);
+// BAD — heartbeat timeout longer than activity timeout defeats the purpose
+opts.ActivityTimeout    = TimeSpan.FromMinutes(5);
+opts.HeartbeatTimeout   = TimeSpan.FromMinutes(30);
 ```
 
-**Why:** `HeartbeatTimeout` detects stuck activities by checking for periodic progress signals. If it exceeds `StartToCloseTimeout`, the activity times out before a heartbeat check can trigger.
+**Why:** `HeartbeatTimeout` detects stuck activities by checking for periodic progress signals. If it exceeds `ActivityTimeout`, the activity times out before a heartbeat check can trigger.
 
 ### Do pass ActivityOptions when using GetAgent() for workflow sub-agents
 
@@ -390,7 +390,7 @@ opts.AddScheduledAgentRun("Agent", "my-schedule", request, updatedSpec);
 | Don't query agent registry in workflows | Determinism | Fatal |
 | Don't call `ActivitySource.StartActivity()` in workflows | Determinism | Fatal |
 | Register all 4 OTel sources | Observability | Silent data loss |
-| Set `ActivityStartToCloseTimeout` for HITL | Timeouts | Activity failure |
+| Set `ActivityTimeout` for HITL | Timeouts | Activity failure |
 | Don't reuse `TemporalAIAgent` instances | Sessions | Incorrect behavior |
 | Delete schedules before removing agents | Scheduling | Orphaned schedules |
 | Use `dotnet user-secrets` for secrets | Security | Credential leak |

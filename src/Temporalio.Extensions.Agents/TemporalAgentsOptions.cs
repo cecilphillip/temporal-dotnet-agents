@@ -32,22 +32,20 @@ public sealed class TemporalAgentsOptions
     public TimeSpan? DefaultTimeToLive { get; set; } = TimeSpan.FromDays(14);
 
     /// <summary>
-    /// Gets or sets the <c>StartToCloseTimeout</c> applied to every
+    /// Gets or sets the activity timeout applied to every
     /// <see cref="AgentActivities.ExecuteAgentAsync"/> activity invocation.
     /// This bounds the total wall-clock time allowed for one agent turn, including
-    /// any tool calls and retries within that turn.
-    /// When <see langword="null"/>, the workflow uses a 30-minute default.
+    /// any tool calls and retries within that turn. Defaults to 5 minutes.
     /// </summary>
-    public TimeSpan? ActivityStartToCloseTimeout { get; set; }
+    public TimeSpan ActivityTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Gets or sets the <c>HeartbeatTimeout</c> for agent activity invocations.
+    /// Gets or sets the heartbeat timeout for agent activity invocations.
     /// If the activity does not send a heartbeat within this interval Temporal
     /// considers it lost and schedules a retry. Relevant when streaming is enabled
-    /// because the activity heartbeats on each streamed chunk.
-    /// When <see langword="null"/>, the workflow uses a 5-minute default.
+    /// because the activity heartbeats on each streamed chunk. Defaults to 2 minutes.
     /// </summary>
-    public TimeSpan? ActivityHeartbeatTimeout { get; set; }
+    public TimeSpan HeartbeatTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// Gets or sets the maximum time the workflow will wait for a human to respond
