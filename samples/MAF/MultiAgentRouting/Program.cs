@@ -104,6 +104,8 @@ builder.Services
     })
     .AddWorkflow<RoutingWorkflow>()
     .AddWorkflow<ParallelAgentWorkflow>()
+    // Singleton: RoutingActivities is stateless (keyword scoring only), so one shared
+    // instance is safe and avoids unnecessary allocations on every activity execution.
     .AddSingletonActivities<RoutingActivities>();
 
 // ── Step 7: Start the host ────────────────────────────────────────────────────

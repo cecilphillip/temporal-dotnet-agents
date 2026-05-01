@@ -11,8 +11,9 @@ namespace WorkflowRouting;
 public class RoutingActivities(TemporalAgentsOptions options)
 {
     /// <summary>
-    /// Returns information about all registered agents.
-    /// The workflow uses these to build a context-aware routing prompt for the Classifier.
+    /// Returns descriptors for all registered agents that have a description.
+    /// Agents without a description (e.g. the Classifier) are excluded automatically,
+    /// so the LLM only sees routable specialist agents.
     /// </summary>
     /// <remarks>
     /// This is safe inside an activity because the result is recorded in Temporal's event
@@ -23,21 +24,10 @@ public class RoutingActivities(TemporalAgentsOptions options)
     [Activity("WorkflowRouting.GetAvailableAgents")]
     public AgentInfo[] GetAvailableAgents()
     {
-        // Map registered agent names to their descriptions.
-        // Descriptions are declared here alongside the names — they are not stored in
-        // TemporalAgentsOptions because routing metadata is a concern of the routing
-        // activity, not the core agent registry.
-        var descriptions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["OrdersAgent"]     = "Handles order tracking, returns, shipping status, and purchase questions.",
-            ["TechSupportAgent"] = "Handles technical issues, app crashes, error messages, and troubleshooting.",
-            ["GeneralAgent"]    = "Handles greetings, general inquiries, and anything else.",
-        };
-
-        return options.GetRegisteredAgentNames()
-            .Select(name => new AgentInfo(
-                name,
-                descriptions.GetValueOrDefault(name, $"Agent: {name}")))
+        // Descriptions are registered alongside the agent via AddAIAgent() — no local
+        // dictionary needed. Agents without a description (e.g. the Classifier) are excluded.
+        return options.GetAgentDescriptors()
+            .Select(d => new AgentInfo(d.Name, d.Description))
             .ToArray();
     }
 

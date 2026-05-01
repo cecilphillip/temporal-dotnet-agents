@@ -3,6 +3,7 @@ using Microsoft.Agents.AI;
 using Temporalio.Client.Schedules;
 using Temporalio.Common;
 using Temporalio.Extensions.AI;
+using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.Agents.Workflows;
 
 namespace Temporalio.Extensions.Agents;
@@ -17,6 +18,9 @@ public sealed class TemporalAgentsOptions
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Dictionary<string, TimeSpan?> _agentTimeToLive =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, string> _agentDescriptions =
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly List<ScheduleAgentRegistration> _scheduledRuns = [];
@@ -111,8 +115,12 @@ public sealed class TemporalAgentsOptions
     /// Per-agent session TTL. When null, falls back to <see cref="DefaultTimeToLive"/>
     /// (14 days by default).
     /// </param>
+    /// <param name="description">
+    /// Optional human-readable description of what the agent does. When provided, the agent
+    /// appears in <see cref="GetAgentDescriptors"/> for use in routing prompts.
+    /// </param>
     /// <returns>This options instance, for fluent chaining.</returns>
-    public TemporalAgentsOptions AddAIAgentFactory(string name, Func<IServiceProvider, AIAgent> factory, TimeSpan? timeToLive = null)
+    public TemporalAgentsOptions AddAIAgentFactory(string name, Func<IServiceProvider, AIAgent> factory, TimeSpan? timeToLive = null, string? description = null)
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(factory);
@@ -122,6 +130,11 @@ public sealed class TemporalAgentsOptions
         if (timeToLive.HasValue)
         {
             _agentTimeToLive[name] = timeToLive;
+        }
+
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            _agentDescriptions[name] = description;
         }
 
         return this;
@@ -173,6 +186,12 @@ public sealed class TemporalAgentsOptions
         if (timeToLive.HasValue)
         {
             _agentTimeToLive[agent.Name] = timeToLive;
+        }
+
+        // Auto-extract the description from the agent if one is set.
+        if (!string.IsNullOrWhiteSpace(agent.Description))
+        {
+            _agentDescriptions[agent.Name] = agent.Description;
         }
 
         return this;
@@ -238,6 +257,10 @@ public sealed class TemporalAgentsOptions
     /// Per-agent session TTL. When null, falls back to <see cref="DefaultTimeToLive"/>
     /// (14 days by default).
     /// </param>
+    /// <param name="description">
+    /// Optional human-readable description of what the agent does. When provided, the agent
+    /// appears in <see cref="GetAgentDescriptors"/> for use in routing prompts.
+    /// </param>
     /// <returns>This options instance, for fluent chaining.</returns>
     /// <remarks>
     /// Use this overload when agent setup requires async work, such as connecting to an MCP
@@ -255,13 +278,14 @@ public sealed class TemporalAgentsOptions
     public TemporalAgentsOptions AddAIAgentFactory(
         string name,
         Func<IServiceProvider, Task<AIAgent>> asyncFactory,
-        TimeSpan? timeToLive = null)
+        TimeSpan? timeToLive = null,
+        string? description = null)
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(asyncFactory);
 
         // Resolve at worker startup (blocking is safe here — DI container is being built).
-        return AddAIAgentFactory(name, sp => asyncFactory(sp).GetAwaiter().GetResult(), timeToLive);
+        return AddAIAgentFactory(name, sp => asyncFactory(sp).GetAwaiter().GetResult(), timeToLive, description);
     }
 
     /// <summary>
@@ -326,6 +350,28 @@ public sealed class TemporalAgentsOptions
     /// </returns>
     public bool IsAgentRegistered(string name) =>
         !string.IsNullOrEmpty(name) && _agentFactories.ContainsKey(name);
+
+    /// <summary>
+    /// Returns descriptors for all registered agents that have a description.
+    /// Agents registered without a description (e.g. classifier agents that are not routable
+    /// specialists) are excluded. Use this in routing activities to build an LLM dispatch prompt.
+    /// </summary>
+    /// <returns>
+    /// A snapshot of <see cref="AgentDescriptor"/> entries for agents with descriptions,
+    /// in registration order. The list is independent of the internal registry.
+    /// </returns>
+    public IReadOnlyList<AgentDescriptor> GetAgentDescriptors() =>
+        [.. _agentDescriptions.Select(kvp => new AgentDescriptor(kvp.Key, kvp.Value))];
+
+    /// <summary>
+    /// Returns the description for the given agent, or <see langword="null"/> if the agent
+    /// has no description or is not registered. The lookup is case-insensitive.
+    /// </summary>
+    /// <param name="agentName">
+    /// The agent name to look up. Null or empty returns <see langword="null"/> without throwing.
+    /// </param>
+    public string? GetAgentDescription(string agentName) =>
+        string.IsNullOrEmpty(agentName) ? null : _agentDescriptions.GetValueOrDefault(agentName);
 
     /// <summary>Gets all registered agent factories.</summary>
     internal IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>> GetAgentFactories() =>

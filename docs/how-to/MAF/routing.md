@@ -159,7 +159,7 @@ services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddSingletonActivities<RoutingActivities>();
 ```
 
-> The `description:` you pass to `AsAIAgent()` lives on the agent itself for use by tooling and the model, but the agent registry exposes only names. For routing prompts, keep a description map inside the routing activity (or build one from your DI container). The `AgentDescriptor` record in `Temporalio.Extensions.Agents.State` is a convenient `(Name, Description)` shape for that activity output.
+> The `description:` you pass to `AsAIAgent()` is automatically stored in the agent registry. `AddAIAgent` extracts `agent.Description` at registration time; `AddAIAgentFactory` and `AddAgentProxy` each accept an optional `description` parameter. Agents without a description (e.g. a classifier) are excluded from `GetAgentDescriptors()` automatically. The `AgentDescriptor` record in `Temporalio.Extensions.Agents.State` is the `(Name, Description)` shape the method returns.
 
 #### Step 2: Define routing activities
 
@@ -168,24 +168,14 @@ Activities are not replayed — their results are cached in workflow history. Th
 ```csharp
 public class RoutingActivities(TemporalAgentsOptions options)
 {
-    // Local description map kept alongside the routing activity. Pair with the live
-    // registered names so callers see only currently registered specialists.
-    private static readonly Dictionary<string, string> Descriptions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["OrdersAgent"]      = "Handles order tracking, returns, and shipping.",
-        ["TechSupportAgent"] = "Handles technical issues, app crashes, and troubleshooting.",
-        ["GeneralAgent"]     = "Handles general inquiries that do not match a specialist.",
-    };
-
-    // Returns the live registered specialists with their descriptions — the workflow
-    // uses these to build the classifier prompt. Safe inside an activity: result is
-    // cached in history; the registry is not re-queried on replay.
+    // Returns all registered agents that have a description. Agents registered
+    // without one (e.g. the Classifier) are excluded automatically.
+    // Safe inside an activity: result is cached in history; registry not re-queried on replay.
     [Activity("GetAvailableAgents")]
     public AgentInfo[] GetAvailableAgents()
     {
-        return options.GetRegisteredAgentNames()
-            .Where(Descriptions.ContainsKey)
-            .Select(name => new AgentInfo(name, Descriptions[name]))
+        return options.GetAgentDescriptors()
+            .Select(d => new AgentInfo(d.Name, d.Description))
             .ToArray();
     }
 

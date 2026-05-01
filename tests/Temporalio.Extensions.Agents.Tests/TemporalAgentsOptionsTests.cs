@@ -298,6 +298,97 @@ public class TemporalAgentsOptionsTests
         Assert.Null(options.HistoryReducer);
     }
 
+    // ─── Description storage ─────────────────────────────────────────────────
+
+    [Fact]
+    public void AddAIAgent_WithDescription_AppearsInGetAgentDescriptors()
+    {
+        var options = new TemporalAgentsOptions();
+        var agent = new StubAIAgent("SpecialistAgent", description: "Handles specialist tasks.");
+        options.AddAIAgent(agent);
+
+        var descriptors = options.GetAgentDescriptors();
+        Assert.Single(descriptors);
+        Assert.Equal("SpecialistAgent", descriptors[0].Name);
+        Assert.Equal("Handles specialist tasks.", descriptors[0].Description);
+    }
+
+    [Fact]
+    public void AddAIAgent_WithoutDescription_ExcludedFromGetAgentDescriptors()
+    {
+        var options = new TemporalAgentsOptions();
+        options.AddAIAgent(new StubAIAgent("NoDescriptionAgent"));
+
+        Assert.Empty(options.GetAgentDescriptors());
+    }
+
+    [Fact]
+    public void AddAIAgent_MixedDescriptions_OnlyDescribedAgentsReturned()
+    {
+        var options = new TemporalAgentsOptions();
+        options.AddAIAgent(new StubAIAgent("Classifier"));                                   // no description
+        options.AddAIAgent(new StubAIAgent("OrdersAgent", description: "Handles orders.")); // has description
+
+        var descriptors = options.GetAgentDescriptors();
+        Assert.Single(descriptors);
+        Assert.Equal("OrdersAgent", descriptors[0].Name);
+    }
+
+    [Fact]
+    public void AddAIAgentFactory_WithDescription_AppearsInGetAgentDescriptors()
+    {
+        var options = new TemporalAgentsOptions();
+        options.AddAIAgentFactory(
+            "FactoryAgent",
+            _ => new StubAIAgent("FactoryAgent"),
+            description: "A factory-registered agent.");
+
+        var descriptors = options.GetAgentDescriptors();
+        Assert.Single(descriptors);
+        Assert.Equal("A factory-registered agent.", descriptors[0].Description);
+    }
+
+[Fact]
+    public void GetAgentDescriptors_Empty_ReturnsEmpty()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Empty(options.GetAgentDescriptors());
+    }
+
+    [Fact]
+    public void GetAgentDescription_ReturnsStoredDescription()
+    {
+        var options = new TemporalAgentsOptions();
+        options.AddAIAgent(new StubAIAgent("MyAgent", description: "Does something useful."));
+
+        Assert.Equal("Does something useful.", options.GetAgentDescription("MyAgent"));
+    }
+
+    [Fact]
+    public void GetAgentDescription_CaseInsensitive()
+    {
+        var options = new TemporalAgentsOptions();
+        options.AddAIAgent(new StubAIAgent("MyAgent", description: "Does something useful."));
+
+        Assert.Equal("Does something useful.", options.GetAgentDescription("myagent"));
+        Assert.Equal("Does something useful.", options.GetAgentDescription("MYAGENT"));
+    }
+
+    [Fact]
+    public void GetAgentDescription_UnknownAgent_ReturnsNull()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Null(options.GetAgentDescription("DoesNotExist"));
+    }
+
+    [Fact]
+    public void GetAgentDescription_NullOrEmpty_ReturnsNull()
+    {
+        var options = new TemporalAgentsOptions();
+        Assert.Null(options.GetAgentDescription(null!));
+        Assert.Null(options.GetAgentDescription(""));
+    }
+
     // ─── AddAIAgentFactory duplicate guard ──────────────────────────────────
 
     [Fact]
