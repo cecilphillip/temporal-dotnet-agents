@@ -4,6 +4,8 @@ How to wrap the inner `IChatClient` so every LLM call made by an agent is observ
 
 This is the answer to "I want per-LLM-call observability today." If you have read about a future opt-in granular tool dispatch mode and concluded you need it for visibility, you almost certainly do not — see [Comparison with granular tool dispatch](#comparison-with-granular-tool-dispatch) below.
 
+> **Applies to `ChatClientAgent` only.** This pattern works because `ChatClientAgent` reads `ChatClientFactory` from its run options (or accepts a `clientFactory` constructor parameter) and applies it before each LLM call. **`A2AAgent`, graph-workflow agents, and other non-`ChatClientAgent` `AIAgent` subtypes do not have an inner `IChatClient` to wrap** — they dispatch via different protocols (HTTP+JSON for A2A; in-process graph orchestration for workflow agents). Registering a non-`ChatClientAgent` and supplying a `ChatClientFactory` will silently no-op. If you need observability for those agent types, instrument at the agent's own dispatch layer instead (e.g., HTTP-client middleware for A2A; OpenTelemetry source for graph workflows).
+
 ---
 
 ## When to use this pattern

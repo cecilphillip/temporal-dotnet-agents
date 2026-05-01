@@ -82,6 +82,30 @@ These are deliberately scoped to the subclass and are not candidates for further
 
 **`[Workflow]` attribute is not inheritable.** `[Workflow(Inherited = false)]` means the workflow attribute cannot be declared on a base class and inherited by a subclass. The shared base (`DurableChatWorkflowBase<TOutput>`) is therefore not itself a workflow type — only the concrete subclasses (`DurableChatWorkflow`, `AgentWorkflow`) carry `[Workflow(...)]`. Each subclass redeclares the attribute and the `[WorkflowRun]`-annotated entry-point method. This is a minor mechanical cost rather than a structural blocker; the inherited members (queries, signals, updates, validators) are picked up by the SDK's reflection scan on the concrete subclass.
 
+### Compatibility with non-`ChatClientAgent` `AIAgent` subtypes
+
+`Temporalio.Extensions.Agents` registers any `AIAgent` via `opts.AddAIAgent(agent)`. The agent type that gets registered is opaque to most of the library — `AgentWorkflowWrapper` is a `DelegatingAIAgent` and forwards `RunAsync` / `RunStreamingAsync` polymorphically. This means basic dispatch works for any subtype: `ChatClientAgent` (the common case), `A2AAgent` (Microsoft.Agents.AI.A2A), graph-workflow agents (`Microsoft.Agents.AI.Workflows`), or a user-built custom `AIAgent` subclass.
+
+However, **two library features apply only to `ChatClientAgent`-shaped agents**:
+
+| Feature | Mechanism | Works for non-`ChatClientAgent`? |
+|---|---|---|
+| Basic `RunAsync` / `RunStreamingAsync` dispatch as a Temporal activity | `AgentWorkflowWrapper` (delegating) → `AgentActivities.ExecuteAgentAsync` | ✅ Yes — polymorphic via `DelegatingAIAgent` |
+| Conversation history (`List<DurableSessionEntry>` with `ChatMessage` content) | Output of any agent's `RunStreamingAsync` is `IAsyncEnumerable<AgentResponseUpdate>`, normalized to `ChatMessage` | ✅ Yes |
+| HITL approval, search attributes, continue-as-new, reducer pipeline | `DurableChatWorkflowBase` — agent-type-agnostic | ✅ Yes |
+| **Per-request tool filtering** (`RunRequest.EnableToolCalls`, `RunRequest.EnableToolNames`) | `AgentWorkflowWrapper.GetRunOptions` attaches a `ChatClientFactory` to the run options that filters tools before each LLM call | ⚠️ **No** — non-`ChatClientAgent` agents don't read `ChatClientFactory`. Filter is silently ignored. |
+| **Per-request response-format override** (`RunRequest.ResponseFormat`) | Same `ChatClientFactory` mechanism | ⚠️ **No** — same as above. |
+| Per-LLM-call interception via `ChatClientFactory` (the [LLM-call interception how-to](how-to/MAF/llm-call-interception.md)) | User-provided `clientFactory` at `AsAIAgent(...)` registration | ⚠️ **No** — depends on an inner `IChatClient`, which non-`ChatClientAgent` subtypes don't have. |
+| **Granular tool dispatch** (deferred — see "Exit criteria" below) | Workflow-managed loop calling LLM-only via stripped `ChatClientFactory`, dispatching tools as separate activities | ⚠️ **No** — explicitly fenced off in the gate criteria (#4). When/if granular dispatch ships, it will fail loudly at registration time for non-`ChatClientAgent` agents. |
+
+**One quiet sharp edge.** `AgentWorkflowWrapper.GetRunOptions` accepts `null`, base `AgentRunOptions`, and `ChatClientAgentRunOptions` (it upgrades the first two to a default `ChatClientAgentRunOptions` and rejects other subclasses with `NotSupportedException`). If a future MAF release introduces an A2A- or graph-specific run-options subclass, this validation would need updating. Today no such subclass exists upstream, so the constraint is theoretical — but it's worth flagging for forward compatibility.
+
+**What we recommend for non-`ChatClientAgent` agent users**:
+
+- Register the agent normally via `opts.AddAIAgent(agent)`. Basic dispatch and history work end to end.
+- Set `RunRequest.EnableToolCalls = false` and `RunRequest.EnableToolNames = null` to make the silent feature-skip explicit.
+- For observability, instrument at the agent's own dispatch layer instead of trying `ChatClientFactory` interception — e.g., HTTP-client middleware for `A2AAgent`, an `ActivitySource` exporter for graph-workflow agents, or a custom `DelegatingAIAgent` decorator wrapping the agent at registration time.
+
 ---
 
 ## Function Invocation: Loop Ownership and Durability Granularity
@@ -323,4 +347,4 @@ This document does not commit to any of the above. They are listed for completen
 
 ---
 
-_Last updated: 2026-04-30 — added exit criteria for granular tool dispatch, pointer to LLM-call interception how-to, and the Tier 1 #3 timeout-name harmonization (`ActivityTimeout` / `HeartbeatTimeout` are now inherited from the AI library's base record)._
+_Last updated: 2026-04-30 — added exit criteria for granular tool dispatch, pointer to LLM-call interception how-to, the Tier 1 #3 timeout-name harmonization (`ActivityTimeout` / `HeartbeatTimeout` are now inherited from the AI library's base record), and a compatibility matrix for non-`ChatClientAgent` `AIAgent` subtypes._
