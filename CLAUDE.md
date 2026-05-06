@@ -238,7 +238,11 @@ dotnet run --project samples/MEAI/{DurableChat,DurableTools,HumanInTheLoop,Durab
 dotnet run --project samples/MEAI/OpenTelemetry/DurableOpenTelemetry.csproj
 
 # MAF samples
-dotnet run --project samples/MAF/{BasicAgent,WorkflowOrchestration,EvaluatorOptimizer,MultiAgentRouting,WorkflowRouting,HumanInTheLoop,AmbientAgent}/...csproj
+dotnet run --project samples/MAF/{BasicAgent,WorkflowOrchestration,EvaluatorOptimizer,MultiAgentRouting,WorkflowRouting,HumanInTheLoop,AmbientAgent,ConfigurableAgent}/...csproj
+
+# Feature-specific demos
+dotnet run --project samples/MAF/ExternalHistoryStore/ExternalHistoryStore.csproj   # IAgentHistoryStore + AIContextProvider + reduction strategy
+dotnet run --project samples/MAF/PerToolActivities/PerToolActivities.csproj         # per-tool Temporal activities with write-tool no-retry
 
 # SplitWorkerClient — Worker first, then Client in a separate terminal
 dotnet run --project samples/MAF/SplitWorkerClient/Worker/Worker.csproj
