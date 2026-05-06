@@ -32,7 +32,8 @@ The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) are defined
 16. [Scheduling](#scheduling)
 17. [MCP Tool Integration](#mcp-tool-integration)
 18. [External Memory with AIContextProvider](#external-memory-with-aicontextprovider)
-19. [OpenTelemetry Integration](#opentelemetry-integration)
+19. [External History Store](#external-history-store)
+20. [OpenTelemetry Integration](#opentelemetry-integration)
 
 ---
 
@@ -735,6 +736,26 @@ The `AgentSessionStateBag` stores any state the provider needs to resume in a fu
 and that bag is serialized inside `AgentWorkflow` so it survives worker restarts and continue-as-new transitions.
 
 For a deep dive into how StateBag persistence works, see [Session StateBag & Context Providers](../architecture/MAF/session-statebag-and-context-providers.md).
+
+---
+
+## External History Store
+
+For regulated workloads (HIPAA, PCI) or long-running sessions where Temporal event size becomes a concern, register an `IAgentHistoryStore` to keep conversation history in a backend you control instead of in Temporal's event log.
+
+| Option | Type | Default | What it controls |
+|---|---|---|---|
+| `UseExternalHistory` | `bool` | `false` | When `true`, the workflow omits `ConversationHistory` from `ExecuteAgentInput` and the activity loads history from the registered `IAgentHistoryStore`. Requires `IAgentHistoryStore` to be registered in DI. |
+| `UseExternalAgentHistory<TStore>()` | DI extension | — | Convenience method on `ITemporalWorkerServiceOptionsBuilder` that registers `TStore` as a singleton `IAgentHistoryStore` and sets `UseExternalHistory = true` in one call. |
+
+```csharp
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
+    .UseExternalAgentHistory<MyCosmosHistoryStore>()
+    .AddTemporalAgents(opts => opts.AddAIAgent(myAgent));
+```
+
+When opted in, conversation messages no longer appear in `ActivityScheduled` event payloads, and `GetHistoryAsync()` returns metadata-only entries (callers should query the store directly for full content). For the full how-to including the relationship to `AIContextProvider` / `ChatHistoryProvider`, migration behavior, and a reference store implementation, see [External History Store](./external-history-store.md).
 
 ---
 

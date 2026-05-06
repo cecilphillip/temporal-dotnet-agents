@@ -112,6 +112,8 @@ var results = await TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync(new[
 - Restored at activity start via `TemporalAgentSession.FromStateBag`
 - Empty bag (`StateBag.Count == 0`) returns `null` — no wasted serialization
 
+**External history store** (opt-in for regulated workloads + long sessions): set `opts.UseExternalHistory = true` and register `IAgentHistoryStore` in DI (or use `.UseExternalAgentHistory<TStore>()`). When enabled, `ConversationHistory` is omitted from `ExecuteAgentInput` (so PII never enters Temporal events), the activity loads/appends history via the store, and `GetHistoryAsync()` returns metadata-only entries. Complementary to `AIContextProvider`/`ChatHistoryProvider`, not a replacement — the library wraps the store as a `TemporalChatHistoryProvider` inside the activity. See `docs/how-to/MAF/external-history-store.md`.
+
 **OpenTelemetry**: SDK's `TracingInterceptor` handles Temporal protocol spans; `TemporalAgentTelemetry` handles agent-semantic spans. Composed hierarchy:
 ```
 agent.client.send                     ← TemporalAgentTelemetry
@@ -151,6 +153,7 @@ As of Layer 3, `AgentWorkflow : DurableChatWorkflowBase<AgentResponse>`. The sha
 - `RpcException` — `Temporalio.Exceptions` (NOT `Grpc.Core`)
 - `Workflow.CreateContinueAsNewException` — takes `Expression<Func<TWorkflow, Task>>` (no collection expressions inside)
 - `WorkflowIdConflictPolicy.UseExisting` — `Temporalio.Api.Enums.V1`
+- `IAgentHistoryStore` — `Temporalio.Extensions.Agents.HistoryStore` (opt-in via `UseExternalHistory`); see `docs/how-to/MAF/external-history-store.md`
 
 ### DI Patterns
 - `TemporalAgentsOptions` has an **internal constructor** — always access via the `AddTemporalAgents(opts => ...)` delegate.
