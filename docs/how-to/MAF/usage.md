@@ -33,7 +33,8 @@ The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) are defined
 17. [MCP Tool Integration](#mcp-tool-integration)
 18. [External Memory with AIContextProvider](#external-memory-with-aicontextprovider)
 19. [External History Store](#external-history-store)
-20. [OpenTelemetry Integration](#opentelemetry-integration)
+20. [Per-Tool Temporal Activities (Step Mode)](#per-tool-temporal-activities-step-mode)
+21. [OpenTelemetry Integration](#opentelemetry-integration)
 
 ---
 
@@ -756,6 +757,45 @@ builder.Services
 ```
 
 When opted in, conversation messages no longer appear in `ActivityScheduled` event payloads, and `GetHistoryAsync()` returns metadata-only entries (callers should query the store directly for full content). For the full how-to including the relationship to `AIContextProvider` / `ChatHistoryProvider`, migration behavior, and a reference store implementation, see [External History Store](./external-history-store.md).
+
+---
+
+## Per-Tool Temporal Activities (Step Mode)
+
+For agents that call write-style tools (send email, write record) or that benefit from independent per-tool retry, timeout, or visibility, opt into step mode. Each LLM call becomes a `RunAgentStep` activity and each tool call becomes a separately named `InvokeFunction` activity dispatched in parallel from the workflow.
+
+| Option | Type | Default | What it controls |
+|---|---|---|---|
+| `EnablePerToolActivities` | `bool` | `false` | When `true`, the workflow drives the tool-dispatch loop: one `RunAgentStep` activity per LLM call, one `InvokeFunction` activity per tool call. Requires `AddDurableAI()` and `AddDurableTools(...)` on the same worker builder; worker startup throws `InvalidOperationException` otherwise. |
+| `PerToolActivityOptions` | `Dictionary<string, ActivityOptions>?` | `null` | Per-tool overrides keyed by `AIFunction.Name` (case-insensitive). Use `RetryPolicy = new RetryPolicy { MaximumAttempts = 1 }` for write-style tools to prevent non-idempotent re-execution. Tools without an entry fall back to `ActivityTimeout`, `HeartbeatTimeout`, and `RetryPolicy`. |
+| `MaxToolCallsPerTurn` | `int` | `20` | Maximum step-loop iterations per single agent turn. When exceeded, the workflow returns a structured "iteration cap exceeded" assistant message rather than letting workflow history grow unbounded. |
+
+```csharp
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
+    .AddDurableAI(opts => { /* DurableExecutionOptions */ })
+    .AddDurableTools(sendEmailTool, lookupOrderTool)
+    .AddTemporalAgents(opts =>
+    {
+        opts.EnablePerToolActivities = true;
+        opts.PerToolActivityOptions ??= new();
+        opts.PerToolActivityOptions["send_email"] = new ActivityOptions
+        {
+            StartToCloseTimeout = TimeSpan.FromSeconds(30),
+            RetryPolicy = new RetryPolicy { MaximumAttempts = 1 },  // write tool — no retry
+        };
+        opts.AddAIAgentFactory("SupportAgent", sp =>
+            sp.GetRequiredService<IChatClient>()
+              .AsAIAgent(
+                  name: "SupportAgent",
+                  instructions: "...",
+                  tools: [sendEmailTool, lookupOrderTool])); // schema only — no UseFunctionInvocation()
+    });
+```
+
+> **Agent-registration constraint**: in step mode, the agent's `IChatClient` pipeline must NOT include `UseFunctionInvocation()` — the workflow owns the tool-dispatch loop. Tools are passed as schema via the `tools:` parameter on `AsAIAgent(...)` and resolved by name from `DurableFunctionRegistry` when the workflow dispatches `InvokeFunction`.
+
+For the full how-to including write-vs-read tool patterns, the iteration cap, the migration table, and what the Temporal Web UI shows, see [Per-Tool Temporal Activities (Step Mode)](./per-tool-activities.md).
 
 ---
 

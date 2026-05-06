@@ -13,7 +13,8 @@ A consolidated reference of common mistakes and best practices when building wit
 5. [Observability](#observability)
 6. [Testing](#testing)
 7. [Security and Configuration](#security-and-configuration)
-8. [Scheduling](#scheduling)
+8. [Per-Tool Activities (Step Mode)](#per-tool-activities-step-mode)
+9. [Scheduling](#scheduling)
 
 ---
 
@@ -74,6 +75,57 @@ var names = await Workflow.ExecuteActivityAsync(
 ```
 
 **Why:** If agents are added or removed between the original execution and a replay, the registry returns different results, causing a non-determinism error. Activity results are cached in history and replayed deterministically. See [Routing Patterns — Dynamic Routing via Activity](./routing.md#pattern-3-dynamic-routing-via-activity) for the full pattern.
+
+### Don't use `Task.WhenAll` in workflow code — use `Workflow.WhenAllAsync`
+
+```csharp
+// WRONG — not the project convention
+var results = await Task.WhenAll(toolTasks);
+
+// CORRECT — workflow-safe SDK combinator
+var results = await Workflow.WhenAllAsync(toolTasks);
+```
+
+**Why:** `Workflow.WhenAllAsync` is the SDK-provided workflow-safe combinator and the project convention. The XML doc on `TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync` (`src/Temporalio.Extensions.Agents/TemporalWorkflowExtensions.cs:112`) describes it as "the workflow-safe equivalent of `Task.WhenAll`." `Task.WhenAll` is technically safe when every task comes from `Workflow.ExecuteActivityAsync` (those schedule on `TaskScheduler.Current`), but using the SDK method makes intent clear and stays consistent with the rest of the codebase.
+
+### Don't use `ConfigureAwait(false)` in workflow code
+
+```csharp
+// WRONG — strips TaskScheduler.Current; the workflow hangs at CompleteWorkflowExecution
+await Workflow.ExecuteActivityAsync(...).ConfigureAwait(false);
+
+// CORRECT — stay on the workflow scheduler (omit, or use ConfigureAwait(true))
+await Workflow.ExecuteActivityAsync(...);
+await Workflow.ExecuteActivityAsync(...).ConfigureAwait(true);
+```
+
+**Why:** `ConfigureAwait(false)` bypasses the Temporal workflow scheduler's `SynchronizationContext`, putting the continuation on the ThreadPool. The workflow loses the ability to register `CompleteWorkflowExecution` and hangs at `WorkflowTaskCompleted`. This is a `[Workflow]`-only rule — `AgentActivities.cs` and `DefaultTemporalAgentClient.cs` correctly use `ConfigureAwait(false)` because they are not workflow code. The pattern also applies to `DurableAIFunction.cs` and `DurableEmbeddingGenerator.cs` (workflow-context middleware) — they explicitly note this in inline comments.
+
+### Don't enable `EnablePerToolActivities` without also calling `AddDurableTools()`
+
+```csharp
+// WRONG — registrar throws InvalidOperationException at startup
+builder.Services
+    .AddHostedTemporalWorker(taskQueue)
+    .AddTemporalAgents(opts =>
+    {
+        opts.EnablePerToolActivities = true;   // step mode dispatches InvokeFunction
+        opts.AddAIAgent(myAgent);
+    });
+
+// CORRECT — register tools in DurableFunctionRegistry first
+builder.Services
+    .AddHostedTemporalWorker(taskQueue)
+    .AddDurableAI(opts => { /* ... */ })
+    .AddDurableTools(sendEmailTool, lookupOrderTool)
+    .AddTemporalAgents(opts =>
+    {
+        opts.EnablePerToolActivities = true;
+        opts.AddAIAgent(myAgent);
+    });
+```
+
+**Why:** Step mode's per-tool activity is `DurableFunctionActivities.InvokeFunctionAsync`, which resolves tools by name from `DurableFunctionRegistry`. That registry is populated by `AddDurableTools(...)`, which is wired up by `AddDurableAI()`. `TemporalAgentsRegistrar` validates this at startup and throws `InvalidOperationException` if `DurableFunctionActivities` is not registered when the flag is on — silent fallback would defeat the per-tool retry guarantee callers opted in for. See [Per-Tool Temporal Activities (Step Mode)](./per-tool-activities.md).
 
 ### Do use GetAgent() with string constants or activity results
 
@@ -359,6 +411,41 @@ All samples load secrets from `dotnet user-secrets`, which stores values in `~/.
 
 ---
 
+## Per-Tool Activities (Step Mode)
+
+### Do set `MaximumAttempts = 1` for write-style tools
+
+```csharp
+opts.PerToolActivityOptions ??= new();
+
+// Write tool — non-idempotent, must not double-fire on retry
+opts.PerToolActivityOptions["send_email"] = new ActivityOptions
+{
+    StartToCloseTimeout = TimeSpan.FromSeconds(30),
+    RetryPolicy = new RetryPolicy { MaximumAttempts = 1 },
+};
+
+// Read tool — idempotent, fall back to default unbounded retry
+// (no entry needed; reads ActivityTimeout / RetryPolicy from TemporalAgentsOptions)
+```
+
+**Why:** In default mode, a transient failure mid-turn re-runs the entire turn — including any write tools that already succeeded. Step mode lets you scope retry to the tool: `MaximumAttempts = 1` tells Temporal not to re-execute the activity, so a write tool runs at most once per LLM-requested invocation. This is the primary reason `PerToolActivityOptions` exists. See [Per-Tool Temporal Activities (Step Mode)](./per-tool-activities.md).
+
+### Do use `Workflow.WhenAllAsync` for parallel activity fan-out
+
+```csharp
+var tasks = toolCalls.Select(tc =>
+    Workflow.ExecuteActivityAsync(
+        (DurableFunctionActivities a) => a.InvokeFunctionAsync(BuildInput(tc)),
+        ResolveToolActivityOptions(tc.Name))).ToList();
+
+var results = await Workflow.WhenAllAsync(tasks);
+```
+
+**Why:** `Workflow.WhenAllAsync` is the workflow-safe combinator and preserves input order — `results[i]` corresponds to `tasks[i]`, which lets you correlate fan-out activity results to the requests that produced them without a side lookup. The step-mode loop in `AgentWorkflow.ExecuteStepModeTurnAsync` uses exactly this pattern.
+
+---
+
 ## Scheduling
 
 ### Do delete schedules before decommissioning agents
@@ -389,6 +476,9 @@ opts.AddScheduledAgentRun("Agent", "my-schedule", request, updatedSpec);
 | Use `Workflow.NewGuid()` not `Guid.NewGuid()` | Determinism | Fatal |
 | Don't query agent registry in workflows | Determinism | Fatal |
 | Don't call `ActivitySource.StartActivity()` in workflows | Determinism | Fatal |
+| Use `Workflow.WhenAllAsync`, not `Task.WhenAll`, in workflows | Determinism | Convention |
+| Don't use `ConfigureAwait(false)` in `[Workflow]` code | Determinism | Workflow hangs |
+| Set `MaximumAttempts = 1` on write tools in step mode | Step mode | Non-idempotent re-execution |
 | Register all 4 OTel sources | Observability | Silent data loss |
 | Set `ActivityTimeout` for HITL | Timeouts | Activity failure |
 | Don't reuse `TemporalAIAgent` instances | Sessions | Incorrect behavior |
@@ -406,7 +496,8 @@ opts.AddScheduledAgentRun("Agent", "my-schedule", request, updatedSpec);
 - [LLM-Call Interception](./llm-call-interception.md) — per-LLM-call decorators via `ChatClientFactory`
 - [Testing Agents](./testing-agents.md) — test patterns and fixtures
 - [Scheduling](./scheduling.md) — schedule lifecycle and pitfalls
+- [Per-Tool Temporal Activities (Step Mode)](./per-tool-activities.md) — `EnablePerToolActivities`, write-tool retry pattern, iteration cap
 
 ---
 
-_Last updated: 2026-03-13_
+_Last updated: 2026-05-05_

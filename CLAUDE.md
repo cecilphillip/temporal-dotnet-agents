@@ -114,6 +114,8 @@ var results = await TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync(new[
 
 **External history store** (opt-in for regulated workloads + long sessions): set `opts.UseExternalHistory = true` and register `IAgentHistoryStore` in DI (or use `.UseExternalAgentHistory<TStore>()`). When enabled, `ConversationHistory` is omitted from `ExecuteAgentInput` (so PII never enters Temporal events), the activity loads/appends history via the store, and `GetHistoryAsync()` returns metadata-only entries. Complementary to `AIContextProvider`/`ChatHistoryProvider`, not a replacement — the library wraps the store as a `TemporalChatHistoryProvider` inside the activity. See `docs/how-to/MAF/external-history-store.md`.
 
+**Per-tool Temporal activities (step mode)** (opt-in for write-heavy tool chains): set `opts.EnablePerToolActivities = true`. The workflow drives the tool-dispatch loop — each LLM call is a `RunAgentStep` activity, each tool call is a separately named `InvokeFunction` activity dispatched via `Workflow.WhenAllAsync`. Configure per-tool retry/timeout via `opts.PerToolActivityOptions` (use `MaximumAttempts = 1` for write tools); cap loop iterations via `opts.MaxToolCallsPerTurn` (default 20). Requires `AddDurableAI()` + `AddDurableTools(...)` on the same builder; the registered agent's `IChatClient` pipeline must NOT include `UseFunctionInvocation()`. See `docs/how-to/MAF/per-tool-activities.md`.
+
 **OpenTelemetry**: SDK's `TracingInterceptor` handles Temporal protocol spans; `TemporalAgentTelemetry` handles agent-semantic spans. Composed hierarchy:
 ```
 agent.client.send                     ← TemporalAgentTelemetry
@@ -188,6 +190,7 @@ For full testing patterns, see `docs/how-to/MAF/testing-agents.md` and `docs/how
 - Set appropriate per-agent TTLs (default: 14 days)
 - Validate config eagerly — `string.IsNullOrEmpty` + `InvalidOperationException` for missing config (not `is null` + `ArgumentNullException`)
 - Keep OTel spans out of workflows — `agent.turn` lives in `AgentActivities`; `agent.client.send` in `DefaultTemporalAgentClient`
+- In step mode (`EnablePerToolActivities = true`), set `RetryPolicy = new RetryPolicy { MaximumAttempts = 1 }` on `opts.PerToolActivityOptions[name]` for write-style tools (send email, write record) so non-idempotent re-execution does not occur on retry
 
 ### ❌ DON'T
 - **Never** call `ActivitySource.StartActivity()` inside `[Workflow]` — non-deterministic on replay
