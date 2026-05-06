@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Temporalio.Client;
+using Temporalio.Extensions.Agents.HistoryStore;
 using Temporalio.Extensions.Agents.Workflows;
 using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Hosting;
@@ -39,6 +40,19 @@ internal static class TemporalAgentsRegistrar
         ArgumentNullException.ThrowIfNull(agentsOptions);
 
         var taskQueue = builder?.TaskQueue ?? string.Empty;
+
+        // Validate at startup: external-history mode requires a registered IAgentHistoryStore.
+        // Surfacing this here means a misconfigured worker fails immediately at composition,
+        // not during the first turn dispatch.
+        if (agentsOptions.UseExternalHistory
+            && !services.Any(d => d.ServiceType == typeof(IAgentHistoryStore)))
+        {
+            throw new InvalidOperationException(
+                "TemporalAgentsOptions.UseExternalHistory is enabled, but no IAgentHistoryStore " +
+                "implementation is registered in the service collection. Register one before " +
+                "calling AddTemporalAgents, e.g. " +
+                "services.AddSingleton<IAgentHistoryStore, MyStore>().");
+        }
 
         // Agent factory dictionary — consumed by AgentActivities to resolve real agent instances.
         services.TryAddSingleton<IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>>>(

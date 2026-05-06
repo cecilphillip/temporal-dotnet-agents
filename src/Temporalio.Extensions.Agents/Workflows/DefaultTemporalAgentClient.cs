@@ -62,6 +62,7 @@ internal sealed class DefaultTemporalAgentClient(
                 MaxEntryCount = options.MaxEntryCount,
                 HistoryReducer = options.HistoryReducer,
                 EnableSearchAttributes = options.EnableSearchAttributes,
+                UseExternalStore = options.UseExternalHistory,
                 // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
             }),
             workflowOptions).ConfigureAwait(false);
@@ -108,6 +109,7 @@ internal sealed class DefaultTemporalAgentClient(
                 MaxEntryCount = options.MaxEntryCount,
                 HistoryReducer = options.HistoryReducer,
                 EnableSearchAttributes = options.EnableSearchAttributes,
+                UseExternalStore = options.UseExternalHistory,
                 // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
             }),
             workflowOptions).ConfigureAwait(false);

@@ -1,4 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Temporalio.Extensions.Agents.HistoryStore;
 using Temporalio.Extensions.Hosting;
 
 namespace Temporalio.Extensions.Agents;
@@ -46,6 +49,29 @@ public static class TemporalWorkerBuilderExtensions
 
         TemporalAgentsRegistrar.Register(builder.Services, builder, agentsOptions);
 
+        return builder;
+    }
+
+    /// <summary>
+    /// Convenience helper that registers <typeparamref name="TStore"/> as the singleton
+    /// <see cref="IAgentHistoryStore"/> implementation. Equivalent to calling
+    /// <c>builder.Services.AddSingleton&lt;IAgentHistoryStore, TStore&gt;()</c> directly.
+    /// </summary>
+    /// <remarks>
+    /// Pair this with <c>opts.UseExternalHistory = true</c> on the matching
+    /// <see cref="AddTemporalAgents"/> call. Order does not matter as long as both run
+    /// before the worker host is built — the store registration is checked at composition
+    /// time inside <see cref="AddTemporalAgents"/>.
+    /// </remarks>
+    /// <typeparam name="TStore">Concrete <see cref="IAgentHistoryStore"/> implementation.</typeparam>
+    /// <param name="builder">The worker options builder.</param>
+    /// <returns>The same builder for further chaining.</returns>
+    public static ITemporalWorkerServiceOptionsBuilder UseExternalAgentHistory<TStore>(
+        this ITemporalWorkerServiceOptionsBuilder builder)
+        where TStore : class, IAgentHistoryStore
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        builder.Services.TryAddSingleton<IAgentHistoryStore, TStore>();
         return builder;
     }
 

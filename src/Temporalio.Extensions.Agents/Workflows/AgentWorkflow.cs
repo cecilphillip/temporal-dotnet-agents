@@ -54,7 +54,36 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         // Delegate to the shared session loop (history restore, search-attribute upsert, mutex,
         // continue-as-new trigger). Decision #1 makes AgentWorkflowInput inherit from
         // DurableChatWorkflowInput, so passing through is type-safe.
-        await base.RunAsync(input).ConfigureAwait(true);
+        //
+        // External-store mode + HistoryReducer: the base throws ContinueAsNewException after
+        // calling our CreateContinueAsNewException hook (which is synchronous, so it cannot
+        // dispatch activities). Intercept the throw here to fire the ReduceHistoryInStoreAsync
+        // activity before re-throwing, so the next workflow run sees a bounded store.
+        try
+        {
+            await base.RunAsync(input).ConfigureAwait(true);
+        }
+        catch (ContinueAsNewException can) when (input.UseExternalStore && input.HistoryReducer is not null)
+        {
+            var reduceInput = new ReduceHistoryInStoreInput
+            {
+                SessionId = Workflow.Info.WorkflowId,
+                MaxEntryCount = input.MaxEntryCount,
+            };
+            await Workflow.ExecuteActivityAsync(
+                (AgentActivities a) => a.ReduceHistoryInStoreAsync(reduceInput),
+                new ActivityOptions
+                {
+                    StartToCloseTimeout = input.ActivityTimeout,
+                    HeartbeatTimeout = input.HeartbeatTimeout,
+                    Summary = AgentActivities.BuildActivitySummary(input.AgentName),
+                    RetryPolicy = input.RetryPolicy,
+                }).ConfigureAwait(true);
+            // Re-throw the original CAN — its parameters carry the carry-forward state the
+            // base produced for us, including the (now externally reduced) input.
+            _ = can;
+            throw;
+        }
     }
 
     /// <summary>
@@ -148,6 +177,11 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         // base's freshly produced carry-forward state.
         ArgumentNullException.ThrowIfNull(_input);
 
+        // External-store mode: do NOT carry history forward in the workflow input — the
+        // store is the source of truth. The reduce-store dispatch happens in RunAsync's
+        // CAN-handling block (it must be awaited, and this hook is synchronous).
+        var useExternalStore = _input.UseExternalStore;
+
         var carriedInput = new AgentWorkflowInput
         {
             // MAF-specific state — sourced from the original input + per-turn _currentStateBag.
@@ -155,11 +189,16 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             TaskQueue = _input.TaskQueue,
             CarriedStateBag = _currentStateBag,
             RetryPolicy = _input.RetryPolicy,
+            // Carry the external-store flag forward so the next run keeps using the store.
+            UseExternalStore = useExternalStore,
 
             // Inherited fields — sourced from the base's freshly constructed `input` so the
             // reduced CarriedHistory, OriginalCreatedAt, and other CAN-time decisions are honored.
+            // When external-store mode is on we explicitly null out CarriedHistory: the store
+            // owns history and re-carrying it inside the workflow input would defeat the
+            // PII / O(n²) protection.
             TimeToLive = input.TimeToLive,
-            CarriedHistory = input.CarriedHistory,
+            CarriedHistory = useExternalStore ? null : input.CarriedHistory,
             ApprovalTimeout = input.ApprovalTimeout,
             EnableSearchAttributes = input.EnableSearchAttributes,
             MaxEntryCount = input.MaxEntryCount,
@@ -187,6 +226,41 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             Workflow.UpsertTypedSearchAttributes(
                 AgentNameSearchAttribute.ValueSet(_input.AgentName));
         }
+    }
+
+    /// <inheritdoc/>
+    protected override bool ShouldStripMessagesFromHistoryEntry() =>
+        _input?.UseExternalStore == true;
+
+    /// <inheritdoc/>
+    protected override DurableSessionEntry StripMessagesFromEntry(DurableSessionEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        // Preserve MAF-specific subclass fields (OrchestrationId, ResponseType, ResponseSchema)
+        // when stripping the message payload. Falls back to the base implementation for the
+        // AI-library concrete types and for any unexpected subtype.
+        return entry switch
+        {
+            AgentSessionRequest agentReq => new AgentSessionRequest
+            {
+                CorrelationId = agentReq.CorrelationId,
+                CreatedAt = agentReq.CreatedAt,
+                Messages = [],
+                OrchestrationId = agentReq.OrchestrationId,
+                ResponseType = agentReq.ResponseType,
+                ResponseSchema = agentReq.ResponseSchema,
+                AdditionalProperties = agentReq.AdditionalProperties,
+            },
+            AgentSessionResponse agentResp => new AgentSessionResponse
+            {
+                CorrelationId = agentResp.CorrelationId,
+                CreatedAt = agentResp.CreatedAt,
+                Messages = [],
+                Usage = agentResp.Usage,
+                AdditionalProperties = agentResp.AdditionalProperties,
+            },
+            _ => base.StripMessagesFromEntry(entry),
+        };
     }
 
     // ── HITL hooks (delegate to the inherited handlers) ─────────────────────
@@ -239,12 +313,17 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
 
         // Pass the full conversation history (including the just-appended request entry) so the
         // activity can flatten messages for the LLM. _history is inherited via the base's
-        // History accessor.
+        // History accessor. In external-store mode the workflow does NOT inline history into
+        // the activity input — the activity loads it from IAgentHistoryStore instead, which
+        // keeps PII and large conversation graphs out of the Temporal ActivityScheduled event.
+        var useExternalStore = _input!.UseExternalStore;
         var activityInput = new ExecuteAgentInput(
             _input!.AgentName,
             runRequest,
-            History,
-            _currentStateBag);
+            conversationHistory: useExternalStore ? null : History,
+            serializedStateBag: _currentStateBag,
+            sessionId: null,
+            useExternalStore: useExternalStore);
 
         var result = await Workflow.ExecuteActivityAsync(
             (AgentActivities a) => a.ExecuteAgentAsync(activityInput),

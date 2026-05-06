@@ -13,15 +13,17 @@ internal sealed class ExecuteAgentInput
     public ExecuteAgentInput(
         string agentName,
         RunRequest request,
-        IReadOnlyList<DurableSessionEntry> conversationHistory,
+        IReadOnlyList<DurableSessionEntry>? conversationHistory,
         JsonElement? serializedStateBag = null,
-        TemporalAgentSessionId? sessionId = null)
+        TemporalAgentSessionId? sessionId = null,
+        bool useExternalStore = false)
     {
         AgentName = agentName;
         Request = request;
         ConversationHistory = conversationHistory;
         SerializedStateBag = serializedStateBag;
         SessionId = sessionId;
+        UseExternalStore = useExternalStore;
     }
 
     /// <summary>Gets the name of the agent to invoke.</summary>
@@ -43,8 +45,12 @@ internal sealed class ExecuteAgentInput
     /// Gets the full conversation history at the time of the activity call,
     /// including the new request entry for this turn (an
     /// <see cref="State.AgentSessionRequest"/>).
+    /// <see langword="null"/> when <see cref="UseExternalStore"/> is <see langword="true"/> —
+    /// in that mode the activity loads history from <see cref="HistoryStore.IAgentHistoryStore"/>
+    /// instead of receiving it inside the Temporal <c>ActivityScheduled</c> event payload.
     /// </summary>
-    public IReadOnlyList<DurableSessionEntry> ConversationHistory { get; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<DurableSessionEntry>? ConversationHistory { get; }
 
     /// <summary>
     /// Gets the serialized <see cref="AgentSessionStateBag"/> from the previous turn,
@@ -53,4 +59,12 @@ internal sealed class ExecuteAgentInput
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? SerializedStateBag { get; }
+
+    /// <summary>
+    /// When <see langword="true"/>, the activity loads prior history from a registered
+    /// <see cref="HistoryStore.IAgentHistoryStore"/> instead of using
+    /// <see cref="ConversationHistory"/>, and appends the request/response pair for this
+    /// turn back to the same store after the LLM call completes.
+    /// </summary>
+    public bool UseExternalStore { get; }
 }

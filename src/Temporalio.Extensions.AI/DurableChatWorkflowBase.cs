@@ -120,6 +120,60 @@ public abstract class DurableChatWorkflowBase<TOutput>
     /// </summary>
     protected virtual void UpsertCustomSearchAttributes() { }
 
+    /// <summary>
+    /// Builds a copy of <paramref name="entry"/> with <see cref="DurableSessionEntry.Messages"/>
+    /// replaced by an empty list, preserving correlation ID and creation timestamp. Default
+    /// implementation handles the base library's <see cref="DurableSessionRequest"/> and
+    /// <see cref="DurableSessionResponse"/> types. Subclasses with additional concrete entry
+    /// types (e.g. MAF's <c>AgentSessionRequest</c> / <c>AgentSessionResponse</c>) override
+    /// to preserve their library-specific fields.
+    /// </summary>
+    /// <param name="entry">The entry to strip.</param>
+    /// <returns>A new entry of the same runtime type with empty <c>Messages</c>.</returns>
+    protected virtual DurableSessionEntry StripMessagesFromEntry(DurableSessionEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        // Note: this base implementation only knows about the AI library's concrete types.
+        // Library-specific subclasses must override and add their own type branches BEFORE
+        // delegating to this base if they need to preserve subclass-only fields.
+        return entry switch
+        {
+            DurableSessionResponse resp => new DurableSessionResponse
+            {
+                CorrelationId = resp.CorrelationId,
+                CreatedAt = resp.CreatedAt,
+                Messages = [],
+                Usage = resp.Usage,
+                AdditionalProperties = resp.AdditionalProperties,
+            },
+            DurableSessionRequest req => new DurableSessionRequest
+            {
+                CorrelationId = req.CorrelationId,
+                CreatedAt = req.CreatedAt,
+                Messages = [],
+                AdditionalProperties = req.AdditionalProperties,
+            },
+            _ => entry,
+        };
+    }
+
+    /// <summary>
+    /// When <see langword="true"/>, response entries appended to the in-workflow history have
+    /// their <see cref="DurableSessionEntry.Messages"/> replaced with an empty collection.
+    /// Used by external-history modes (e.g. <c>TemporalAgentsOptions.UseExternalHistory</c>):
+    /// the in-workflow history continues to drive turn-counting, search-attribute upserts,
+    /// and the <c>MaxEntryCount</c>-triggered continue-as-new check, but the message payloads
+    /// — which are the source of PII and Temporal event-log bloat — live only in the external
+    /// store. Default implementation returns <see langword="false"/> (full messages retained).
+    /// </summary>
+    /// <remarks>
+    /// Note that the base class only strips the <em>response</em> entry; the request entry is
+    /// supplied by the subclass via <see cref="RunTurnAsync"/> and the subclass is responsible
+    /// for stripping it before append if appropriate. The
+    /// <c>GetHistoryAsync</c> query therefore returns metadata-only entries when this is on.
+    /// </remarks>
+    protected virtual bool ShouldStripMessagesFromHistoryEntry() => false;
+
     // ── Session loop ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -232,8 +286,13 @@ public abstract class DurableChatWorkflowBase<TOutput>
 
         try
         {
-            // Append the request entry for this turn.
-            _history.Add(requestEntry);
+            // Append the request entry for this turn. When external-history mode is on we
+            // replace the messages with an empty list so the in-workflow history never holds
+            // the raw user prompt — only metadata (CorrelationId, CreatedAt) for turn counting.
+            var requestEntryToAppend = ShouldStripMessagesFromHistoryEntry()
+                ? (DurableSessionRequest)StripMessagesFromEntry(requestEntry)
+                : requestEntry;
+            _history.Add(requestEntryToAppend);
 
             _turnCount++;
 
@@ -246,9 +305,13 @@ public abstract class DurableChatWorkflowBase<TOutput>
 
             var output = await ExecuteTurnAsync(activityOptions, requestEntry, chatOptions);
 
-            // Build and append the response entry.
+            // Build the response entry, then optionally strip its message payload before
+            // appending so external-history mode keeps the workflow history metadata-only.
             var responseEntry = BuildResponseEntry(requestEntry.CorrelationId, output, Workflow.UtcNow);
-            _history.Add(responseEntry);
+            var responseEntryToAppend = ShouldStripMessagesFromHistoryEntry()
+                ? (DurableSessionResponse)StripMessagesFromEntry(responseEntry)
+                : responseEntry;
+            _history.Add(responseEntryToAppend);
 
             // Update turn count search attribute if opt-in was requested.
             if (Input!.EnableSearchAttributes)

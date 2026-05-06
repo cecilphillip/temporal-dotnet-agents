@@ -103,6 +103,25 @@ public sealed class TemporalAgentsOptions
     /// </remarks>
     public Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>? HistoryReducer { get; set; }
 
+    /// <summary>
+    /// When <see langword="true"/>, agent conversation history is loaded and appended via a
+    /// registered <see cref="HistoryStore.IAgentHistoryStore"/> instead of being carried
+    /// inside the Temporal <c>ActivityScheduled</c> event. Defaults to <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Setting this to <see langword="true"/> requires an <see cref="HistoryStore.IAgentHistoryStore"/>
+    /// implementation to be registered in DI. Worker startup throws
+    /// <see cref="InvalidOperationException"/> if no store is registered.
+    /// </para>
+    /// <para>
+    /// Migration: workflows started while this setting was <see langword="false"/> continue
+    /// using in-memory history until they complete or hit continue-as-new. The
+    /// <c>UseExternalStore</c> flag travels with the running workflow input.
+    /// </para>
+    /// </remarks>
+    public bool UseExternalHistory { get; set; }
+
     /// <summary>Adds an agent factory with an optional per-agent TTL.</summary>
     /// <param name="name">
     /// Case-insensitive agent name. Must be unique across registrations.

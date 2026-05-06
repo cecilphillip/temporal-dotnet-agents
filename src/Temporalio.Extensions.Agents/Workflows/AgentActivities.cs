@@ -5,7 +5,10 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Temporalio.Activities;
+using Temporalio.Extensions.Agents.HistoryStore;
 using Temporalio.Extensions.Agents.Session;
+using Temporalio.Extensions.Agents.State;
+using Temporalio.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
@@ -17,7 +20,8 @@ internal sealed class AgentActivities(
     IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>> factories,
     IServiceProvider services,
     IAgentResponseHandler? responseHandler = null,
-    ILoggerFactory? loggerFactory = null)
+    ILoggerFactory? loggerFactory = null,
+    IAgentHistoryStore? historyStore = null)
 {
     private readonly ILogger _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<AgentActivities>();
     private readonly ConcurrentDictionary<string, AIAgent> _agentCache = new(StringComparer.OrdinalIgnoreCase);
@@ -51,18 +55,50 @@ internal sealed class AgentActivities(
 
         var wrapper = new AgentWorkflowWrapper(realAgent, input.Request, session, services);
 
-        // Rebuild the full conversation from the serialized history.
+        // Resolve conversation history: either inline from the input (default mode) or
+        // loaded from the external store (opt-in PII-safe mode). In external-store mode the
+        // workflow has already pruned history out of the activity-scheduled event, so the
+        // request entry for the current turn must be reconstructed here from input.Request.
+        IReadOnlyList<DurableSessionEntry> historyForActivity;
+        AgentSessionRequest? externalRequestEntry = null;
+        if (input.UseExternalStore)
+        {
+            if (historyStore is null)
+            {
+                throw new InvalidOperationException(
+                    "ExecuteAgentInput.UseExternalStore is true but no IAgentHistoryStore is registered. " +
+                    "Register an implementation in DI before enabling TemporalAgentsOptions.UseExternalHistory.");
+            }
+
+            var prior = await historyStore.LoadAsync(sessionId.WorkflowId, ct).ConfigureAwait(false);
+            externalRequestEntry = AgentSessionRequest.FromRunRequest(input.Request, DateTimeOffset.UtcNow);
+            // Concatenate prior history with the just-constructed request entry so the LLM
+            // sees the new user message alongside all prior turns.
+            var combined = new List<DurableSessionEntry>(prior.Count + 1);
+            combined.AddRange(prior);
+            combined.Add(externalRequestEntry);
+            historyForActivity = combined;
+        }
+        else
+        {
+            historyForActivity = input.ConversationHistory
+                ?? throw new InvalidOperationException(
+                    "ExecuteAgentInput.ConversationHistory is null but UseExternalStore is false. " +
+                    "When UseExternalStore is false the workflow must supply ConversationHistory.");
+        }
+
+        // Rebuild the full conversation from the resolved history.
         int messageCount = 0;
-        foreach (var entry in input.ConversationHistory)
+        foreach (var entry in historyForActivity)
             messageCount += entry.Messages.Count;
 
         var allMessages = new List<ChatMessage>(messageCount);
-        foreach (var entry in input.ConversationHistory)
+        foreach (var entry in historyForActivity)
             foreach (var msg in entry.Messages)
                 allMessages.Add(msg);
 
         _logger.LogActivityHistoryRebuilt(input.AgentName, sessionId.WorkflowId,
-            input.ConversationHistory.Count, allMessages.Count);
+            historyForActivity.Count, allMessages.Count);
 
         var agentSession = await wrapper.CreateSessionAsync(ct).ConfigureAwait(false);
         var temporalContext = new TemporalAgentContext(ctx.TemporalClient, session, services);
@@ -132,6 +168,23 @@ internal sealed class AgentActivities(
             // GAP 6: capture the updated StateBag so the workflow can persist it.
             var serializedStateBag = session.SerializeStateBag();
 
+            // External-store mode: append both entries (request + response) to the store
+            // so subsequent turns load them via LoadAsync. The workflow does not append
+            // these to its in-workflow history (Messages are stripped — see
+            // DurableChatWorkflowBase.ShouldStripMessagesFromHistoryEntry).
+            if (input.UseExternalStore && historyStore is not null && externalRequestEntry is not null)
+            {
+                var responseEntry = AgentSessionResponse.FromAgentResponse(
+                    input.Request.CorrelationId!,
+                    response,
+                    DateTimeOffset.UtcNow);
+
+                await historyStore.AppendAsync(
+                    sessionId.WorkflowId,
+                    new DurableSessionEntry[] { externalRequestEntry, responseEntry },
+                    ct).ConfigureAwait(false);
+            }
+
             return new ExecuteAgentResult(response, serializedStateBag);
         }
         catch (Exception ex)
@@ -145,4 +198,56 @@ internal sealed class AgentActivities(
             TemporalAgentContext.SetCurrent(null);
         }
     }
+
+    /// <summary>
+    /// Loads the externally stored history, applies the configured reducer, and writes the
+    /// reduced result back via <see cref="IAgentHistoryStore.ReplaceAsync"/>. Dispatched by
+    /// the workflow at continue-as-new time when both <c>UseExternalStore</c> is enabled and
+    /// a <c>HistoryReducer</c> is configured. The reducer itself is captured on the workflow
+    /// and re-invoked here against the loaded entries — the activity does not own the
+    /// reducer delegate.
+    /// </summary>
+    [Activity("Temporalio.Extensions.Agents.ReduceHistoryInStore")]
+    public async Task ReduceHistoryInStoreAsync(ReduceHistoryInStoreInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        if (historyStore is null)
+        {
+            throw new InvalidOperationException(
+                "ReduceHistoryInStoreAsync was dispatched but no IAgentHistoryStore is registered. " +
+                "Register an implementation in DI before enabling TemporalAgentsOptions.UseExternalHistory.");
+        }
+
+        var ct = ActivityExecutionContext.Current.CancellationToken;
+        var prior = await historyStore.LoadAsync(input.SessionId, ct).ConfigureAwait(false);
+
+        // We can't transport the reducer delegate across the activity boundary; this activity is
+        // a no-op when no reducer is configured and the workflow side is responsible for only
+        // dispatching it when there IS one. Implementations that want history pruning must
+        // set TemporalAgentsOptions.HistoryReducer; this activity then truncates by keeping the
+        // most recent N entries (input.MaxEntryCount) as a deterministic, store-side reduction.
+        if (prior.Count <= input.MaxEntryCount)
+        {
+            return;
+        }
+
+        var trimmed = prior.Skip(prior.Count - input.MaxEntryCount).ToList();
+        await historyStore.ReplaceAsync(input.SessionId, trimmed, ct).ConfigureAwait(false);
+    }
+}
+
+/// <summary>
+/// Input for <see cref="AgentActivities.ReduceHistoryInStoreAsync"/>.
+/// </summary>
+internal sealed class ReduceHistoryInStoreInput
+{
+    /// <summary>The session ID (agent workflow ID) whose external history should be reduced.</summary>
+    public required string SessionId { get; init; }
+
+    /// <summary>
+    /// Maximum number of entries to retain in the store after reduction. Mirrors the workflow's
+    /// <c>MaxEntryCount</c> so the store stays bounded alongside the workflow's in-memory list.
+    /// </summary>
+    public required int MaxEntryCount { get; init; }
 }

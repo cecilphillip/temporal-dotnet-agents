@@ -35,4 +35,19 @@ internal sealed class AgentWorkflowInput : DurableChatWorkflowInput
     /// When <see langword="null"/>, Temporal SDK defaults apply (unbounded retries).
     /// </summary>
     public RetryPolicy? RetryPolicy { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/>, the workflow does not include the conversation history in
+    /// <see cref="ExecuteAgentInput.ConversationHistory"/> (it stays <see langword="null"/>),
+    /// and the activity loads/appends history through a registered
+    /// <see cref="HistoryStore.IAgentHistoryStore"/>. Propagated from
+    /// <see cref="TemporalAgentsOptions.UseExternalHistory"/> when the workflow is started.
+    /// </summary>
+    /// <remarks>
+    /// Migration: this flag travels with the workflow input. Sessions started before the
+    /// upgrade carry <c>UseExternalStore = false</c> and continue using in-memory history
+    /// until they complete or hit continue-as-new — switching the option after a session
+    /// starts does not retroactively migrate that session.
+    /// </remarks>
+    public bool UseExternalStore { get; init; }
 }
