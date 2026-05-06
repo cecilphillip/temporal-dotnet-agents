@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Samples don't need strict warning enforcement -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <UserSecretsId>4a34eefc-5cc4-4a70-8754-e6febf18b02d</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Step mode requires both libraries:
+        • Temporalio.Extensions.Agents — AddTemporalAgents, EnablePerToolActivities, agent factory
+        • Temporalio.Extensions.AI     — AddDurableAI, AddDurableTools (DurableFunctionRegistry)
+    -->
+    <ProjectReference Include="../../../src/Temporalio.Extensions.Agents/Temporalio.Extensions.Agents.csproj" />
+    <ProjectReference Include="../../../src/Temporalio.Extensions.AI/Temporalio.Extensions.AI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.3.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

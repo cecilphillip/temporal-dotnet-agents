@@ -307,6 +307,10 @@ For agents that fan out to fewer than ~3 read-only tools per turn with no PII or
 
 ---
 
+## See Also
+
+- Runnable sample: [`samples/MAF/PerToolActivities/`](../../../samples/MAF/PerToolActivities/) — drives a refund agent with read + two write tools and demonstrates that a transient lookup failure retries without re-firing the write tools.
+
 ## References
 
 - [Agent Sessions and the Workflow Loop — Step-Mode Agentic Loop](../../architecture/MAF/agent-sessions-and-workflow-loop.md#step-mode-agentic-loop) — workflow-loop diagram and determinism rationale
