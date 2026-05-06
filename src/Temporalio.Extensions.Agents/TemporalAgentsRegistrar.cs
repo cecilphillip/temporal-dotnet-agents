@@ -54,6 +54,20 @@ internal static class TemporalAgentsRegistrar
                 "services.AddSingleton<IAgentHistoryStore, MyStore>().");
         }
 
+        // Validate at startup: step mode requires the AI library's DurableFunctionActivities
+        // (which the workflow dispatches per tool call). The tell-tale registration is the
+        // DurableExecutionOptions singleton that AddDurableAI installs, which also brings in
+        // DurableFunctionRegistry and DurableFunctionActivities.
+        if (agentsOptions.EnablePerToolActivities
+            && !services.Any(d => d.ServiceType == typeof(DurableExecutionOptions)))
+        {
+            throw new InvalidOperationException(
+                "TemporalAgentsOptions.EnablePerToolActivities is enabled, but DurableFunctionActivities " +
+                "is not registered. Call AddDurableAI() (and AddDurableTools(...)) on the same worker " +
+                "builder before AddTemporalAgents, e.g. " +
+                "builder.AddDurableAI().AddDurableTools(myTool).AddTemporalAgents(opts => opts.EnablePerToolActivities = true).");
+        }
+
         // Agent factory dictionary — consumed by AgentActivities to resolve real agent instances.
         services.TryAddSingleton<IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>>>(
             _ => agentsOptions.GetAgentFactories());

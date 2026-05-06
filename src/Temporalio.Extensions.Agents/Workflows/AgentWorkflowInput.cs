@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Temporalio.Common;
 using Temporalio.Extensions.AI;
+using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
@@ -50,4 +51,35 @@ internal sealed class AgentWorkflowInput : DurableChatWorkflowInput
     /// starts does not retroactively migrate that session.
     /// </remarks>
     public bool UseExternalStore { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/>, the workflow runs the per-turn loop in step mode:
+    /// each LLM call is a separate <c>RunAgentStepAsync</c> activity, and each tool call
+    /// is dispatched as a separate <c>InvokeFunctionAsync</c> activity. Propagated from
+    /// <see cref="TemporalAgentsOptions.EnablePerToolActivities"/> when the workflow is started.
+    /// </summary>
+    /// <remarks>
+    /// Migration: this flag travels with the workflow input. Sessions started before the
+    /// upgrade carry <c>EnablePerToolActivities = false</c> and continue using the
+    /// single-activity <c>ExecuteAgentAsync</c> path until they complete or hit
+    /// continue-as-new.
+    /// </remarks>
+    public bool EnablePerToolActivities { get; init; }
+
+    /// <summary>
+    /// Optional per-tool <see cref="ActivityOptions"/> indexed by tool name. When non-null
+    /// and the tool name is present, used in place of the workflow's default activity
+    /// options for the tool-invocation activity. Travels with the workflow so write-tool
+    /// retry constraints (e.g. <c>MaximumAttempts = 1</c>) are honored across
+    /// continue-as-new.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, ActivityOptions>? PerToolActivityOptions { get; init; }
+
+    /// <summary>
+    /// Maximum number of step-mode iterations per single agent turn. Mirrors
+    /// <see cref="TemporalAgentsOptions.MaxToolCallsPerTurn"/> and travels with the workflow
+    /// input so the cap is honored across continue-as-new transitions.
+    /// </summary>
+    public int MaxToolCallsPerTurn { get; init; } = 20;
 }

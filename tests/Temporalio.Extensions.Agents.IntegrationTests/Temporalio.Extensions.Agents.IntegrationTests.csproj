@@ -26,4 +26,10 @@
     <ProjectReference Include="../../src/Temporalio.Extensions.Agents/Temporalio.Extensions.Agents.csproj" />
   </ItemGroup>
 
+  <!-- Share step-mode test scaffolding (ScriptedChatClient, RecordingTool) with the unit-test project. -->
+  <ItemGroup>
+    <Compile Include="../Temporalio.Extensions.Agents.Tests/StepMode/ScriptedChatClient.cs" Link="StepMode/ScriptedChatClient.cs" />
+    <Compile Include="../Temporalio.Extensions.Agents.Tests/StepMode/RecordingTool.cs" Link="StepMode/RecordingTool.cs" />
+  </ItemGroup>
+
 </Project>

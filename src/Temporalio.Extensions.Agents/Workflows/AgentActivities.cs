@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Temporalio.Activities;
@@ -196,6 +197,143 @@ internal sealed class AgentActivities(
         finally
         {
             TemporalAgentContext.SetCurrent(null);
+        }
+    }
+
+    /// <summary>
+    /// Step-mode activity used when <see cref="TemporalAgentsOptions.EnablePerToolActivities"/>
+    /// is enabled. Performs ONE LLM call without invoking any tools and returns either:
+    /// <list type="bullet">
+    ///   <item>a final assistant message (no tool calls), or</item>
+    ///   <item>the assistant message containing one or more <see cref="FunctionCallContent"/>
+    ///   items that the workflow then dispatches in parallel as separate
+    ///   <c>InvokeFunctionAsync</c> activities.</item>
+    /// </list>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// To bypass <c>FunctionInvokingChatClient</c> we resolve the agent's underlying
+    /// <see cref="IChatClient"/> from DI (registered by the user before <c>AddDurableAI</c>)
+    /// and call <see cref="IChatClient.GetResponseAsync"/> directly. The agent's instructions
+    /// are pulled from <see cref="ChatClientAgent.Instructions"/> when the registered agent is
+    /// a <see cref="ChatClientAgent"/>; otherwise instructions are omitted.
+    /// </para>
+    /// <para>
+    /// Tools visible to the LLM are sourced from the registered <c>DurableFunctionRegistry</c>
+    /// (populated via <c>AddDurableTools(...)</c>). These same tools resolve by name when
+    /// the workflow dispatches <c>InvokeFunctionAsync</c>.
+    /// </para>
+    /// </remarks>
+    [Activity("Temporalio.Extensions.Agents.RunAgentStep")]
+    public async Task<AgentStepResult> RunAgentStepAsync(AgentStepInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var ctx = ActivityExecutionContext.Current;
+        var ct = ctx.CancellationToken;
+
+        if (!factories.ContainsKey(input.AgentName))
+        {
+            throw new AgentNotRegisteredException(input.AgentName);
+        }
+
+        var realAgent = _agentCache.GetOrAdd(input.AgentName, name => factories[name](services));
+        var sessionId = input.SessionId ?? TemporalAgentSessionId.Parse(ctx.Info.WorkflowId!);
+
+        // Restore StateBag so providers skip re-initialization across step iterations.
+        var session = TemporalAgentSession.FromStateBag(sessionId, input.SerializedStateBag);
+
+        // Pull per-call inputs from the registered agent. We bypass FunctionInvokingChatClient
+        // by talking directly to IChatClient (resolved from DI) — the workflow owns the tool
+        // dispatch loop in step mode.
+        var chatClient = services.GetRequiredService<IChatClient>();
+
+        // Tools come from the durable function registry — same registry the InvokeFunctionAsync
+        // activity resolves by name. This keeps the schema visible to the LLM consistent with
+        // the names the workflow will dispatch.
+        var registry = services.GetService<IReadOnlyDictionary<string, AIFunction>>();
+        var tools = registry is null
+            ? new List<AITool>()
+            : registry.Values.Cast<AITool>().ToList();
+
+        // Pull instructions when the registered agent is a ChatClientAgent; otherwise omit.
+        string? instructions = realAgent is ChatClientAgent cca ? cca.Instructions : null;
+
+        var chatOptions = new ChatOptions
+        {
+            Instructions = instructions,
+            Tools = tools.Count > 0 ? tools : null,
+            ResponseFormat = input.Request.ResponseFormat,
+        };
+
+        // Apply tool filtering from the request (mirrors AgentWorkflowWrapper behavior).
+        if (!input.Request.EnableToolCalls)
+        {
+            chatOptions.Tools = null;
+        }
+        else if (input.Request.EnableToolNames is { Count: > 0 } enabledNames && chatOptions.Tools is not null)
+        {
+            chatOptions.Tools = [.. chatOptions.Tools.Where(t => enabledNames.Contains(t.Name))];
+        }
+
+        using var span = TemporalAgentTelemetry.ActivitySource.StartActivity(
+            TemporalAgentTelemetry.AgentTurnSpanName,
+            ActivityKind.Client);
+
+        span?.SetTag(TemporalAgentTelemetry.AgentNameAttribute, input.AgentName);
+        span?.SetTag(TemporalAgentTelemetry.AgentSessionIdAttribute, sessionId.WorkflowId);
+        span?.SetTag(TemporalAgentTelemetry.AgentCorrelationIdAttribute, input.Request.CorrelationId);
+
+        try
+        {
+            _logger.LogAgentActivityStarted(input.AgentName, sessionId.WorkflowId);
+
+            // Heartbeat on each streamed chunk so long LLM calls stay alive.
+            var collected = new List<ChatResponseUpdate>();
+            await foreach (var update in chatClient.GetStreamingResponseAsync(
+                    input.AccumulatedMessages, chatOptions, ct).WithCancellation(ct).ConfigureAwait(false))
+            {
+                collected.Add(update);
+                ctx.Heartbeat(update.Text);
+            }
+
+            var response = collected.ToChatResponse();
+            var assistantMessage = response.Messages.Count > 0
+                ? response.Messages[response.Messages.Count - 1]
+                : new ChatMessage(ChatRole.Assistant, string.Empty);
+
+            // Detect FunctionCallContent items in the message — when present, the LLM is
+            // requesting tool invocation and the workflow will fan out separate activities.
+            var toolCalls = assistantMessage.Contents
+                .OfType<FunctionCallContent>()
+                .ToList();
+
+            if (span?.IsAllDataRequested == true)
+            {
+                span.SetTag(TemporalAgentTelemetry.InputTokensAttribute, response.Usage?.InputTokenCount);
+                span.SetTag(TemporalAgentTelemetry.OutputTokensAttribute, response.Usage?.OutputTokenCount);
+                span.SetTag(TemporalAgentTelemetry.TotalTokensAttribute, response.Usage?.TotalTokenCount);
+            }
+
+            _logger.LogAgentActivityCompleted(input.AgentName, sessionId.WorkflowId,
+                response.Usage?.InputTokenCount, response.Usage?.OutputTokenCount, response.Usage?.TotalTokenCount);
+
+            var serializedStateBag = session.SerializeStateBag();
+
+            return new AgentStepResult
+            {
+                IsFinal = toolCalls.Count == 0,
+                AssistantMessage = assistantMessage,
+                ToolCalls = toolCalls.Count == 0 ? null : toolCalls,
+                UpdatedStateBag = serializedStateBag,
+                Usage = response.Usage,
+            };
+        }
+        catch (Exception ex)
+        {
+            span?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            _logger.LogAgentActivityFailed(input.AgentName, sessionId.WorkflowId, ex);
+            throw;
         }
     }
 

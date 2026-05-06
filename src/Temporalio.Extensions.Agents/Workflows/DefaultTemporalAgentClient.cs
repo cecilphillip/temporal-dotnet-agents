@@ -63,6 +63,9 @@ internal sealed class DefaultTemporalAgentClient(
                 HistoryReducer = options.HistoryReducer,
                 EnableSearchAttributes = options.EnableSearchAttributes,
                 UseExternalStore = options.UseExternalHistory,
+                EnablePerToolActivities = options.EnablePerToolActivities,
+                PerToolActivityOptions = options.PerToolActivityOptions,
+                MaxToolCallsPerTurn = options.MaxToolCallsPerTurn,
                 // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
             }),
             workflowOptions).ConfigureAwait(false);
@@ -110,6 +113,9 @@ internal sealed class DefaultTemporalAgentClient(
                 HistoryReducer = options.HistoryReducer,
                 EnableSearchAttributes = options.EnableSearchAttributes,
                 UseExternalStore = options.UseExternalHistory,
+                EnablePerToolActivities = options.EnablePerToolActivities,
+                PerToolActivityOptions = options.PerToolActivityOptions,
+                MaxToolCallsPerTurn = options.MaxToolCallsPerTurn,
                 // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
             }),
             workflowOptions).ConfigureAwait(false);
@@ -196,6 +202,10 @@ internal sealed class DefaultTemporalAgentClient(
                     MaxEntryCount = options.MaxEntryCount,
                     HistoryReducer = options.HistoryReducer,
                     EnableSearchAttributes = options.EnableSearchAttributes,
+                    UseExternalStore = options.UseExternalHistory,
+                    EnablePerToolActivities = options.EnablePerToolActivities,
+                    PerToolActivityOptions = options.PerToolActivityOptions,
+                    MaxToolCallsPerTurn = options.MaxToolCallsPerTurn,
                     // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
                 }),
                 workflowOptions).ConfigureAwait(false);

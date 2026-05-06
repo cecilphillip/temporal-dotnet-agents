@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Temporalio.Common;
 using Temporalio.Extensions.Agents.Session;
 using Temporalio.Extensions.Agents.State;
@@ -191,6 +192,11 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             RetryPolicy = _input.RetryPolicy,
             // Carry the external-store flag forward so the next run keeps using the store.
             UseExternalStore = useExternalStore,
+            // Carry step-mode configuration forward so successive runs preserve per-tool
+            // retry constraints and the iteration cap across continue-as-new transitions.
+            EnablePerToolActivities = _input.EnablePerToolActivities,
+            PerToolActivityOptions = _input.PerToolActivityOptions,
+            MaxToolCallsPerTurn = _input.MaxToolCallsPerTurn,
 
             // Inherited fields — sourced from the base's freshly constructed `input` so the
             // reduced CarriedHistory, OriginalCreatedAt, and other CAN-time decisions are honored.
@@ -311,6 +317,18 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             RetryPolicy = _input!.RetryPolicy,
         };
 
+        // Branch: step mode (per-tool activities) runs the LLM/tool loop in workflow code so
+        // each tool call is a separately retryable / observable activity. Default mode wraps
+        // the entire turn in one ExecuteAgentAsync activity (existing behavior unchanged).
+        if (_input!.EnablePerToolActivities)
+        {
+            // Do NOT use the ConfigureAwait-false escape hatch below: this runs inside a
+            // Temporal workflow. Skipping the workflow scheduler's SynchronizationContext
+            // would put the continuation on the ThreadPool, leaving the workflow unable to
+            // register CompleteWorkflowExecution and causing it to hang at WorkflowTaskCompleted.
+            return await ExecuteStepModeTurnAsync(runRequest, activityOptions).ConfigureAwait(true);
+        }
+
         // Pass the full conversation history (including the just-appended request entry) so the
         // activity can flatten messages for the LLM. _history is inherited via the base's
         // History accessor. In external-store mode the workflow does NOT inline history into
@@ -332,6 +350,157 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         // GAP 6: persist the updated StateBag for the next turn.
         _currentStateBag = result.SerializedStateBag;
         return result.Response;
+    }
+
+    /// <summary>
+    /// Step-mode tool-dispatch loop. The workflow alternates between calling
+    /// <c>RunAgentStepAsync</c> (one LLM call) and dispatching <c>InvokeFunctionAsync</c>
+    /// activities in parallel via <see cref="Workflow.WhenAllAsync{TResult}(IEnumerable{Task{TResult}})"/>
+    /// for each <see cref="FunctionCallContent"/> the LLM produced. Loop terminates when the
+    /// LLM returns a final assistant message or <see cref="AgentWorkflowInput.MaxToolCallsPerTurn"/>
+    /// iterations are exceeded.
+    /// </summary>
+    private async Task<AgentResponse> ExecuteStepModeTurnAsync(
+        RunRequest runRequest,
+        ActivityOptions stepActivityOptions)
+    {
+        // Accumulated messages threaded through the step loop. Initial set is the request
+        // messages — note: the request entry was already appended to history by the base.
+        var accumulated = new List<ChatMessage>(runRequest.Messages);
+
+        // Track every assistant + function-result message produced across the loop so the
+        // final AgentResponse exposes the full multi-step transcript (per the plan §"History
+        // Representation for Multi-Step Turns").
+        var allTurnMessages = new List<ChatMessage>();
+        UsageDetails? totalUsage = null;
+
+        var maxIterations = _input!.MaxToolCallsPerTurn;
+
+        for (var iteration = 0; iteration < maxIterations; iteration++)
+        {
+            var stepInput = new AgentStepInput
+            {
+                AgentName = _input!.AgentName,
+                Request = runRequest,
+                AccumulatedMessages = accumulated,
+                SerializedStateBag = _currentStateBag,
+                SessionId = null,
+            };
+
+            // Do NOT use the ConfigureAwait-false escape hatch here: this runs inside a
+            // Temporal workflow and the continuation must remain on the workflow scheduler.
+            var stepResult = await Workflow.ExecuteActivityAsync(
+                (AgentActivities a) => a.RunAgentStepAsync(stepInput),
+                stepActivityOptions).ConfigureAwait(true);
+
+            // Persist the StateBag after each step.
+            _currentStateBag = stepResult.UpdatedStateBag;
+
+            // Accumulate usage across iterations for the final response.
+            if (stepResult.Usage is not null)
+            {
+                totalUsage ??= new UsageDetails();
+                totalUsage.InputTokenCount = (totalUsage.InputTokenCount ?? 0) + (stepResult.Usage.InputTokenCount ?? 0);
+                totalUsage.OutputTokenCount = (totalUsage.OutputTokenCount ?? 0) + (stepResult.Usage.OutputTokenCount ?? 0);
+                totalUsage.TotalTokenCount = (totalUsage.TotalTokenCount ?? 0) + (stepResult.Usage.TotalTokenCount ?? 0);
+            }
+
+            // Always include the assistant message in the running transcript and accumulator.
+            accumulated.Add(stepResult.AssistantMessage);
+            allTurnMessages.Add(stepResult.AssistantMessage);
+
+            if (stepResult.IsFinal || stepResult.ToolCalls is null || stepResult.ToolCalls.Count == 0)
+            {
+                // Final answer — return the assembled multi-step response.
+                return new AgentResponse
+                {
+                    Messages = allTurnMessages,
+                    Usage = totalUsage,
+                    CreatedAt = Workflow.UtcNow,
+                };
+            }
+
+            // Fan out: dispatch one InvokeFunctionAsync activity per tool call. The workflow
+            // scheduler runs them in parallel; results are collected via Workflow.WhenAllAsync.
+            var toolCalls = stepResult.ToolCalls;
+            var toolTasks = new List<Task<DurableFunctionOutput>>(toolCalls.Count);
+            foreach (var tc in toolCalls)
+            {
+                var toolOptions = ResolveToolActivityOptions(tc.Name);
+
+                var toolInput = new DurableFunctionInput
+                {
+                    FunctionName = tc.Name,
+                    Arguments = tc.Arguments is null
+                        ? null
+                        : new Dictionary<string, object?>(tc.Arguments),
+                };
+
+                // The awaited WhenAllAsync below stays on the workflow scheduler.
+                toolTasks.Add(Workflow.ExecuteActivityAsync(
+                    (DurableFunctionActivities a) => a.InvokeFunctionAsync(toolInput),
+                    toolOptions));
+            }
+
+            // Use Workflow.WhenAllAsync (the SDK-provided workflow-safe combinator) to wait
+            // for all tool activities. Do NOT use Task.WhenAll inside [Workflow] code.
+            var toolOutputs = await Workflow.WhenAllAsync(toolTasks).ConfigureAwait(true);
+
+            // Build a FunctionResultContent message for each completed tool. Order matches
+            // the order of toolCalls (Workflow.WhenAllAsync preserves input order).
+            var functionResultContents = new List<AIContent>(toolCalls.Count);
+            for (var i = 0; i < toolCalls.Count; i++)
+            {
+                functionResultContents.Add(new FunctionResultContent(
+                    callId: toolCalls[i].CallId,
+                    result: toolOutputs[i].Result));
+            }
+
+            var toolResultMessage = new ChatMessage(ChatRole.Tool, functionResultContents);
+            accumulated.Add(toolResultMessage);
+            allTurnMessages.Add(toolResultMessage);
+        }
+
+        // Loop iteration cap exceeded — return a structured error response rather than letting
+        // workflow history grow without bound (runaway tool-calling guard).
+        Workflow.Logger.LogWarning(
+            "[{AgentName}/{WorkflowId}] Step-mode loop exceeded MaxToolCallsPerTurn ({Max}); returning error response.",
+            _input!.AgentName, Workflow.Info.WorkflowId, maxIterations);
+
+        var errorMessage = new ChatMessage(
+            ChatRole.Assistant,
+            $"Maximum tool-call iterations ({maxIterations}) exceeded for this turn. " +
+            "The agent did not converge on a final answer.");
+        allTurnMessages.Add(errorMessage);
+
+        return new AgentResponse
+        {
+            Messages = allTurnMessages,
+            Usage = totalUsage,
+            CreatedAt = Workflow.UtcNow,
+        };
+    }
+
+    /// <summary>
+    /// Resolves <see cref="ActivityOptions"/> for a single per-tool dispatch. Looks up the
+    /// tool name in <see cref="AgentWorkflowInput.PerToolActivityOptions"/> first; falls back
+    /// to the workflow's default activity options when no per-tool entry exists.
+    /// </summary>
+    private ActivityOptions ResolveToolActivityOptions(string toolName)
+    {
+        if (_input!.PerToolActivityOptions is not null
+            && _input!.PerToolActivityOptions.TryGetValue(toolName, out var perTool))
+        {
+            return perTool;
+        }
+
+        return new ActivityOptions
+        {
+            StartToCloseTimeout = _input!.ActivityTimeout,
+            HeartbeatTimeout = _input!.HeartbeatTimeout,
+            Summary = toolName,
+            RetryPolicy = _input!.RetryPolicy,
+        };
     }
 
     private async Task ProcessFireAndForgetAsync(RunRequest request)

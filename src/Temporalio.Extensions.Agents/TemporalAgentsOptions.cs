@@ -122,6 +122,60 @@ public sealed class TemporalAgentsOptions
     /// </remarks>
     public bool UseExternalHistory { get; set; }
 
+    /// <summary>
+    /// When <see langword="true"/>, agent turns run as a <em>step-mode</em> workflow loop:
+    /// each LLM call is a separate <c>RunAgentStepAsync</c> activity, and each tool call
+    /// is a separate <c>Temporalio.Extensions.AI.InvokeFunction</c> activity dispatched by
+    /// the workflow (not the agent's <c>FunctionInvokingChatClient</c>). Defaults to
+    /// <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Enabling step mode requires <c>AddDurableAI</c> on the same worker builder, because
+    /// the workflow dispatches <c>DurableFunctionActivities.InvokeFunctionAsync</c> for tool
+    /// execution. Worker startup throws <see cref="InvalidOperationException"/> if
+    /// <c>DurableFunctionActivities</c> is not registered.
+    /// </para>
+    /// <para>
+    /// Tools used in step mode must also be registered via <c>AddDurableTools(...)</c> so
+    /// they can be resolved by name inside the tool-invocation activity.
+    /// </para>
+    /// <para>
+    /// Migration: this flag travels with the workflow input. Sessions started before the
+    /// upgrade carry <c>EnablePerToolActivities = false</c> and continue using the
+    /// single-activity path until they complete or hit continue-as-new.
+    /// </para>
+    /// </remarks>
+    public bool EnablePerToolActivities { get; set; }
+
+    /// <summary>
+    /// Optional per-tool <see cref="Temporalio.Workflows.ActivityOptions"/> used when
+    /// <see cref="EnablePerToolActivities"/> is <see langword="true"/>. The dictionary key is
+    /// the tool's <see cref="Microsoft.Extensions.AI.AIFunction.Name"/> (case-insensitive). When a tool name is not
+    /// present, the workflow falls back to <see cref="ActivityTimeout"/>, <see cref="HeartbeatTimeout"/>,
+    /// and <see cref="RetryPolicy"/>.
+    /// </summary>
+    /// <remarks>
+    /// Use this to constrain write-style tools (send email, write record) by setting
+    /// <c>MaximumAttempts = 1</c> in their retry policy so non-idempotent re-execution is
+    /// prevented on retry. Read-style tools may benefit from the default unbounded retry
+    /// policy.
+    /// </remarks>
+    public Dictionary<string, Temporalio.Workflows.ActivityOptions>? PerToolActivityOptions { get; set; }
+
+    /// <summary>
+    /// Maximum number of step-mode loop iterations per single agent turn. The loop counts
+    /// LLM step activities; each iteration dispatches at most one batch of tool activities
+    /// (parallel fan-out). When the cap is exceeded, the workflow returns a structured error
+    /// response rather than letting workflow history grow unbounded. Default 20.
+    /// </summary>
+    /// <remarks>
+    /// Tune up for agents that legitimately chain many tools per turn; tune down for
+    /// hardening. The cap protects against runaway LLM tool-calling loops on adversarial
+    /// inputs.
+    /// </remarks>
+    public int MaxToolCallsPerTurn { get; set; } = 20;
+
     /// <summary>Adds an agent factory with an optional per-agent TTL.</summary>
     /// <param name="name">
     /// Case-insensitive agent name. Must be unique across registrations.
