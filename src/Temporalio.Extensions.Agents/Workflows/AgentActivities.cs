@@ -338,12 +338,16 @@ internal sealed class AgentActivities(
     }
 
     /// <summary>
-    /// Loads the externally stored history, applies the configured reducer, and writes the
-    /// reduced result back via <see cref="IAgentHistoryStore.ReplaceAsync"/>. Dispatched by
-    /// the workflow at continue-as-new time when both <c>UseExternalStore</c> is enabled and
-    /// a <c>HistoryReducer</c> is configured. The reducer itself is captured on the workflow
-    /// and re-invoked here against the loaded entries — the activity does not own the
-    /// reducer delegate.
+    /// Loads the externally stored history and, when it exceeds <c>input.MaxEntryCount</c>,
+    /// writes the most recent <c>MaxEntryCount</c> entries back via
+    /// <see cref="IAgentHistoryStore.ReplaceAsync"/> (a deterministic tail-trim).
+    /// Dispatched by the workflow at continue-as-new time when <c>UseExternalStore</c> is
+    /// enabled. This activity does <b>not</b> apply <c>TemporalAgentsOptions.HistoryReducer</c>:
+    /// the reducer delegate is <c>[JsonIgnore]</c> and cannot cross the activity boundary, so
+    /// the store-side reduction is intentionally a fixed tail-trim. Implementations that need
+    /// custom reduction can override the behaviour inside their own
+    /// <see cref="IAgentHistoryStore.ReplaceAsync"/> (re-load and re-write the store however
+    /// they want) or run reduction from a separate background process.
     /// </summary>
     [Activity("Temporalio.Extensions.Agents.ReduceHistoryInStore")]
     public async Task ReduceHistoryInStoreAsync(ReduceHistoryInStoreInput input)

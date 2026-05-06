@@ -120,10 +120,10 @@ public interface IAgentHistoryStore
         IReadOnlyList<DurableSessionEntry> entries,
         CancellationToken cancellationToken = default);
 
-    // Called at continue-as-new time when a HistoryReducer is configured.
+    // Called at continue-as-new time to bound the store with a deterministic tail-trim.
     Task ReplaceAsync(
         string sessionId,
-        IReadOnlyList<DurableSessionEntry> reducedEntries,
+        IReadOnlyList<DurableSessionEntry> trimmedEntries,
         CancellationToken cancellationToken = default);
 }
 ```
@@ -132,7 +132,7 @@ public interface IAgentHistoryStore
 |---|---|---|
 | `LoadAsync` | `AgentActivities.ExecuteAgentAsync` | Start of every turn — must return entries in append order |
 | `AppendAsync` | `AgentActivities.ExecuteAgentAsync` | End of every turn — appends `[requestEntry, responseEntry]` |
-| `ReplaceAsync` | `AgentWorkflow` (inside a dedicated activity) | Continue-as-new with `HistoryReducer` set — replaces all entries |
+| `ReplaceAsync` | `AgentWorkflow` (inside a dedicated activity) | Continue-as-new — replaces store contents with a tail-trim to `MaxEntryCount` |
 
 `sessionId` is `TemporalAgentSessionId.WorkflowId` (a string of the form `ta-{agentName}-{key}`). It is always provided by the library; you don't generate it.
 
@@ -310,8 +310,29 @@ If you need *zero* message content in Temporal events, including the current tur
 When `UseExternalHistory = true`:
 
 - `CarriedHistory` is set to `null` on the new run's `AgentWorkflowInput`. There is nothing to carry — the store owns it.
-- If `TemporalAgentsOptions.HistoryReducer` is configured, the workflow dispatches a `ReduceHistoryInStoreAsync` activity *before* throwing the continue-as-new exception. That activity loads the history, applies the reducer, and calls `IAgentHistoryStore.ReplaceAsync` with the reduced entries.
-- If no `HistoryReducer` is configured, the store is left untouched across the continue-as-new boundary. The next run's first `LoadAsync` returns the full history.
+- The workflow dispatches a `ReduceHistoryInStoreAsync` activity *before* throwing the continue-as-new exception. That activity loads the history from the store and, if `prior.Count > MaxEntryCount`, calls `IAgentHistoryStore.ReplaceAsync` with the **most recent `MaxEntryCount` entries** (a deterministic tail-trim — `prior.Skip(prior.Count - MaxEntryCount)`). If the store is already within `MaxEntryCount`, the activity is a no-op.
+- The activity does **not** apply the user's `TemporalAgentsOptions.HistoryReducer` delegate to the external store. The reducer is annotated `[JsonIgnore]` and cannot be transported into a Temporal activity, so the external-store path performs a fixed tail-trim instead. The in-memory `HistoryReducer` delegate continues to work as documented in the [Usage Guide](./usage.md) for the in-memory mode (`UseExternalHistory = false`); only the external-store path differs.
+
+#### Workaround: custom store-side reduction
+
+If you need richer reduction logic for the external store (summarisation, role-aware pruning, retention-by-CorrelationId, etc.), implement it in one of two places:
+
+1. **Inside `IAgentHistoryStore.ReplaceAsync`** — the activity calls this with the tail-trimmed list, but your implementation is free to ignore the input list, re-load the full history from the underlying store, apply your own reduction strategy, and write the result. This is the simplest path and runs synchronously with continue-as-new.
+
+   ```csharp
+   public async Task ReplaceAsync(
+       string sessionId,
+       IReadOnlyList<DurableSessionEntry> trimmedEntries,
+       CancellationToken cancellationToken = default)
+   {
+       // Ignore the library's tail-trim; apply our own summarisation policy instead.
+       var full = await LoadFromBackendAsync(sessionId, cancellationToken);
+       var reduced = MyCustomReducer.Apply(full);
+       await OverwriteBackendAsync(sessionId, reduced, cancellationToken);
+   }
+   ```
+
+2. **From a separate background process** — schedule a periodic job (cron, Temporal schedule, etc.) that calls `LoadAsync` + `ReplaceAsync` against your store outside the agent workflow's continue-as-new path. Decoupling reduction from the agent loop avoids tying turn latency to your reducer's cost.
 
 ---
 
