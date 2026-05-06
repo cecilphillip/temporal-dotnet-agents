@@ -351,6 +351,10 @@ For sessions of fewer than ~50 turns with no PII concerns, the default path is t
 
 ---
 
+## See Also
+
+- [`samples/MAF/ExternalHistoryStore/`](../../../samples/MAF/ExternalHistoryStore/) — runnable end-to-end sample wiring `IAgentHistoryStore`, an `AIContextProvider`, and a recent-N reduction strategy in one host.
+
 ## References
 
 - [Agent Sessions and the Workflow Loop — External History Store](../../architecture/MAF/agent-sessions-and-workflow-loop.md#external-history-store) — architectural diagram and rationale
