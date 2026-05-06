@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using System.Reflection;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Temporalio.Client.Schedules;
 using Temporalio.Common;
 using Temporalio.Extensions.AI;
@@ -22,6 +24,20 @@ public sealed class TemporalAgentsOptions
 
     private readonly Dictionary<string, string> _agentDescriptions =
         new(StringComparer.OrdinalIgnoreCase);
+
+    // Captures the per-agent ChatOptions at registration time so the step-mode activity can
+    // honor configured Temperature / ModelId / etc. — ChatClientAgent.ChatOptions is internal
+    // (see Microsoft.Agents.AI 1.0.0-preview), so we extract it via reflection at AddAIAgent
+    // time rather than at activity dispatch time. Only populated for ChatClientAgent instances.
+    private readonly Dictionary<string, ChatOptions> _agentChatOptions =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // Cached PropertyInfo for ChatClientAgent.ChatOptions (internal getter). Reflection lookup
+    // happens once per process; subsequent registrations are cheap.
+    private static readonly PropertyInfo? ChatClientAgentChatOptionsProperty =
+        typeof(ChatClientAgent).GetProperty(
+            "ChatOptions",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
 
     private readonly List<ScheduleAgentRegistration> _scheduledRuns = [];
 
@@ -267,7 +283,33 @@ public sealed class TemporalAgentsOptions
             _agentDescriptions[agent.Name] = agent.Description;
         }
 
+        // Capture configured ChatOptions for step-mode use. ChatClientAgent.ChatOptions is
+        // internal in Microsoft.Agents.AI; the reflection lookup is the only path to honor
+        // per-agent settings (Temperature, ModelId, TopP, etc.) when step mode bypasses the
+        // agent's own GetResponseAsync pipeline and talks directly to IChatClient.
+        if (agent is ChatClientAgent cca)
+        {
+            var configured = ReadChatOptionsFromAgent(cca);
+            if (configured is not null)
+            {
+                _agentChatOptions[agent.Name] = configured;
+            }
+        }
+
         return this;
+    }
+
+    /// <summary>
+    /// Reads the (internal) <c>ChatOptions</c> property off a <see cref="ChatClientAgent"/> via
+    /// reflection. Shared between registration-time capture and the activity-time fallback that
+    /// covers the <see cref="AddAIAgentFactory(string, Func{IServiceProvider, AIAgent}, TimeSpan?, string?)"/>
+    /// path (where the agent does not exist at registration). Returns <see langword="null"/> when
+    /// the property is unavailable on the running runtime or the agent was constructed without options.
+    /// </summary>
+    internal static ChatOptions? ReadChatOptionsFromAgent(ChatClientAgent agent)
+    {
+        ArgumentNullException.ThrowIfNull(agent);
+        return ChatClientAgentChatOptionsProperty?.GetValue(agent) as ChatOptions;
     }
 
     /// <summary>
@@ -449,6 +491,17 @@ public sealed class TemporalAgentsOptions
     /// <summary>Gets all registered agent factories.</summary>
     internal IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>> GetAgentFactories() =>
         _agentFactories.AsReadOnly();
+
+    /// <summary>
+    /// Returns the <see cref="ChatOptions"/> captured at registration time for the named agent,
+    /// or <see langword="null"/> when the agent is not a <see cref="ChatClientAgent"/> or has no
+    /// configured options. Used by the step-mode activity to seed its per-call ChatOptions so
+    /// that registration-time settings (Temperature, ModelId, etc.) are not silently dropped.
+    /// </summary>
+    internal ChatOptions? GetAgentChatOptions(string agentName) =>
+        string.IsNullOrEmpty(agentName)
+            ? null
+            : _agentChatOptions.GetValueOrDefault(agentName);
 
     /// <summary>Gets the TTL for a specific agent, falling back to <see cref="DefaultTimeToLive"/>.</summary>
     internal TimeSpan? GetTimeToLive(string agentName) =>

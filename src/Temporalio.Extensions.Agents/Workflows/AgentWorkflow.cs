@@ -343,9 +343,15 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             sessionId: null,
             useExternalStore: useExternalStore);
 
+        // Do NOT use the ConfigureAwait-false escape hatch here: this runs inside a Temporal
+        // workflow and the continuation must remain on the workflow scheduler. Skipping the
+        // workflow scheduler's SynchronizationContext would put the continuation on the
+        // ThreadPool, leaving the workflow unable to register CompleteWorkflowExecution and
+        // causing it to hang at WorkflowTaskCompleted. Mirrors the comment block in
+        // DurableAIFunction.cs:55-56 and matches the step-mode awaits below.
         var result = await Workflow.ExecuteActivityAsync(
             (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
-            activityOptions);
+            activityOptions).ConfigureAwait(true);
 
         // GAP 6: persist the updated StateBag for the next turn.
         _currentStateBag = result.SerializedStateBag;

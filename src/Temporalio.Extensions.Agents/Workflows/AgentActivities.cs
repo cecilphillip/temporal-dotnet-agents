@@ -259,12 +259,26 @@ internal sealed class AgentActivities(
         // Pull instructions when the registered agent is a ChatClientAgent; otherwise omit.
         string? instructions = realAgent is ChatClientAgent cca ? cca.Instructions : null;
 
-        var chatOptions = new ChatOptions
-        {
-            Instructions = instructions,
-            Tools = tools.Count > 0 ? tools : null,
-            ResponseFormat = input.Request.ResponseFormat,
-        };
+        // Seed from the agent's registration-time ChatOptions when available so per-agent
+        // settings (Temperature, ModelId, TopP, FrequencyPenalty, etc.) are honored. Without
+        // this clone, step mode would silently drop those configurations because we bypass
+        // the agent's own GetResponseAsync pipeline. Two lookup paths:
+        //   1) Pre-captured options from AddAIAgent(instance) — captured at registration time.
+        //   2) Live read off the cached ChatClientAgent via the same reflection accessor — covers
+        //      the AddAIAgentFactory path where the agent did not exist at registration time.
+        var registeredOptions = services.GetService<TemporalAgentsOptions>()
+            ?.GetAgentChatOptions(input.AgentName)
+            ?? (realAgent is ChatClientAgent ccaForOptions
+                ? TemporalAgentsOptions.ReadChatOptionsFromAgent(ccaForOptions)
+                : null);
+        var chatOptions = registeredOptions?.Clone() ?? new ChatOptions();
+
+        // Override the request-scoped fields. Instructions / Tools / ResponseFormat are the
+        // three values the workflow + request own per-turn, so they always replace whatever the
+        // registration-time options carried.
+        chatOptions.Instructions = instructions;
+        chatOptions.Tools = tools.Count > 0 ? tools : null;
+        chatOptions.ResponseFormat = input.Request.ResponseFormat;
 
         // Apply tool filtering from the request (mirrors AgentWorkflowWrapper behavior).
         if (!input.Request.EnableToolCalls)

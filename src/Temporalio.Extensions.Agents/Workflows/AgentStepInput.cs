@@ -16,10 +16,14 @@ namespace Temporalio.Extensions.Agents.Workflows;
 /// items that the workflow then dispatches as separate <c>InvokeFunctionAsync</c> activities.
 /// </para>
 /// <para>
-/// The step activity bypasses <c>FunctionInvokingChatClient</c> (it constructs the agent
-/// with <c>ChatClientAgentOptions.UseProvidedChatClientAsIs = true</c>) so the LLM's
-/// tool-call response is returned to the workflow rather than auto-executed inside the
-/// activity.
+/// The step activity bypasses <c>FunctionInvokingChatClient</c> by resolving the
+/// <see cref="IChatClient"/> directly from the activity's <see cref="IServiceProvider"/>
+/// (registered by the user before <c>AddDurableAI</c>) and calling its
+/// <c>GetStreamingResponseAsync</c> directly — the agent instance itself is not invoked. This
+/// returns the LLM's tool-call response to the workflow rather than auto-executing tools
+/// inside the activity. The agent's <c>Instructions</c> and registration-time
+/// <c>ChatOptions</c> (Temperature, ModelId, etc.) are pulled from the registered
+/// <c>ChatClientAgent</c> so per-agent configuration is preserved across the bypass.
 /// </para>
 /// </remarks>
 internal sealed class AgentStepInput
