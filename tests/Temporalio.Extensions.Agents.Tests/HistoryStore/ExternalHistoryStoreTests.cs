@@ -1,10 +1,16 @@
 using System.Text;
 using System.Text.Json;
+using FakeItEasy;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Temporalio.Client;
 using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Agents.HistoryStore;
 using Temporalio.Extensions.Agents.State;
+using Temporalio.Extensions.Agents.Tests.Helpers;
 using Temporalio.Extensions.Agents.Workflows;
+using Temporalio.Testing;
 using Xunit;
 
 namespace Temporalio.Extensions.Agents.Tests.HistoryStore;
@@ -444,6 +450,107 @@ public class ExternalHistoryStoreTests
         Assert.NotNull(legacyInput.ConversationHistory);
         Assert.True(newInput.UseExternalStore);
         Assert.Null(newInput.ConversationHistory);
+    }
+
+    /// <summary>
+    /// In-flight migration safety: a workflow STARTED before the operator enabled
+    /// <see cref="TemporalAgentsOptions.UseExternalHistory"/> carries
+    /// <see cref="ExecuteAgentInput.UseExternalStore"/> = <see langword="false"/> in its input.
+    /// After the worker is redeployed with <c>UseExternalHistory = true</c> AND a store
+    /// registered in DI, that pre-existing workflow MUST keep using its inline
+    /// <c>ConversationHistory</c> — the store must not be called for any in-flight session
+    /// whose input flag is false. This is the load-bearing migration invariant: deploying the
+    /// new feature does not retroactively migrate sessions that started under the old contract.
+    /// </summary>
+    /// <remarks>
+    /// Drives <see cref="AgentActivities.ExecuteAgentAsync"/> directly via
+    /// <see cref="ActivityEnvironment"/>. We register the store in DI (post-upgrade shape) and
+    /// pass an <see cref="ExecuteAgentInput"/> with <c>UseExternalStore = false</c>
+    /// (pre-upgrade shape). Asserts: no Load / Append / Replace call ever lands on the store.
+    /// </remarks>
+    [Fact]
+    public async Task ExecuteAgentAsync_LegacyInputWithStoreRegistered_DoesNotTouchStore()
+    {
+        var fixedResponse = new AgentResponse
+        {
+            Messages = [new ChatMessage(ChatRole.Assistant, "ok")],
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        var factories = new Dictionary<string, Func<IServiceProvider, AIAgent>>
+        {
+            ["agent"] = _ => new StubAIAgent("agent", fixedResponse),
+        };
+        var sp = new ServiceCollection().BuildServiceProvider();
+        var store = new FakeAgentHistoryStore();
+        var activities = new AgentActivities(factories, sp, historyStore: store);
+
+        // Pre-upgrade input shape: inline ConversationHistory, UseExternalStore = false.
+        var legacyInput = new ExecuteAgentInput(
+            "agent",
+            new RunRequest("hi") { CorrelationId = "c1" },
+            conversationHistory:
+            [
+                DurableSessionRequest.FromMessages([new ChatMessage(ChatRole.User, "hi")]),
+            ],
+            sessionId: Session.TemporalAgentSessionId.WithRandomKey("agent"),
+            useExternalStore: false);
+
+        // Run the activity. The completion result isn't load-bearing here — we care about the
+        // side effects on the store.
+        var env = new ActivityEnvironment
+        {
+            TemporalClient = A.Fake<ITemporalClient>(),
+        };
+        await env.RunAsync(() => activities.ExecuteAgentAsync(legacyInput));
+
+        // The store was registered (post-upgrade DI) but the workflow input said "no". So no
+        // call of any kind landed.
+        Assert.Equal(0, store.LoadCount);
+        Assert.Equal(0, store.AppendCount);
+        Assert.Equal(0, store.ReplaceCount);
+        Assert.Empty(store.Calls);
+    }
+
+    /// <summary>
+    /// Positive control for the migration test: the same activity, same DI shape, but with
+    /// <see cref="ExecuteAgentInput.UseExternalStore"/> = <see langword="true"/> DOES drive
+    /// the store. This pins the per-invocation branch — the only difference between the two
+    /// tests is the input flag.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAgentAsync_NewInputWithStoreRegistered_LoadsAndAppends()
+    {
+        var fixedResponse = new AgentResponse
+        {
+            Messages = [new ChatMessage(ChatRole.Assistant, "ok")],
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        var factories = new Dictionary<string, Func<IServiceProvider, AIAgent>>
+        {
+            ["agent"] = _ => new StubAIAgent("agent", fixedResponse),
+        };
+        var sp = new ServiceCollection().BuildServiceProvider();
+        var store = new FakeAgentHistoryStore();
+        var activities = new AgentActivities(factories, sp, historyStore: store);
+
+        var newInput = new ExecuteAgentInput(
+            "agent",
+            new RunRequest("hi") { CorrelationId = "c1" },
+            conversationHistory: null,
+            sessionId: Session.TemporalAgentSessionId.WithRandomKey("agent"),
+            useExternalStore: true);
+
+        var env = new ActivityEnvironment
+        {
+            TemporalClient = A.Fake<ITemporalClient>(),
+        };
+        await env.RunAsync(() => activities.ExecuteAgentAsync(newInput));
+
+        // External-store mode loaded prior history (empty bucket → empty list) and appended
+        // both the request entry (rebuilt from RunRequest) and response entry.
+        Assert.Equal(1, store.LoadCount);
+        Assert.Equal(1, store.AppendCount);
+        Assert.Equal(0, store.ReplaceCount);
     }
 
     // ── Subclass that exposes protected hooks on AgentWorkflow ────────────────
