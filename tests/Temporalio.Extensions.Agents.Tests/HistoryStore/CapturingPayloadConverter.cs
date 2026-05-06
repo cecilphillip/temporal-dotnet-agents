@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using Microsoft.Extensions.AI;
 using Temporalio.Api.Common.V1;
 using Temporalio.Converters;
 
@@ -35,7 +34,7 @@ internal sealed class CapturingPayloadConverter : IPayloadConverter
     private readonly ConcurrentQueue<CapturedToValue> _toValue = new();
 
     public CapturingPayloadConverter()
-        : this(new DefaultPayloadConverter(AIJsonUtilities.DefaultOptions))
+        : this(new DefaultPayloadConverter(TemporalAgentJsonUtilities.DefaultOptions))
     {
     }
 

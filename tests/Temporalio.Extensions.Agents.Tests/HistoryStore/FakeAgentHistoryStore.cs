@@ -1,28 +1,21 @@
 using System.Collections.Concurrent;
 using Temporalio.Extensions.AI;
+using Temporalio.Extensions.Agents.HistoryStore;
 
 namespace Temporalio.Extensions.Agents.Tests.HistoryStore;
 
 /// <summary>
-/// In-memory test double for the future <c>IAgentHistoryStore</c> interface
-/// (planned shape: <c>LoadAsync</c> / <c>AppendAsync</c> / <c>ReplaceAsync</c> by session ID).
-/// Records every call so tests can assert ordering, inputs, and call counts.
+/// In-memory test double for <see cref="IAgentHistoryStore"/>. Records every call so tests
+/// can assert ordering, inputs, and call counts.
 /// </summary>
 /// <remarks>
-/// <para>
-/// This type is intentionally a stand-alone fake that does not yet implement
-/// <c>IAgentHistoryStore</c> (the interface does not exist on disk yet — Tank's
-/// implementation work introduces it). Once Tank's PR lands, the only required
-/// change is to add <c>: IAgentHistoryStore</c> on the class declaration. The
-/// public surface of this type already mirrors the planned interface.
-/// </para>
 /// <para>
 /// All operations are concurrent-safe. Per-session storage is a
 /// <see cref="ConcurrentDictionary{TKey,TValue}"/>; per-session entry lists are
 /// guarded by per-session locks to preserve append ordering for assertions.
 /// </para>
 /// </remarks>
-internal sealed class FakeAgentHistoryStore
+internal sealed class FakeAgentHistoryStore : IAgentHistoryStore
 {
     private readonly ConcurrentDictionary<string, List<DurableSessionEntry>> _store = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, object> _locks = new(StringComparer.Ordinal);
