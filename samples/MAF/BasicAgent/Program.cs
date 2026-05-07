@@ -14,7 +14,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenAI;
-using OpenAI.Chat;
 using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Hosting;
 
@@ -26,13 +25,13 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning); // suppress Temporal SDK nois
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
-if (string.IsNullOrEmpty(apiBaseUrl))
-    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
-
 if (string.IsNullOrEmpty(apiKey))
     throw new InvalidOperationException(
         "OPENAI_API_KEY is not configured. Set it with: " +
         "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/BasicAgent");
+
+if (string.IsNullOrEmpty(apiBaseUrl))
+    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
@@ -66,10 +65,12 @@ builder.Services
     {
         opts.AddDurableAgent("Assistant", agent =>
         {
-            agent.Instructions = "You are a helpful assistant.";
+            agent.Instructions =
+                "You are a helpful geography and weather assistant. " +
+                "When asked about weather, always use the get_weather tool.";
             agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
-            agent.AddTool(weatherTool);
-            agent.TimeToLive   = TimeSpan.FromHours(1);
+            agent.AddTool(weatherTool, opts => opts.NoRetry());
+            agent.TimeToLive   = TimeSpan.FromHours(1); // shortened for demo; production default is 14 days
         });
     });
 
@@ -90,18 +91,21 @@ Console.WriteLine($"Session workflow ID: {session}\n");
 // ── Step 8: Multi-turn conversation ──────────────────────────────────────────
 // Each RunAsync call is a Temporal WorkflowUpdate — a durable, acknowledged
 // request/response round-trip. Conversation history is preserved in the workflow.
-var r1 = await proxy.RunAsync("What is the capital of France?", session);
 Console.WriteLine("User : What is the capital of France?");
-Console.WriteLine($"Agent: {r1.Text}\n");
+var r1 = await proxy.RunAsync("What is the capital of France?", session);
+Console.WriteLine($"Agent: {r1.Text ?? "(no response)"}\n");
 
-var r2 = await proxy.RunAsync("What is its population?", session);
 Console.WriteLine("User : What is its population?");
-Console.WriteLine($"Agent: {r2.Text}\n");
+var r2 = await proxy.RunAsync("What is its population?", session);
+Console.WriteLine($"Agent: {r2.Text ?? "(no response)"}\n");
+
+Console.WriteLine("User : What is the weather like there right now?");
+var r3 = await proxy.RunAsync("What is the weather like there right now?", session);
+Console.WriteLine($"Agent: {r3.Text ?? "(no response)"}\n");
 
 // ── Step 9: Graceful shutdown ────────────────────────────────────────────────
-// TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException when its
-// stoppingToken is cancelled — that exception propagates through BackgroundService and
-// may surface here depending on the .NET hosting version. Swallow it: it is expected.
+// The Temporal hosted worker cancels its poll loop on shutdown, which may surface as
+// OperationCanceledException through BackgroundService. Swallow it: it is expected.
 try
 {
     await host.StopAsync();
