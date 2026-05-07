@@ -20,4 +20,7 @@ public record MonitorWorkflowInput
 
     /// <summary>Total readings processed across all runs (carried forward).</summary>
     public int CarriedTotalReadings { get; init; }
+
+    /// <summary>Count of readings since the last analysis, carried from the previous run.</summary>
+    public int CarriedReadingsSinceLastAnalysis { get; init; }
 }

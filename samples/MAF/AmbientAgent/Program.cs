@@ -11,7 +11,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenAI;
-using OpenAI.Chat;
 using Temporalio.Api.Enums.V1;
 using Temporalio.Client;
 using Temporalio.Extensions.Agents;
@@ -157,7 +156,8 @@ for (int i = 1; i <= 20; i++)
     await monitorHandle.SignalAsync(wf => wf.IngestHealthCheckAsync(reading));
     Console.WriteLine($"  Reading {i,2}: CPU={reading.CpuPercent,5:F1}% Mem={reading.MemoryPercent,5:F1}% Temp={reading.TemperatureCelsius,5:F1}°C{(i is >= 13 and <= 15 ? " ⚠️ SPIKE" : "")}");
 
-    // Small delay between readings to let the workflow process them.
+    // Rate-limit to simulate real sensor cadence — signals are delivered asynchronously,
+    // so this delay is not a synchronization barrier.
     await Task.Delay(200);
 }
 
