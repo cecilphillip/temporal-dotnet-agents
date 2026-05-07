@@ -89,7 +89,10 @@ builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(summaryAgent);
+        opts.AddDurableAgent("SummaryAgent", agent =>
+        {
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+        });
 
         opts.AddScheduledAgentRun(
             agentName: "SummaryAgent",

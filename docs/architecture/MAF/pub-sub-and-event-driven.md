@@ -73,14 +73,28 @@ public class EventDrivenFanOutWorkflow
 ### Registration
 
 ```csharp
+builder.Services.AddChatClient(chatClient);
+
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddWorkflow<EventDrivenFanOutWorkflow>()
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(summarizerAgent);
-        opts.AddAIAgent(taggerAgent);
-        opts.AddAIAgent(moderatorAgent);
+        opts.AddDurableAgent("SummarizerAgent", agent =>
+        {
+            agent.Instructions = "Summarize the post.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
+        opts.AddDurableAgent("TaggerAgent", agent =>
+        {
+            agent.Instructions = "Generate tags for the post.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
+        opts.AddDurableAgent("ModeratorAgent", agent =>
+        {
+            agent.Instructions = "Moderate the post for policy violations.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
     });
 ```
 

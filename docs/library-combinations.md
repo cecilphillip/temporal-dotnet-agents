@@ -82,16 +82,18 @@ Conversations are identified by an opaque string ID. There are no named agents, 
 ### Registration
 
 ```csharp
-var weatherAgent = chatClient.AsAIAgent(
-    name: "WeatherAgent",
-    description: "Handles weather queries and forecasts.",
-    instructions: "You are a weather specialist...");
+builder.Services.AddChatClient(chatClient);
 
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(weatherAgent);
+        opts.AddDurableAgent("WeatherAgent", agent =>
+        {
+            agent.Description  = "Handles weather queries and forecasts.";
+            agent.Instructions = "You are a weather specialist.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
     });
 ```
 

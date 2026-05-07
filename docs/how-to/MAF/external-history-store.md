@@ -10,8 +10,8 @@ How to opt the Agents library out of in-Temporal conversation history and into a
 2. [Why Use It](#why-use-it)
 3. [Two-Layer Architecture](#two-layer-architecture)
 4. [Quick Start](#quick-start)
-5. [Implementing `IAgentHistoryStore`](#implementing-iagenthistorystore)
-6. [DI Wiring](#di-wiring)
+5. [Per-Agent History Store](#per-agent-history-store)
+6. [Implementing `IAgentHistoryStore`](#implementing-iagenthistorystore)
 7. [Migration Behavior](#migration-behavior)
 8. [What Changes When Opted In](#what-changes-when-opted-in)
 9. [When NOT to Use It](#when-not-to-use-it)
@@ -23,9 +23,11 @@ How to opt the Agents library out of in-Temporal conversation history and into a
 
 `IAgentHistoryStore` is an opt-in interface that lets the Agents library persist conversation history into a backend you provide — Cosmos DB, PostgreSQL, Redis, or anything else — instead of inside the Temporal workflow's event history.
 
-When you do **not** register an `IAgentHistoryStore`, the library's behavior is unchanged from prior releases: conversation history lives on the `AgentWorkflow` instance as `_history`, is serialized into Temporal's event log on each activity dispatch, and is carried across continue-as-new transitions via `AgentWorkflowInput.CarriedHistory`. This default is appropriate for many workloads and is preserved indefinitely.
+When you do **not** configure an `IAgentHistoryStore`, the library's behavior is unchanged from prior releases: conversation history lives on the `AgentWorkflow` instance as `_history`, is serialized into Temporal's event log on each activity dispatch, and is carried across continue-as-new transitions via `AgentWorkflowInput.CarriedHistory`. This default is appropriate for many workloads and is preserved indefinitely.
 
-When you **do** register an `IAgentHistoryStore` and set `TemporalAgentsOptions.UseExternalHistory = true`, the workflow stops including conversation history in the activity input payload, and the activity loads history from your store at the start of each turn.
+When you **do** configure an `IAgentHistoryStore` factory on the worker (`opts.HistoryStore = sp => ...`) or on a specific agent (`agent.HistoryStore = sp => ...`), the workflow stops including conversation history in the activity input payload, and the activity loads history from your store at the start of each turn.
+
+In v0.3 there is **no boolean opt-in flag**. Opt-in is implicit in setting a non-null `HistoryStore` factory — at the worker level via `TemporalAgentsOptions.HistoryStore`, at the agent level via `DurableAgentBuilder.HistoryStore`, or both (per-agent wins).
 
 ---
 
@@ -53,13 +55,13 @@ External storage decouples conversation length from Temporal event size: each ac
 
 ### `IAgentHistoryStore` is a Temporal-level coordination interface
 
-When the Agents library detects that `UseExternalHistory = true`, the workflow code path changes: `ExecuteAgentInput.ConversationHistory` is set to `null` and `ExecuteAgentInput.UseExternalStore` is set to `true`. This change happens *before* the `ActivityScheduled` event is written, so conversation messages never enter the Temporal event log.
+When the Agents library detects that an effective `HistoryStore` is set for an agent, the workflow code path changes: `ExecuteAgentInput.ConversationHistory` is set to `null` and `ExecuteAgentInput.UseExternalStore` is set to `true`. This change happens *before* the `ActivityScheduled` event is written, so conversation messages never enter the Temporal event log.
 
 This decision must live at the workflow boundary. Anything that runs inside the activity — including any `AIContextProvider` — runs *after* the event is already written. By that point the PII has already been recorded.
 
 ### `ChatHistoryProvider` is the right abstraction inside the activity
 
-MAF's `ChatHistoryProvider` (a subtype of `AIContextProvider`) is the idiomatic way to inject historical messages into the LLM context for a given call. When `UseExternalHistory = true`, `AgentActivities.ExecuteAgentAsync` uses a `TemporalChatHistoryProvider` adapter — provided by the library — that loads from `IAgentHistoryStore` and feeds the agent's pipeline. You don't need to write that adapter yourself.
+MAF's `ChatHistoryProvider` (a subtype of `AIContextProvider`) is the idiomatic way to inject historical messages into the LLM context for a given call. When external history is opted in, the activity uses a `TemporalChatHistoryProvider` adapter — provided by the library — that loads from `IAgentHistoryStore` and feeds the agent's pipeline. You don't need to write that adapter yourself.
 
 The split:
 
@@ -68,13 +70,13 @@ The split:
 | Workflow coordination | `IAgentHistoryStore` | `AgentWorkflow` | Decide whether to put history in the activity payload at all |
 | LLM context injection | `ChatHistoryProvider` (via `TemporalChatHistoryProvider`) | `AgentActivities` | Surface history to the model for a single call |
 
-If you only register a custom `ChatHistoryProvider` without `IAgentHistoryStore`, the workflow still serializes history into the activity-scheduled event — the PII problem is unsolved. If you only implement `IAgentHistoryStore`, the library's built-in adapter handles the LLM-context-injection side automatically.
+If you only register a custom `ChatHistoryProvider` without `IAgentHistoryStore`, the workflow still serializes history into the activity-scheduled event — the PII problem is unsolved. If you only configure `HistoryStore`, the library's built-in adapter handles the LLM-context-injection side automatically.
 
 ---
 
 ## Quick Start
 
-Register a store implementation in DI and enable external history in `TemporalAgentsOptions`:
+Register a store implementation in DI and assign the worker-level `HistoryStore` factory:
 
 ```csharp
 using Temporalio.Extensions.Agents;
@@ -82,16 +84,22 @@ using Temporalio.Extensions.Agents.HistoryStore;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// 1. Register your store implementation
-builder.Services.AddSingleton<IAgentHistoryStore, CosmosAgentHistoryStore>();
+// 1. Register your store implementation in DI.
+builder.Services.AddSingleton<CosmosAgentHistoryStore>();
+builder.Services.AddChatClient(chatClient);
 
-// 2. Enable external history on the agent worker
+// 2. Set the worker-level HistoryStore factory.
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.UseExternalHistory = true;
-        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
+        opts.HistoryStore = sp => sp.GetRequiredService<CosmosAgentHistoryStore>();
+
+        opts.AddDurableAgent("MyAgent", agent =>
+        {
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            // No agent.HistoryStore set — inherits opts.HistoryStore.
+        });
     });
 
 var host = builder.Build();
@@ -102,30 +110,26 @@ That's the entire opt-in. After this, every new agent session created on this wo
 
 ---
 
-## Using `HistoryStore` with `AddDurableAgent`
+## Per-Agent History Store
 
-`AddDurableAgent` (the v0.3 registration path) replaces the legacy `UseExternalHistory = true` + `UseExternalAgentHistory<T>()` opt-in pair with a **factory-shaped** entry that runs at first activity dispatch. Two slots:
-
-- **Worker default**: `opts.HistoryStore = sp => sp.GetRequiredService<MyStore>()`. Applies to every durable agent on the worker that doesn't override.
-- **Per-agent override**: `agent.HistoryStore = sp => sp.GetRequiredService<HipaaStore>()`. Wins over the worker default for that one agent.
-
-When **either** is non-null, external history is opted in for that agent. There is no boolean opt-in flag — the presence of a factory drives the behavior.
+The worker-level factory applies to every durable agent that does not override it. To use a different store for one agent — for example, a regulated agent that needs PHI segregation — set `agent.HistoryStore` on its builder. The per-agent factory wins over the worker-level default.
 
 ```csharp
 builder.Services.AddSingleton<MyStore>();
 builder.Services.AddSingleton<HipaaStore>();
+builder.Services.AddChatClient(chatClient);
 
 builder.Services
     .AddHostedTemporalWorker(taskQueue)
     .AddTemporalAgents(opts =>
     {
-        // Worker-level default: every durable agent uses MyStore unless it overrides.
+        // Worker-level default — every durable agent without an override uses MyStore.
         opts.HistoryStore = sp => sp.GetRequiredService<MyStore>();
 
         opts.AddDurableAgent("StandardAgent", agent =>
         {
             agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
-            // No HistoryStore override — inherits opts.HistoryStore (MyStore).
+            // Inherits opts.HistoryStore (MyStore).
         });
 
         opts.AddDurableAgent("ComplianceAgent", agent =>
@@ -139,7 +143,7 @@ builder.Services
 
 > **Per-agent opt-out is not supported.** If you need one agent on a worker to keep history in workflow state while another uses a store, register them on separate worker builders (different task queues). The store factory applies uniformly to every durable agent on a single worker that doesn't override.
 
-The same `IAgentHistoryStore` interface and contract apply — see [Implementing `IAgentHistoryStore`](#implementing-iagenthistorystore) below. The legacy `UseExternalHistory = true` flag and `services.UseExternalAgentHistory<TStore>()` extension still work for legacy `AddAIAgent` / `AddAIAgentFactory` registrations through Phase 4 of the v0.3 rollout; Phase 5 removes both. New code should use `opts.HistoryStore` + per-agent override.
+The factory runs once at first activity dispatch (the same lifecycle as `agent.ChatClient`); the resolved instance is cached for the lifetime of the worker process.
 
 ---
 
@@ -258,58 +262,22 @@ For production backends, the same shape applies — the only differences are the
 
 ---
 
-## DI Wiring
-
-There are two equivalent ways to wire up the store. Both produce identical worker state.
-
-### Direct registration
-
-```csharp
-builder.Services.AddSingleton<IAgentHistoryStore, MyHistoryStore>();
-
-builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .AddTemporalAgents(opts =>
-    {
-        opts.UseExternalHistory = true;
-        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
-    });
-```
-
-### Convenience extension
-
-```csharp
-builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .UseExternalAgentHistory<MyHistoryStore>()    // registers the store + sets UseExternalHistory = true
-    .AddTemporalAgents(opts =>
-    {
-        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
-    });
-```
-
-`UseExternalAgentHistory<TStore>` registers `TStore` as a singleton implementation of `IAgentHistoryStore` and flips `UseExternalHistory` to `true` on the options. Use whichever style fits the surrounding wiring you already have.
-
-> If `UseExternalHistory = true` is set but no `IAgentHistoryStore` is registered in DI, the worker fails fast at startup with an `InvalidOperationException`. The library will not silently fall back to the in-memory path — silent fallback would leak PII into Temporal events, defeating the point of opting in.
-
----
-
 ## Migration Behavior
 
-Existing sessions and new sessions coexist seamlessly across a deployment that flips the flag. There is no data-migration step.
+Existing sessions and new sessions coexist seamlessly across a deployment that flips the worker default. There is no data-migration step.
 
 | Session state at deploy | Behavior after the deploy |
 |---|---|
-| Workflow started with `UseExternalStore = false`, still running | Continues using in-memory history — the `AgentWorkflowInput.UseExternalStore` flag travels with the workflow |
-| Workflow started with `UseExternalStore = false`, completes naturally | Done — the next message creates a new workflow that reads the current options |
-| Workflow started with `UseExternalStore = false`, hits continue-as-new | Carries history forward via `CarriedHistory` (in-memory path), as it always has |
-| New workflow started after the deploy | Reads the current `UseExternalHistory` value, uses the store from turn 1 |
+| Workflow started before `opts.HistoryStore` was set, still running | Continues using in-memory history — the `AgentWorkflowInput.UseExternalStore` flag travels with the workflow |
+| Workflow started before `opts.HistoryStore` was set, completes naturally | Done — the next message creates a new workflow that reads the current options |
+| Workflow started before `opts.HistoryStore` was set, hits continue-as-new | Carries history forward via `CarriedHistory` (in-memory path), as it always has |
+| New workflow started after `opts.HistoryStore` is set | Reads the current configuration, uses the store from turn 1 |
 
 This is intentional. In-flight sessions cannot be retroactively migrated to the store without a workflow-replay rewrite of historical events, which Temporal does not support. Letting them complete on the original code path is the only safe option.
 
 If you need to migrate every session immediately — for example, after a security incident — the operational sequence is:
 
-1. Deploy the new build with `UseExternalHistory = true`.
+1. Deploy the new build with `opts.HistoryStore` set.
 2. Send a `RequestShutdown` signal to all running sessions, OR wait for them to time out via TTL.
 3. New sessions started by clients after step 1 use the store from turn 1.
 
@@ -344,15 +312,15 @@ Inspect a workflow's history after opting in (`temporal workflow show -w ta-myag
 - `UseExternalStore = true` is the marker that the activity should call `LoadAsync` instead of reading from the input.
 - The activity input still carries the new request entry on the wire — the *current* turn's user message is in the activity payload. Only prior turns are absent.
 
-If you need *zero* message content in Temporal events, including the current turn, you must additionally redact request content at the caller before sending it to `RunAgentAsync`. Per-tool activity isolation (Feature 2) is a future addition that further reduces tool-argument exposure in events.
+If you need *zero* message content in Temporal events, including the current turn, you must additionally redact request content at the caller before sending it to `RunAgentAsync`.
 
 ### Continue-as-new
 
-When `UseExternalHistory = true`:
+When external history is opted in:
 
 - `CarriedHistory` is set to `null` on the new run's `AgentWorkflowInput`. There is nothing to carry — the store owns it.
 - The workflow dispatches a `ReduceHistoryInStoreAsync` activity *before* throwing the continue-as-new exception. That activity loads the history from the store and, if `prior.Count > MaxEntryCount`, calls `IAgentHistoryStore.ReplaceAsync` with the **most recent `MaxEntryCount` entries** (a deterministic tail-trim — `prior.Skip(prior.Count - MaxEntryCount)`). If the store is already within `MaxEntryCount`, the activity is a no-op.
-- The activity does **not** apply the user's `TemporalAgentsOptions.DefaultHistoryReducer` delegate to the external store. The reducer is annotated `[JsonIgnore]` and cannot be transported into a Temporal activity, so the external-store path performs a fixed tail-trim instead. The in-memory `HistoryReducer` delegate continues to work as documented in the [Usage Guide](./usage.md) for the in-memory mode (`UseExternalHistory = false`); only the external-store path differs.
+- The activity does **not** apply the user's `TemporalAgentsOptions.DefaultHistoryReducer` (or per-agent `agent.HistoryReducer`) delegate to the external store. The reducer is annotated `[JsonIgnore]` and cannot be transported into a Temporal activity, so the external-store path performs a fixed tail-trim instead. The in-memory `HistoryReducer` delegate continues to work as documented in the [Usage Guide](./usage.md) for the in-memory mode (no `HistoryStore` set); only the external-store path differs.
 
 #### Workaround: custom store-side reduction
 
@@ -399,11 +367,12 @@ For sessions of fewer than ~50 turns with no PII concerns, the default path is t
 ## References
 
 - [Agent Sessions and the Workflow Loop — External History Store](../../architecture/MAF/agent-sessions-and-workflow-loop.md#external-history-store) — architectural diagram and rationale
-- [Usage Guide](./usage.md) — full `TemporalAgentsOptions` reference
+- [Usage Guide](./usage.md) — full `TemporalAgentsOptions` and `DurableAgentBuilder` reference
 - [Session StateBag and Context Providers](../../architecture/MAF/session-statebag-and-context-providers.md) — how `AIContextProvider` integrates with the session loop
 - `src/Temporalio.Extensions.Agents/HistoryStore/IAgentHistoryStore.cs` — interface definition
-- `src/Temporalio.Extensions.Agents/TemporalAgentsOptions.cs` — `UseExternalHistory` flag
+- `src/Temporalio.Extensions.Agents/TemporalAgentsOptions.cs` — `HistoryStore` worker-level factory
+- `src/Temporalio.Extensions.Agents/DurableAgentBuilder.cs` — `HistoryStore` per-agent factory
 
 ---
 
-_Last updated: 2026-05-05_
+_Last updated: 2026-05-06_

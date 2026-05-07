@@ -243,24 +243,25 @@ Workflow stores          Workflow stores
 
 ## Configuration: Wiring It All Together
 
-### Step 1 — Build the agent with an AIContextProvider
+### Step 1 — Register the agent with an AIContextProvider
 
-`AIContextProvider` instances are attached to a `ChatClientAgent` via `ChatClientAgentOptions`:
+In v0.3, `AIContextProvider` instances are registered on the `DurableAgentBuilder` via `AddContextProvider`. The library composes the chat pipeline internally with `UseAIContextProvider(...)` so the provider's lifecycle hooks fire on each LLM call.
 
 ```csharp
-using var httpClient = new HttpClient
+builder.Services.AddSingleton<HttpClient>(_ =>
 {
-    BaseAddress = new Uri("https://api.mem0.ai")
-};
-httpClient.DefaultRequestHeaders.Authorization =
-    new AuthenticationHeaderValue("Token", "<your-api-key>");
+    var httpClient = new HttpClient { BaseAddress = new Uri("https://api.mem0.ai") };
+    httpClient.DefaultRequestHeaders.Authorization =
+        new AuthenticationHeaderValue("Token", "<your-api-key>");
+    return httpClient;
+});
 
-var mem0Provider = new Mem0Provider(
-    httpClient,
+builder.Services.AddSingleton<Mem0Provider>(sp => new Mem0Provider(
+    sp.GetRequiredService<HttpClient>(),
     stateInitializer: session =>
     {
-        // Extract the session ID from the TemporalAgentSession
-        // This runs once per session (first turn only)
+        // Extract the session ID from the TemporalAgentSession.
+        // This runs once per session (first turn only).
         var sessionId = session?.GetService<TemporalAgentSessionId>();
         return new Mem0Provider.State(
             new Mem0ProviderScope
@@ -268,32 +269,33 @@ var mem0Provider = new Mem0Provider(
                 AgentId = "weather-bot",
                 UserId  = sessionId?.Key ?? "anonymous"
             });
-    });
+    }));
 
-var agent = new ChatClientAgent(
-    chatClient,
-    new ChatClientAgentOptions
-    {
-        Name             = "WeatherAgent",
-        Instructions     = "You are a helpful weather assistant.",
-        AIContextProviders = [mem0Provider]
-    });
+builder.Services.AddChatClient(chatClient);
 ```
 
-### Step 2 — Register the agent with TemporalAgents
+### Step 2 — Wire the agent through `AddDurableAgent`
 
 ```csharp
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(options =>
     {
-        options.AddAIAgent(
-            agent,
-            timeToLive: TimeSpan.FromHours(4));
+        options.AddDurableAgent("WeatherAgent", agent =>
+        {
+            agent.Instructions = "You are a helpful weather assistant.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+            agent.TimeToLive   = TimeSpan.FromHours(4);
+
+            // Provider factory runs once at first activity dispatch.
+            // The resolved instance is cached for the worker's lifetime and shared
+            // across sessions; per-session state goes through the AgentSessionStateBag.
+            agent.AddContextProvider(sp => sp.GetRequiredService<Mem0Provider>());
+        });
     });
 ```
 
-Because `Mem0Provider` is attached to the `ChatClientAgent` instance passed to `AddAIAgent`, it is automatically invoked by `ChatClientAgent.RunAsync` inside the activity. No TemporalAgents-specific configuration is needed to enable it — the StateBag persistence happens transparently.
+Because the provider is registered on the agent's builder, it is composed into the chat pipeline by the library when the agent is materialized. No extra TemporalAgents-specific configuration is needed — the StateBag persistence happens transparently.
 
 ### Step 3 — Call the agent (no special handling needed)
 

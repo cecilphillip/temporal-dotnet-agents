@@ -127,7 +127,7 @@ The following are entirely separate and belong to their respective libraries. No
 - `ITemporalAgentClient` / `DefaultTemporalAgentClient` — the update-based client
 - `TemporalAgentContext` — async-local context for tools running inside activities
 - `AgentSessionStateBag` — per-session state bag persisted across turns
-- Registration APIs: `AddTemporalAgents()`, `AddAIAgent()`
+- Registration APIs: `AddTemporalAgents()`, `AddDurableAgent()`
 
 `Extensions.Agents` does not use `DurableChatWorkflow` or any Extensions.AI pipeline component. The two workflow types run independently, each managing its own history and HITL state.
 

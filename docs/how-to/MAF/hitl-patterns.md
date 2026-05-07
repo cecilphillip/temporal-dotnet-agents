@@ -420,7 +420,7 @@ public sealed record DurableApprovalDecision
 
 ## Complete Example: Email Approval
 
-The `samples/HumanInTheLoop/` sample implements a full email assistant with HITL approval. Key components:
+The `samples/MAF/HumanInTheLoop/` sample implements a full email assistant with HITL approval. Key components:
 
 **Tool definition** — `send_email` pauses for approval before sending:
 
@@ -452,9 +452,16 @@ builder.Services
     .AddHostedTemporalWorker("hitl-sample")
     .AddTemporalAgents(opts =>
     {
-        opts.DefaultActivityTimeout    = TimeSpan.FromHours(24);
-        opts.DefaultHeartbeatTimeout   = TimeSpan.FromMinutes(5);
-        opts.AddAIAgent(emailAgent, timeToLive: TimeSpan.FromHours(2));
+        opts.DefaultActivityTimeout  = TimeSpan.FromHours(24);
+        opts.DefaultHeartbeatTimeout = TimeSpan.FromMinutes(5);
+
+        opts.AddDurableAgent("EmailAgent", agent =>
+        {
+            agent.Instructions = "You are an email assistant.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+            agent.AddTool(sendEmailTool);
+            agent.TimeToLive   = TimeSpan.FromHours(2);
+        });
     });
 ```
 
@@ -485,7 +492,7 @@ var response = await agentTask;
 Run it with:
 
 ```bash
-dotnet run --project samples/HumanInTheLoop
+dotnet run --project samples/MAF/HumanInTheLoop
 ```
 
 ---
@@ -496,7 +503,7 @@ dotnet run --project samples/HumanInTheLoop
 - `src/Temporalio.Extensions.AI/DurableApprovalDecision.cs` — decision and outcome type
 - `src/Temporalio.Extensions.Agents/AgentWorkflow.cs` — HITL update/query handlers
 - `src/Temporalio.Extensions.Agents/TemporalAgentContext.cs` — `RequestApprovalAsync` for tools
-- `samples/HumanInTheLoop/` — complete working example
+- `samples/MAF/HumanInTheLoop/` — complete working example
 - [Usage Guide — HITL](./usage.md#human-in-the-loop-hitl-approval-gates) — quick-start examples
 - [Testing Agents](./testing-agents.md) — integration test patterns
 

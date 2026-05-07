@@ -295,6 +295,7 @@ When the Temporal event history for a session grows large (Temporal's per-workfl
 | `EnableSessionManagement` | `bool` | `false` | When false, middleware wraps individual calls as activities only. When true, session history is managed in the workflow. |
 | `MaxEntryCount` | `int` | `1000` | Maximum number of `DurableSessionEntry` records the workflow holds before triggering `ContinueAsNew`. Each turn adds two entries (request + response), so the default retains roughly 500 turns. Renamed from `MaxHistorySize` in 0.2.0. |
 | `HistoryReducer` | `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` | `null` | Optional synchronous, deterministic delegate that trims the workflow's entry log when rolling over via `ContinueAsNew`. Operates on entries (not flat messages), preserving per-turn `Usage` / `CorrelationId` metadata. |
+| `RegisterDefaultWorkflow` | `bool` | `true` | When `true`, the registrar registers the built-in `DurableChatWorkflow` and `DurableChatSessionClient`. Set to `false` when supplying your own `DurableChatWorkflowBase<TOutput>` subclass — see [Custom Workflow Output](./custom-workflow-output.md). All other infrastructure (DI options, `DurableAIDataConverter`, activities, embeddings) is registered regardless. |
 
 ---
 

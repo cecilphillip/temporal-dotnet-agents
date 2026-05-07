@@ -108,36 +108,36 @@ internal sealed class LoggingChatClient(IChatClient inner, ILogger<LoggingChatCl
 }
 ```
 
-### Step 2 — register the agent with the decorating factory
+### Step 2 — decorate the `IChatClient` registered in DI
 
-Add the decorator inside the existing `clientFactory` chain. This composes with `UseFunctionInvocation()` (which is where MAF's tool loop lives — keep it):
+In v0.3 the durable-agent path composes the chat pipeline internally and passes the user's `IChatClient` through with `UseProvidedChatClientAsIs = true` (so that MAF does not auto-inject `FunctionInvokingChatClient` — the workflow owns the tool-dispatch loop). To intercept individual LLM calls, decorate the `IChatClient` that the agent's `ChatClient` factory resolves:
 
 ```csharp
-using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
-var loggerFactory = builder.Services.BuildServiceProvider().GetRequiredService<ILoggerFactory>();
-var logger = loggerFactory.CreateLogger<LoggingChatClient>();
+builder.Services.AddSingleton<LoggingChatClient>(sp =>
+    new LoggingChatClient(
+        openAiClient.GetChatClient("gpt-4o-mini").AsIChatClient(),
+        sp.GetRequiredService<ILogger<LoggingChatClient>>()));
 
-var agent = openAiClient
-    .GetChatClient("gpt-4o-mini")
-    .AsAIAgent(
-        name: "Assistant",
-        instructions: "You are a helpful assistant.",
-        tools: [weatherTool],
-        clientFactory: client => client.AsBuilder()
-            .Use(inner => new LoggingChatClient(inner, logger))
-            .UseFunctionInvocation()
-            .Build());
+builder.Services.AddChatClient(sp => sp.GetRequiredService<LoggingChatClient>());
 
 builder.Services
     .AddHostedTemporalWorker("agents")
-    .AddTemporalAgents(opts => opts.AddAIAgent(agent));
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddDurableAgent("Assistant", agent =>
+        {
+            agent.Instructions = "You are a helpful assistant.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+            agent.AddTool(weatherTool);
+        });
+    });
 ```
 
-The `Use(inner => new LoggingChatClient(...))` step inserts the decorator into the pipeline. Order matters — placing the logging decorator **before** `UseFunctionInvocation()` (closer to the inner OpenAI client) means each LLM round inside the function-invocation loop is logged separately. Placing it **after** `UseFunctionInvocation()` (the outer position) would log only the single composite call that the loop sees.
+The decorator wraps the inner `IChatClient` and sees every LLM call the durable-agent loop dispatches via `RunDurableAgentStep`. Each iteration of the per-tool loop produces a separate decorated call, so per-LLM-round observability composes naturally.
 
-For most observability use cases — counting LLM rounds, attributing token usage to specific model calls — log **before** `UseFunctionInvocation()`.
+> **Don't** call `.UseFunctionInvocation()` on the chain — the durable-agent workflow owns the tool-dispatch loop. Calling it would conflict with the workflow's `InvokeAgentTool` activities and is unsupported.
 
 ### Step 3 — invoke the agent normally
 

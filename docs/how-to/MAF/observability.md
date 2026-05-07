@@ -66,7 +66,13 @@ builder.Services.AddTemporalClient(opts =>
 // 3. Register agents as usual
 builder.Services
     .AddHostedTemporalWorker("agents")
-    .AddTemporalAgents(opts => opts.AddAIAgent(agent));
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddDurableAgent("MyAgent", agent =>
+        {
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+        });
+    });
 ```
 
 > **Missing spans?** The most common cause is forgetting one of the four `AddSource` calls. All four are required for the complete trace hierarchy.
@@ -301,7 +307,7 @@ This is a doc-only pattern with no library opt-in flag. See [Per-LLM-Call Interc
 - `src/Temporalio.Extensions.Agents/DefaultTemporalAgentClient.cs` — `agent.client.send` and scheduling spans
 - `src/Temporalio.Extensions.Agents/AgentActivities.cs` — `agent.turn` span with token metrics
 - `src/Temporalio.Extensions.Agents/AgentWorkflow.cs` — search attribute upserts
-- `samples/MultiAgentRouting/Program.cs` — complete OTel setup example
+- `samples/MAF/MultiAgentRouting/Program.cs` — complete OTel setup example
 - [Temporal Visibility](https://docs.temporal.io/visibility) — search attribute documentation
 - [Temporalio.Extensions.OpenTelemetry](https://github.com/temporalio/sdk-dotnet) — SDK tracing interceptor
 

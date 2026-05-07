@@ -84,34 +84,23 @@ These are deliberately scoped to the subclass and are not candidates for further
 
 ### Compatibility with non-`ChatClientAgent` `AIAgent` subtypes
 
-`Temporalio.Extensions.Agents` registers any `AIAgent` via `opts.AddAIAgent(agent)`. The agent type that gets registered is opaque to most of the library — `AgentWorkflowWrapper` is a `DelegatingAIAgent` and forwards `RunAsync` / `RunStreamingAsync` polymorphically. This means basic dispatch works for any subtype: `ChatClientAgent` (the common case), `A2AAgent` (Microsoft.Agents.AI.A2A), graph-workflow agents (`Microsoft.Agents.AI.Workflows`), or a user-built custom `AIAgent` subclass.
+`Temporalio.Extensions.Agents` registers durable agents via `opts.AddDurableAgent(name, configure)`. The agent type produced by the library is `ChatClientAgent` (composed internally with `UseProvidedChatClientAsIs = true` and the user-supplied `IChatClient`). Direct registration of an arbitrary `AIAgent` subtype — `A2AAgent` from `Microsoft.Agents.AI.A2A`, graph-workflow agents from `Microsoft.Agents.AI.Workflows`, or a user-built custom `AIAgent` subclass — is not supported through `AddDurableAgent`. The v0.2 surface that allowed it was removed as part of the v0.3 API consolidation; see [`MIGRATION-v0.3.md`](../MIGRATION-v0.3.md) for the before/after.
 
-However, **two library features apply only to `ChatClientAgent`-shaped agents**:
+v0.3 narrows registration to `ChatClientAgent` shape — `agent.ChatClient` is a required `Func<IServiceProvider, IChatClient>` slot, and the library composes the agent internally with `UseProvidedChatClientAsIs = true`. Users who need to plug in non-`ChatClientAgent` MAF agents (`A2AAgent`, graph-workflow agents from `Microsoft.Agents.AI.Workflows`, custom `AIAgent` subclasses) cannot do so through `AddDurableAgent` today. The legacy AIAgent-instance-shaped registration was the previous escape hatch; restoring direct support is tracked as a possible follow-on once the new surface stabilises.
+
+The historical compatibility matrix below describes the v0.2 polymorphic-dispatch behavior. It is preserved for context — the same per-`ChatClientAgent` capability cliff applied then.
 
 | Feature | Mechanism | Works for non-`ChatClientAgent`? |
 |---|---|---|
-| Basic `RunAsync` / `RunStreamingAsync` dispatch as a Temporal activity | `AgentWorkflowWrapper` (delegating) → `AgentActivities.ExecuteAgentAsync` | ✅ Yes — polymorphic via `DelegatingAIAgent` |
+| Basic `RunAsync` / `RunStreamingAsync` dispatch as a Temporal activity | `AgentWorkflowWrapper` (delegating) → activity-side dispatch | ✅ Yes — polymorphic via `DelegatingAIAgent` |
 | Conversation history (`List<DurableSessionEntry>` with `ChatMessage` content) | Output of any agent's `RunStreamingAsync` is `IAsyncEnumerable<AgentResponseUpdate>`, normalized to `ChatMessage` | ✅ Yes |
 | HITL approval, search attributes, continue-as-new, reducer pipeline | `DurableChatWorkflowBase` — agent-type-agnostic | ✅ Yes |
 | **Per-request tool filtering** (`RunRequest.EnableToolCalls`, `RunRequest.EnableToolNames`) | `AgentWorkflowWrapper.GetRunOptions` attaches a `ChatClientFactory` to the run options that filters tools before each LLM call | ⚠️ **No** — non-`ChatClientAgent` agents don't read `ChatClientFactory`. Filter is silently ignored. |
 | **Per-request response-format override** (`RunRequest.ResponseFormat`) | Same `ChatClientFactory` mechanism | ⚠️ **No** — same as above. |
-| Per-LLM-call interception via `ChatClientFactory` (the [LLM-call interception how-to](how-to/MAF/llm-call-interception.md)) | User-provided `clientFactory` at `AsAIAgent(...)` registration | ⚠️ **No** — depends on an inner `IChatClient`, which non-`ChatClientAgent` subtypes don't have. |
-| **Granular tool dispatch** (deferred — see "Exit criteria" below) | Workflow-managed loop calling LLM-only via stripped `ChatClientFactory`, dispatching tools as separate activities | ⚠️ **No** — explicitly fenced off in the gate criteria (#4). When/if granular dispatch ships, it will fail loudly at registration time for non-`ChatClientAgent` agents. |
+| Per-LLM-call interception via `ChatClientFactory` (the [LLM-call interception how-to](how-to/MAF/llm-call-interception.md)) | User-provided `clientFactory` decorator on the `IChatClient` registered in DI | ⚠️ **No** — depends on an inner `IChatClient`, which non-`ChatClientAgent` subtypes don't have. |
+| **Granular tool dispatch** | Workflow-managed loop calling LLM-only via the composed pipeline, dispatching tools as separate activities | ⚠️ **No** — the v0.3 durable loop assumes `ChatClientAgent` shape with a user-supplied `IChatClient`. |
 
 **One quiet sharp edge.** `AgentWorkflowWrapper.GetRunOptions` accepts `null`, base `AgentRunOptions`, and `ChatClientAgentRunOptions` (it upgrades the first two to a default `ChatClientAgentRunOptions` and rejects other subclasses with `NotSupportedException`). If a future MAF release introduces an A2A- or graph-specific run-options subclass, this validation would need updating. Today no such subclass exists upstream, so the constraint is theoretical — but it's worth flagging for forward compatibility.
-
-**What we recommend for non-`ChatClientAgent` agent users**:
-
-- Register the agent normally via `opts.AddAIAgent(agent)`. Basic dispatch and history work end to end.
-- Set `RunRequest.EnableToolCalls = false` and `RunRequest.EnableToolNames = null` to make the silent feature-skip explicit.
-- For observability, instrument at the agent's own dispatch layer instead of trying `ChatClientFactory` interception — e.g., HTTP-client middleware for `A2AAgent`, an `ActivitySource` exporter for graph-workflow agents, or a custom `DelegatingAIAgent` decorator wrapping the agent at registration time.
-
-**Deferred runtime-validation decision.** The silent feature-skip described above could be upgraded to a startup-time warning or registration-time error: when a non-`ChatClientAgent` is registered, surface a diagnostic so users learn at deploy time (not at first turn) that tool filtering and `ResponseFormat` overrides will not apply. We have not implemented this. The trade-off:
-
-- *Pro*: catches the silent no-op early; users don't wonder why a setting they configured doesn't take effect.
-- *Con*: hard-codes a `is ChatClientAgent` check at registration that needs updating each time MAF adds a new agent subtype. Today the "it works for `ChatClientAgent`" assumption is implicit; a runtime check makes it brittle to upstream evolution.
-
-The current call: leave silent. The compatibility matrix above documents what to expect; if a real user files an issue against the silent no-op, that is the right time to add the runtime check (and at that point we will know what subset of subtypes deserves a tailored message vs. a generic one).
 
 ### Rejected directions (preserved for future maintainers)
 

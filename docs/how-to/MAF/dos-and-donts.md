@@ -13,7 +13,7 @@ A consolidated reference of common mistakes and best practices when building wit
 5. [Observability](#observability)
 6. [Testing](#testing)
 7. [Security and Configuration](#security-and-configuration)
-8. [Per-Tool Activities (Step Mode)](#per-tool-activities-step-mode)
+8. [Per-Tool Activity Configuration](#per-tool-activity-configuration)
 9. [Scheduling](#scheduling)
 
 ---
@@ -74,7 +74,7 @@ var names = await Workflow.ExecuteActivityAsync(
     new ActivityOptions { StartToCloseTimeout = TimeSpan.FromSeconds(10) });
 ```
 
-**Why:** If agents are added or removed between the original execution and a replay, the registry returns different results, causing a non-determinism error. Activity results are cached in history and replayed deterministically. See [Routing Patterns — Dynamic Routing via Activity](./routing.md#pattern-3-dynamic-routing-via-activity) for the full pattern.
+**Why:** If agents are added or removed between the original execution and a replay, the registry returns different results, causing a non-determinism error. Activity results are cached in history and replayed deterministically. See [Routing Patterns — Dynamic Routing via Activity](./routing.md#pattern-2-dynamic-routing-via-activity) for the full pattern.
 
 ### Don't use `Task.WhenAll` in workflow code — use `Workflow.WhenAllAsync`
 
@@ -100,32 +100,6 @@ await Workflow.ExecuteActivityAsync(...).ConfigureAwait(true);
 ```
 
 **Why:** `ConfigureAwait(false)` bypasses the Temporal workflow scheduler's `SynchronizationContext`, putting the continuation on the ThreadPool. The workflow loses the ability to register `CompleteWorkflowExecution` and hangs at `WorkflowTaskCompleted`. This is a `[Workflow]`-only rule — `AgentActivities.cs` and `DefaultTemporalAgentClient.cs` correctly use `ConfigureAwait(false)` because they are not workflow code. The pattern also applies to `DurableAIFunction.cs` and `DurableEmbeddingGenerator.cs` (workflow-context middleware) — they explicitly note this in inline comments.
-
-### Don't enable `EnablePerToolActivities` without also calling `AddDurableTools()`
-
-```csharp
-// WRONG — registrar throws InvalidOperationException at startup
-builder.Services
-    .AddHostedTemporalWorker(taskQueue)
-    .AddTemporalAgents(opts =>
-    {
-        opts.EnablePerToolActivities = true;   // step mode dispatches InvokeFunction
-        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
-    });
-
-// CORRECT — register tools in DurableFunctionRegistry first
-builder.Services
-    .AddHostedTemporalWorker(taskQueue)
-    .AddDurableAI(opts => { /* ... */ })
-    .AddDurableTools(sendEmailTool, lookupOrderTool)
-    .AddTemporalAgents(opts =>
-    {
-        opts.EnablePerToolActivities = true;
-        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
-    });
-```
-
-**Why:** Step mode's per-tool activity is `DurableFunctionActivities.InvokeFunctionAsync`, which resolves tools by name from `DurableFunctionRegistry`. That registry is populated by `AddDurableTools(...)`, which is wired up by `AddDurableAI()`. `TemporalAgentsRegistrar` validates this at startup and throws `InvalidOperationException` if `DurableFunctionActivities` is not registered when the flag is on — silent fallback would defeat the per-tool retry guarantee callers opted in for. See [Per-Tool Temporal Activities (Step Mode)](./durable-agents.md).
 
 ### Do use GetAgent() with string constants or activity results
 
@@ -170,26 +144,20 @@ var host = builder.Build();
 await host.StartAsync();
 ```
 
-### Do use AddAIAgentFactory for agents that need DI services
+### Do use DI factories on `AddDurableAgent` for agents that need scoped services
 
 ```csharp
-opts.AddAIAgentFactory("MyAgent",
-    sp => new MyAgent(sp.GetRequiredService<IMyService>()));
-```
-
-The factory is invoked once at activity time (not at registration time), so all DI services are fully initialized.
-
-### Do use async factories for agents that need startup I/O
-
-```csharp
-opts.AddAIAgentFactory("McpAgent", async sp =>
+opts.AddDurableAgent("MyAgent", agent =>
 {
-    var mcpClient = await McpClientFactory.CreateAsync(
-        new SseServerTransport("http://localhost:3000/sse"));
-    var tools = await mcpClient.ListToolsAsync();
-    return chatClient.AsAIAgent("McpAgent", tools: [.. tools]);
+    agent.Instructions = "...";
+    agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+    agent.AddTool("do_thing", sp => AIFunctionFactory.Create(
+        sp.GetRequiredService<IMyService>().DoThingAsync,
+        "do_thing"));
 });
 ```
+
+Every slot on the builder (`ChatClient`, `AddTool(name, factory)`, `AddContextProvider(factory)`, `HistoryStore`) accepts a `Func<IServiceProvider, T>` evaluated lazily at first activity dispatch. There is no need to call `BuildServiceProvider()` from inside the configure delegate.
 
 ---
 
@@ -411,38 +379,37 @@ All samples load secrets from `dotnet user-secrets`, which stores values in `~/.
 
 ---
 
-## Per-Tool Activities (Step Mode)
+## Per-Tool Activity Configuration
 
-### Do set `MaximumAttempts = 1` for write-style tools
+### Do call `opts.NoRetry()` on write-style tools
 
 ```csharp
-opts.PerToolActivityOptions ??= new();
-
-// Write tool — non-idempotent, must not double-fire on retry
-opts.PerToolActivityOptions["send_email"] = new ActivityOptions
+opts.AddDurableAgent("SupportAgent", agent =>
 {
-    StartToCloseTimeout = TimeSpan.FromSeconds(30),
-    RetryPolicy = new RetryPolicy { MaximumAttempts = 1 },
-};
+    agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
 
-// Read tool — idempotent, fall back to default unbounded retry
-// (no entry needed; reads ActivityTimeout / RetryPolicy from TemporalAgentsOptions)
+    // Write tool — non-idempotent, must not double-fire on retry.
+    agent.AddTool(sendEmailTool, opts => opts.NoRetry().WithTimeout(TimeSpan.FromSeconds(30)));
+
+    // Read tool — idempotent, inherits worker default retry policy.
+    agent.AddTool(lookupOrderTool);
+});
 ```
 
-**Why:** In default mode, a transient failure mid-turn re-runs the entire turn — including any write tools that already succeeded. Step mode lets you scope retry to the tool: `MaximumAttempts = 1` tells Temporal not to re-execute the activity, so a write tool runs at most once per LLM-requested invocation. This is the primary reason `PerToolActivityOptions` exists. See [Per-Tool Temporal Activities (Step Mode)](./durable-agents.md).
+**Why:** Every tool in a durable agent is dispatched as a separate Temporal activity (`InvokeAgentTool`). A transient activity failure normally retries — for a non-idempotent write tool that already had a side effect, the retry would fire the side effect a second time. `opts.NoRetry()` is sugar for `RetryPolicy = new() { MaximumAttempts = 1 }`, which tells Temporal not to re-execute the activity. The retry policy binds to the `AIFunction` reference at registration time, so a typo on the tool name is a build error rather than a silent fall-through to the default retry. See [Durable Agents](./durable-agents.md).
 
 ### Do use `Workflow.WhenAllAsync` for parallel activity fan-out
 
 ```csharp
 var tasks = toolCalls.Select(tc =>
     Workflow.ExecuteActivityAsync(
-        (DurableFunctionActivities a) => a.InvokeFunctionAsync(BuildInput(tc)),
+        (AgentActivities a) => a.InvokeAgentToolAsync(BuildInput(tc)),
         ResolveToolActivityOptions(tc.Name))).ToList();
 
 var results = await Workflow.WhenAllAsync(tasks);
 ```
 
-**Why:** `Workflow.WhenAllAsync` is the workflow-safe combinator and preserves input order — `results[i]` corresponds to `tasks[i]`, which lets you correlate fan-out activity results to the requests that produced them without a side lookup. The step-mode loop in `AgentWorkflow.ExecuteStepModeTurnAsync` uses exactly this pattern.
+**Why:** `Workflow.WhenAllAsync` is the workflow-safe combinator and preserves input order — `results[i]` corresponds to `tasks[i]`, which lets you correlate fan-out activity results to the requests that produced them without a side lookup. The durable-agent loop in `AgentWorkflow` uses exactly this pattern.
 
 ---
 
@@ -478,7 +445,7 @@ opts.AddScheduledAgentRun("Agent", "my-schedule", request, updatedSpec);
 | Don't call `ActivitySource.StartActivity()` in workflows | Determinism | Fatal |
 | Use `Workflow.WhenAllAsync`, not `Task.WhenAll`, in workflows | Determinism | Convention |
 | Don't use `ConfigureAwait(false)` in `[Workflow]` code | Determinism | Workflow hangs |
-| Set `MaximumAttempts = 1` on write tools in step mode | Step mode | Non-idempotent re-execution |
+| Pass `opts => opts.NoRetry()` to `agent.AddTool` for write tools | Per-tool retry | Non-idempotent re-execution |
 | Register all 4 OTel sources | Observability | Silent data loss |
 | Set `ActivityTimeout` for HITL | Timeouts | Activity failure |
 | Don't reuse `TemporalAIAgent` instances | Sessions | Incorrect behavior |
@@ -496,7 +463,7 @@ opts.AddScheduledAgentRun("Agent", "my-schedule", request, updatedSpec);
 - [LLM-Call Interception](./llm-call-interception.md) — per-LLM-call decorators via `ChatClientFactory`
 - [Testing Agents](./testing-agents.md) — test patterns and fixtures
 - [Scheduling](./scheduling.md) — schedule lifecycle and pitfalls
-- [Per-Tool Temporal Activities (Step Mode)](./durable-agents.md) — `EnablePerToolActivities`, write-tool retry pattern, iteration cap
+- [Durable Agents](./durable-agents.md) — per-tool retry pattern, `opts.NoRetry()` sugar, iteration cap
 
 ---
 

@@ -192,7 +192,7 @@ For full testing patterns, see `docs/how-to/MAF/testing-agents.md` and `docs/how
 - Set appropriate per-agent TTLs (default: 14 days)
 - Validate config eagerly — `string.IsNullOrEmpty` + `InvalidOperationException` for missing config (not `is null` + `ArgumentNullException`)
 - Keep OTel spans out of workflows — `agent.turn` lives in `AgentActivities`; `agent.client.send` in `DefaultTemporalAgentClient`
-- In step mode (`EnablePerToolActivities = true`), set `RetryPolicy = new RetryPolicy { MaximumAttempts = 1 }` on `opts.PerToolActivityOptions[name]` for write-style tools (send email, write record) so non-idempotent re-execution does not occur on retry
+- For non-idempotent write-style tools (send email, write record), pass `opts => opts.NoRetry()` to `agent.AddTool(...)` so the tool's activity does not re-execute on transient failure
 
 ### ❌ DON'T
 - **Never** call `ActivitySource.StartActivity()` inside `[Workflow]` — non-deterministic on replay

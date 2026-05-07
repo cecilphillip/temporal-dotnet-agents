@@ -6,7 +6,7 @@ Detailed usage patterns and configuration for Temporalio.Extensions.Agents. For 
 
 ## Durable Agents (`AddDurableAgent`)
 
-> **v0.3 preview.** `AddDurableAgent` is the recommended registration path for new code. The legacy entry points (`AddAIAgent`, `AddAIAgentFactory`, `EnablePerToolActivities`, `PerToolActivityOptions`, `UseExternalHistory`, `UseExternalAgentHistory<T>`) still work alongside it through Phase 4 of the v0.3 rollout and are removed in Phase 5. New work should target `AddDurableAgent`; existing code keeps running unchanged until you migrate it.
+> **v0.3 surface.** `AddDurableAgent` is the only registration path. The v0.2 entry points were removed without `[Obsolete]` aliases — see [`MIGRATION-v0.3.md`](../../../MIGRATION-v0.3.md) for before/after migration snippets covering every removed API.
 
 `AddDurableAgent(string name, Action<DurableAgentBuilder> configure)` is a single registration entry point that consolidates everything an agent needs — chat client, instructions, tools (with per-tool retry overrides), context providers, per-agent timeouts, and external-history opt-in — onto one fluent builder. DI access is provided via per-slot factories on the builder, so you do not need to call `BuildServiceProvider()` to wire dependencies.
 
@@ -144,7 +144,7 @@ The HITL types (`DurableApprovalRequest`, `DurableApprovalDecision`) are defined
 17. [MCP Tool Integration](#mcp-tool-integration)
 18. [External Memory with AIContextProvider](#external-memory-with-aicontextprovider)
 19. [External History Store](#external-history-store)
-20. [Per-Tool Temporal Activities (Step Mode)](#per-tool-temporal-activities-step-mode)
+20. [Per-Tool Activity Configuration](#per-tool-activity-configuration)
 21. [OpenTelemetry Integration](#opentelemetry-integration)
 
 ---
@@ -210,16 +210,22 @@ inside `AgentActivities.ExecuteAgentAsync` — so it does not need to be replay-
 var chatClient = openAiClient.GetChatClient("gpt-4o-mini")
     .AsBuilder()
     .UseChatReducer(new MessageCountingChatReducer(20))   // 20-message window to the LLM
-    .UseFunctionInvocation()
     .Build();
+//  Note: do NOT call .UseFunctionInvocation() — the durable-agent path composes
+//  the chat pipeline internally and tools are dispatched as separate Temporal activities.
 
-var agent = chatClient.AsAIAgent(
-    name: "MyAgent",
-    instructions: "You are a helpful assistant.");
+builder.Services.AddChatClient(chatClient);
 
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .AddTemporalAgents(opts => opts.AddAIAgent(agent));
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddDurableAgent("MyAgent", agent =>
+        {
+            agent.Instructions = "You are a helpful assistant.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
+    });
 ```
 
 With this configuration:
@@ -392,16 +398,17 @@ var response = await agentProxy.RunAsync("Hello!", session);
 
 ## Session TTL
 
-Sessions expire after the configured TTL (default: 14 days). Configure per-agent overrides:
+Sessions expire after the configured TTL (default: 14 days). Configure per-agent overrides on the builder:
 
 ```csharp
-options.AddAIAgentFactory(
-    name: "ShortLivedAgent",
-    factory: sp => sp.GetRequiredService<MyCustomAgent>(),
-    timeToLive: TimeSpan.FromHours(1));
+opts.AddDurableAgent("ShortLivedAgent", agent =>
+{
+    agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+    agent.TimeToLive = TimeSpan.FromHours(1);
+});
 
-// Or configure the default for all agents
-options.DefaultTimeToLive = TimeSpan.FromDays(7);
+// Or configure the default for all agents on this worker
+opts.DefaultTimeToLive = TimeSpan.FromDays(7);
 ```
 
 When the TTL elapses, the `AgentWorkflow` completes naturally. The next message to that session ID starts a fresh
@@ -426,13 +433,17 @@ builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1));
-
         // Increase for slow models or long tool-call chains
         opts.DefaultActivityTimeout = TimeSpan.FromMinutes(10);
 
         // Increase if streaming heartbeats arrive slowly
         opts.DefaultHeartbeatTimeout = TimeSpan.FromMinutes(2);
+
+        opts.AddDurableAgent("MyAgent", agent =>
+        {
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            agent.TimeToLive = TimeSpan.FromHours(1);
+        });
     });
 ```
 
@@ -671,7 +682,11 @@ builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(summaryAgent);
+        opts.AddDurableAgent("SummaryAgent", agent =>
+        {
+            agent.Instructions = "Summarize the day's activity report.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
 
         opts.AddScheduledAgentRun(
             agentName: "SummaryAgent",
@@ -789,63 +804,76 @@ await client.RunAgentDelayedAsync(
 
 ## MCP Tool Integration
 
-The async `AddAIAgentFactory` overload supports setup that requires async work at startup, such as connecting to
-a [Model Context Protocol](https://modelcontextprotocol.io/) server and listing its tools. Add the
-`ModelContextProtocol` NuGet package to your project.
+[Model Context Protocol](https://modelcontextprotocol.io/) tool servers expose `AIFunction`-shaped tools (`McpClientTool : AIFunction`) that plug into a durable agent's tool list. Because tool factories on `DurableAgentBuilder` are evaluated lazily at first activity dispatch, you can connect to the MCP server inside a tool factory using a singleton-cached `McpClient`.
+
+Add the `ModelContextProtocol` NuGet package to your project, then register the MCP client and tools:
 
 ```csharp
+// 1. Register the MCP client as a singleton — one connection per worker process.
+builder.Services.AddSingleton(async sp =>
+    await McpClientFactory.CreateAsync(
+        new SseServerTransport("http://localhost:3000/sse")));
+builder.Services.AddSingleton<IReadOnlyList<AIFunction>>(sp =>
+{
+    var mcp = sp.GetRequiredService<Task<McpClient>>().GetAwaiter().GetResult();
+    return mcp.ListToolsAsync().GetAwaiter().GetResult().Cast<AIFunction>().ToList();
+});
+
+builder.Services.AddChatClient(openAiClient.GetChatClient("gpt-4o").AsIChatClient());
+
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgentFactory("McpAgent", async sp =>
+        opts.AddDurableAgent("McpAgent", agent =>
         {
-            var mcpClient = await McpClientFactory.CreateAsync(
-                new SseServerTransport("http://localhost:3000/sse"));
+            agent.Instructions = "You can call the configured MCP tools.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
 
-            // McpClientTool implements AIFunction (MEAI-native) — no adapter needed
-            var mcpTools = await mcpClient.ListToolsAsync();
-
-            return openAiClient.GetChatClient("gpt-4o")
-                .AsAIAgent("McpAgent", tools: [.. mcpTools]);
+            // Resolve MCP tools at first dispatch — the singleton above caches the client.
+            // Each tool factory below registers one tool against the agent's per-agent tool registry.
+            // For a non-trivial number of tools, prefer enumerating ListToolsAsync() during
+            // host construction and calling agent.AddTool(...) per discovered tool there.
         });
     });
 ```
 
-The async factory is invoked once during worker startup (blocking is safe during DI container construction, not on hot
-paths). After startup the agent instance is cached and reused for every session.
+For very large MCP catalogs, register the discovered tools at host-construction time (before `builder.Build()`) and call `agent.AddTool(tool)` on the builder for each one — the builder accepts concrete `AIFunction` instances directly via the `AddTool(AIFunction, ...)` and `AddTools(params AIFunction[])` overloads.
 
 ---
 
 ## External Memory with AIContextProvider
 
-`ChatClientAgent.ContextProviders` runs before each inference call inside `AgentActivities.ExecuteAgentAsync`. This
-allows external memory providers (such as [Mem0](https://mem0.ai/)) to inject relevant context from previous
-conversations automatically, with no additional Temporal code required.
+`AIContextProvider` instances run before each inference call inside `AgentActivities`. They allow external memory providers (such as [Mem0](https://mem0.ai/)) to inject relevant context from previous conversations automatically, with no additional Temporal code required.
 
-`AgentSessionStateBag` state — including provider-managed state such as Mem0 thread IDs — is serialized and carried
-across continue-as-new boundaries automatically.
+`AgentSessionStateBag` state — including provider-managed state such as Mem0 thread IDs — is serialized and carried across continue-as-new boundaries automatically.
+
+Register a provider on the builder via `AddContextProvider`:
 
 ```csharp
-var mem0Provider = new Mem0ContextProvider(mem0Client, userId: "user-001");
+builder.Services.AddSingleton<Mem0ContextProvider>(sp =>
+    new Mem0ContextProvider(sp.GetRequiredService<Mem0Client>(), userId: "user-001"));
 
-var agent = new ChatClientAgent(chatClient, "MemoryAgent")
-{
-    Instructions   = "You are a helpful assistant with long-term memory.",
-    ContextProviders = [mem0Provider]
-};
+builder.Services.AddChatClient(chatClient);
 
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddDurableAgent("Agent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
+        opts.AddDurableAgent("MemoryAgent", agent =>
+        {
+            agent.Instructions = "You are a helpful assistant with long-term memory.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+
+            // DI-resolved context provider — runs once per worker per agent (cached).
+            agent.AddContextProvider(sp => sp.GetRequiredService<Mem0ContextProvider>());
+        });
     });
 ```
 
-Each turn the provider injects previously stored memories into the prompt; after the turn it can persist new memories.
-The `AgentSessionStateBag` stores any state the provider needs to resume in a future turn (e.g., thread identifiers),
-and that bag is serialized inside `AgentWorkflow` so it survives worker restarts and continue-as-new transitions.
+`AddContextProvider` has two overloads — `AddContextProvider(AIContextProvider)` for concrete instances and `AddContextProvider(Func<IServiceProvider, AIContextProvider>)` for DI factories. The factory runs once at first activity dispatch; the resolved instance is cached for the lifetime of the worker process and shared across all sessions on that worker. Treat provider fields as effectively read-only after construction; per-session state goes through MAF's `StateBag`.
+
+In durable mode, `InvokingAsync` and `InvokedAsync` fire **once per LLM call** (per `RunDurableAgentStep` activity), not once per turn — make these hooks idempotent and cheap, or cache results via `StateBag` to skip redundant work within a turn.
 
 For a deep dive into how StateBag persistence works, see [Session StateBag & Context Providers](../architecture/MAF/session-statebag-and-context-providers.md).
 
@@ -853,60 +881,73 @@ For a deep dive into how StateBag persistence works, see [Session StateBag & Con
 
 ## External History Store
 
-For regulated workloads (HIPAA, PCI) or long-running sessions where Temporal event size becomes a concern, register an `IAgentHistoryStore` to keep conversation history in a backend you control instead of in Temporal's event log.
+For regulated workloads (HIPAA, PCI) or long-running sessions where Temporal event size becomes a concern, configure an `IAgentHistoryStore` factory to keep conversation history in a backend you control instead of in Temporal's event log.
 
-| Option | Type | Default | What it controls |
+| Slot | Type | Default | What it controls |
 |---|---|---|---|
-| `UseExternalHistory` | `bool` | `false` | When `true`, the workflow omits `ConversationHistory` from `ExecuteAgentInput` and the activity loads history from the registered `IAgentHistoryStore`. Requires `IAgentHistoryStore` to be registered in DI. |
-| `UseExternalAgentHistory<TStore>()` | DI extension | — | Convenience method on `ITemporalWorkerServiceOptionsBuilder` that registers `TStore` as a singleton `IAgentHistoryStore` and sets `UseExternalHistory = true` in one call. |
+| `opts.HistoryStore` | `Func<IServiceProvider, IAgentHistoryStore>?` | `null` | Worker-level default factory. When non-null, every durable agent on this worker that doesn't override uses this store. |
+| `agent.HistoryStore` | `Func<IServiceProvider, IAgentHistoryStore>?` | `null` | Per-agent override. Wins over `opts.HistoryStore` for this one agent. |
+
+Presence of a non-null factory is the opt-in — there is no boolean flag.
 
 ```csharp
+builder.Services.AddSingleton<MyCosmosHistoryStore>();
+builder.Services.AddChatClient(chatClient);
+
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .UseExternalAgentHistory<MyCosmosHistoryStore>()
-    .AddTemporalAgents(opts => opts.AddAIAgent(myAgent));
-```
-
-When opted in, conversation messages no longer appear in `ActivityScheduled` event payloads, and `GetHistoryAsync()` returns metadata-only entries (callers should query the store directly for full content). For the full how-to including the relationship to `AIContextProvider` / `ChatHistoryProvider`, migration behavior, and a reference store implementation, see [External History Store](./external-history-store.md).
-
----
-
-## Per-Tool Temporal Activities (Step Mode)
-
-For agents that call write-style tools (send email, write record) or that benefit from independent per-tool retry, timeout, or visibility, opt into step mode. Each LLM call becomes a `RunAgentStep` activity and each tool call becomes a separately named `InvokeFunction` activity dispatched in parallel from the workflow.
-
-| Option | Type | Default | What it controls |
-|---|---|---|---|
-| `EnablePerToolActivities` | `bool` | `false` | When `true`, the workflow drives the tool-dispatch loop: one `RunAgentStep` activity per LLM call, one `InvokeFunction` activity per tool call. Requires `AddDurableAI()` and `AddDurableTools(...)` on the same worker builder; worker startup throws `InvalidOperationException` otherwise. |
-| `PerToolActivityOptions` | `Dictionary<string, ActivityOptions>?` | `null` | Per-tool overrides keyed by `AIFunction.Name` (case-insensitive). Use `RetryPolicy = new RetryPolicy { MaximumAttempts = 1 }` for write-style tools to prevent non-idempotent re-execution. Tools without an entry fall back to `ActivityTimeout`, `HeartbeatTimeout`, and `RetryPolicy`. |
-| `MaxToolCallsPerTurn` | `int` | `20` | Maximum step-loop iterations per single agent turn. When exceeded, the workflow returns a structured "iteration cap exceeded" assistant message rather than letting workflow history grow unbounded. |
-
-```csharp
-builder.Services
-    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
-    .AddDurableAI(opts => { /* DurableExecutionOptions */ })
-    .AddDurableTools(sendEmailTool, lookupOrderTool)
     .AddTemporalAgents(opts =>
     {
-        opts.EnablePerToolActivities = true;
-        opts.PerToolActivityOptions ??= new();
-        opts.PerToolActivityOptions["send_email"] = new ActivityOptions
+        opts.HistoryStore = sp => sp.GetRequiredService<MyCosmosHistoryStore>();
+
+        opts.AddDurableAgent("MyAgent", agent =>
         {
-            StartToCloseTimeout = TimeSpan.FromSeconds(30),
-            RetryPolicy = new RetryPolicy { MaximumAttempts = 1 },  // write tool — no retry
-        };
-        opts.AddAIAgentFactory("SupportAgent", sp =>
-            sp.GetRequiredService<IChatClient>()
-              .AsAIAgent(
-                  name: "SupportAgent",
-                  instructions: "...",
-                  tools: [sendEmailTool, lookupOrderTool])); // schema only — no UseFunctionInvocation()
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+        });
     });
 ```
 
-> **Agent-registration constraint**: in step mode, the agent's `IChatClient` pipeline must NOT include `UseFunctionInvocation()` — the workflow owns the tool-dispatch loop. Tools are passed as schema via the `tools:` parameter on `AsAIAgent(...)` and resolved by name from `DurableFunctionRegistry` when the workflow dispatches `InvokeFunction`.
+When opted in, conversation messages no longer appear in `ActivityScheduled` event payloads, and `GetHistoryAsync()` returns metadata-only entries (callers should query the store directly for full content). For the full how-to including per-agent override patterns, the relationship to `AIContextProvider` / `ChatHistoryProvider`, migration behavior, and a reference store implementation, see [External History Store](./external-history-store.md).
 
-For the full how-to including write-vs-read tool patterns, the iteration cap, the migration table, and what the Temporal Web UI shows, see [Per-Tool Temporal Activities (Step Mode)](./durable-agents.md).
+---
+
+## Per-Tool Activity Configuration
+
+Every tool registered via `agent.AddTool(...)` is dispatched as a Temporal activity (`Temporalio.Extensions.Agents.InvokeAgentTool`). The default policy is the worker-level `opts.DefaultRetryPolicy` (or Temporal SDK defaults when null). Override per tool via the `configure` callback on `AddTool`.
+
+| Property / Method on `DurableToolOptions` | Purpose |
+|---|---|
+| `StartToCloseTimeout` | Per-tool activity timeout. `null` inherits worker default. |
+| `HeartbeatTimeout` | Per-tool heartbeat timeout. `null` inherits worker default. |
+| `RetryPolicy` | Per-tool retry policy. `null` inherits worker default. |
+| `NoRetry()` | Sugar for `RetryPolicy = new() { MaximumAttempts = 1 }`. Use on write tools. |
+| `WithMaxAttempts(int n)` | Sugar for fixed-attempt retry. |
+| `WithTimeout(TimeSpan t)` | Sugar for `StartToCloseTimeout`. |
+
+`agent.MaxToolCallsPerTurn` (default `20`) caps step-loop iterations per single agent turn. When exceeded, the workflow returns a structured "iteration cap exceeded" assistant message rather than letting workflow history grow unbounded.
+
+```csharp
+builder.Services
+    .AddHostedTemporalWorker("localhost:7233", "default", "agents")
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddDurableAgent("SupportAgent", agent =>
+        {
+            agent.Instructions = "You help customers with support requests.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+
+            // Read tool — inherits the worker default retry policy.
+            agent.AddTool(lookupOrderTool);
+
+            // Write tool — bind NoRetry() to the AIFunction reference. Cannot mistype the name.
+            agent.AddTool(sendEmailTool, opts => opts.NoRetry().WithTimeout(TimeSpan.FromSeconds(30)));
+
+            agent.MaxToolCallsPerTurn = 10;
+        });
+    });
+```
+
+For the canonical write-vs-read tool example, the per-tool retry hierarchy, and what the Temporal Web UI shows, see [Durable Agents](./durable-agents.md).
 
 ---
 
@@ -943,7 +984,13 @@ builder.Services.AddTemporalClient(opts =>
 
 builder.Services
     .AddHostedTemporalWorker("agents")
-    .AddTemporalAgents(opts => opts.AddAIAgent(agent));
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddDurableAgent("MyAgent", agent =>
+        {
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+        });
+    });
 ```
 
 ### Span Hierarchy

@@ -197,7 +197,11 @@ AgentName = "ResearchAgent" AND TurnCount > 20
 Set a low `timeToLive` so sessions expire before history grows too large:
 
 ```csharp
-opts.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1));
+opts.AddDurableAgent("MyAgent", agent =>
+{
+    agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+    agent.TimeToLive = TimeSpan.FromHours(1);
+});
 ```
 
 After TTL expires, the next message starts a fresh session with empty history.
@@ -237,13 +241,14 @@ The summarizer sees only the final output, not the full 5-turn research history.
 `AIContextProvider` implementations (like Mem0) store memories externally and inject only relevant context on each turn. This decouples "what the agent remembers" from "the full conversation transcript":
 
 ```csharp
-var mem0Provider = new Mem0ContextProvider(mem0Client, userId: "user-001");
-
-var agent = new ChatClientAgent(chatClient, "MemoryAgent")
+opts.AddDurableAgent("MemoryAgent", agent =>
 {
-    Instructions = "You are a helpful assistant with long-term memory.",
-    ContextProviders = [mem0Provider]
-};
+    agent.Instructions = "You are a helpful assistant with long-term memory.";
+    agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+    agent.AddContextProvider(sp => new Mem0ContextProvider(
+        sp.GetRequiredService<Mem0Client>(),
+        userId: "user-001"));
+});
 ```
 
 The provider injects a small set of relevant memories instead of the full history, keeping token counts low even across many turns.

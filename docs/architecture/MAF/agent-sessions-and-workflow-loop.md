@@ -11,9 +11,8 @@ This document explains how `TemporalAgentSession` bridges the Microsoft Agent Fr
 3. [Sending Messages via WorkflowUpdate](#sending-messages-via-workflowupdate)
 4. [AgentWorkflowWrapper: Per-Turn Interception](#agentworkflowwrapper-per-turn-interception)
 5. [External History Store](#external-history-store)
-6. [Step-Mode Agentic Loop](#step-mode-agentic-loop)
-7. [Durable Agent Workflow Loop (v0.3 `AddDurableAgent`)](#durable-agent-workflow-loop-v03-adddurableagent)
-8. [Crashes, Heartbeats, and Timeouts](#crashes-heartbeats-and-timeouts)
+6. [Durable Agent Workflow Loop](#durable-agent-workflow-loop)
+7. [Crashes, Heartbeats, and Timeouts](#crashes-heartbeats-and-timeouts)
 
 ---
 
@@ -581,7 +580,7 @@ That approach does not work for the PII case. The order of operations is:
 
 By the time step 4 happens, step 2 has already written the full history payload to Temporal's durable event log. An `AIContextProvider` running inside the activity can mutate what the *LLM* sees, but it cannot un-write the bytes that Temporal already persisted. The PII is in the event log regardless.
 
-The fix has to live at the workflow boundary, before step 2: the workflow must omit `ConversationHistory` from the activity input in the first place. That is what `IAgentHistoryStore` plus `UseExternalHistory = true` achieves.
+The fix has to live at the workflow boundary, before step 2: the workflow must omit `ConversationHistory` from the activity input in the first place. That is what configuring an `IAgentHistoryStore` factory (`opts.HistoryStore` worker-level, or `agent.HistoryStore` per-agent) achieves.
 
 ### The two-layer split
 
@@ -598,7 +597,7 @@ The two layers are complementary, not alternatives. `IAgentHistoryStore` control
 
 ### Modified data flow
 
-The flow diagram in [The Full Message Flow](#the-full-message-flow) changes in two places when `UseExternalHistory = true`:
+The flow diagram in [The Full Message Flow](#the-full-message-flow) changes in two places when an `IAgentHistoryStore` factory is configured for the agent (worker-level via `opts.HistoryStore` or per-agent via `agent.HistoryStore`):
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -682,17 +681,15 @@ When `UseExternalStore = true` and a `HistoryReducer` is configured, the workflo
 
 ### Worker-startup validation
 
-`TemporalAgentsRegistrar` validates at startup that an `IAgentHistoryStore` is registered in DI when `UseExternalHistory = true`. If the flag is set without a corresponding registration, the worker fails fast with an `InvalidOperationException`. Silent fallback to the in-memory path would defeat the entire reason for opting in — anyone enabling external history is doing so for compliance or scaling reasons, and a silent regression to the in-Temporal path would leak PII or grow event size without warning.
+`TemporalAgentsRegistrar` resolves the effective `HistoryStore` factory for each agent at registration time (`agent.HistoryStore ?? opts.HistoryStore`). When non-null, the factory is invoked at first activity dispatch and the resolved store is cached for the worker's lifetime. If the factory throws (e.g. the underlying service is unregistered), the activity fails — there is no silent fallback to the in-memory path. Silent fallback would defeat the entire reason for opting in: anyone configuring external history is doing so for compliance or scaling reasons, and a silent regression to the in-Temporal path would leak PII or grow event size without warning.
 
 For the user-facing how-to, see [External History Store](../../how-to/MAF/external-history-store.md).
 
 ---
 
-## Step-Mode Agentic Loop
+## Durable Agent Workflow Loop
 
-The default `ExecuteAgent` activity is a single opaque unit: one Temporal activity wraps the entire agent turn — the LLM call, the `FunctionInvokingChatClient` middleware, all tool invocations, any subsequent LLM calls, and the final response. From Temporal's point of view a turn is atomic. This is simple and correct, but it has three load-bearing limitations: the whole turn re-executes on retry (replaying LLM calls and re-invoking write tools), the turn-level retry policy is the only knob, and Temporal Web UI cannot show per-tool detail.
-
-Step mode is an opt-in alternative that moves the agentic loop into the workflow itself. When `TemporalAgentsOptions.EnablePerToolActivities = true`, every LLM call becomes a separate `RunAgentStep` activity and every tool call becomes a separate `InvokeFunction` activity, dispatched in parallel from the workflow.
+In v0.3 every agent registered via `TemporalAgentsOptions.AddDurableAgent(...)` runs in **durable mode**: the agentic loop lives inside `[Workflow]` code, each LLM call is its own `RunDurableAgentStep` activity, and each tool call is its own `InvokeAgentTool` activity dispatched in parallel via `Workflow.WhenAllAsync`. There is no opt-in flag — durable agents are the only registration path.
 
 ### Why the loop must live in the workflow
 
@@ -703,147 +700,12 @@ This eliminates several otherwise-tempting designs:
 - **Channel-handoff inside the activity**: the activity blocks on a channel, sends tool-call requests "out," receives results. There is no Temporal coroutine primitive that supports this.
 - **Faking `Workflow.InWorkflow = true` inside the activity**: would require modifying SDK internals and break workflow determinism guarantees.
 
-The only implementable design within Temporal's public API is to put the dispatch loop in `[Workflow]` code. `AgentWorkflow.ExecuteStepModeTurnAsync` is that loop.
-
-### Default mode vs. step mode data flow
-
-```
-┌──────────────────────────── DEFAULT MODE ────────────────────────────┐
-│                                                                      │
-│   AgentWorkflow.ExecuteAgentTurnAsync                                │
-│   └─ Workflow.ExecuteActivityAsync(                                  │
-│        (AgentActivities a) => a.ExecuteAgentAsync(input))            │
-│                                                                      │
-│         AgentActivities.ExecuteAgentAsync                            │
-│         └─ wrapper.RunStreamingAsync(messages, session, options)     │
-│            └─ ChatClientAgent → IChatClient                          │
-│               └─ FunctionInvokingChatClient (auto-dispatches tools)  │
-│                  ├─ tool A.InvokeAsync()                             │
-│                  ├─ tool B.InvokeAsync()                             │
-│                  └─ ... LLM call N+1 ... → final answer              │
-│                                                                      │
-│   ━━ One ExecuteAgent activity covers the entire turn ━━             │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────── STEP MODE ────────────────────────────────┐
-│                                                                      │
-│   AgentWorkflow.ExecuteStepModeTurnAsync                             │
-│                                                                      │
-│   for (iteration = 0; iteration < MaxToolCallsPerTurn; ++iteration): │
-│                                                                      │
-│     ① Workflow.ExecuteActivityAsync(                                 │
-│          (AgentActivities a) => a.RunAgentStepAsync(stepInput))      │
-│                                                                      │
-│           Inside the activity (FunctionInvokingChatClient ABSENT):   │
-│           ├─ Resolve IChatClient directly from DI                    │
-│           ├─ Pull tool schema from DurableFunctionRegistry           │
-│           ├─ Call IChatClient.GetStreamingResponseAsync(messages)    │
-│           ├─ Heartbeat per chunk                                     │
-│           └─ Return AssistantMessage + FunctionCallContent[]         │
-│                                                                      │
-│     if (stepResult.IsFinal) → return AgentResponse                   │
-│                                                                      │
-│     ② Workflow.WhenAllAsync(                                         │
-│          stepResult.ToolCalls.Select(tc =>                           │
-│            Workflow.ExecuteActivityAsync(                            │
-│              (DurableFunctionActivities a) =>                        │
-│                a.InvokeFunctionAsync({ FunctionName = tc.Name,       │
-│                                       Arguments    = tc.Arguments }),│
-│              ResolveToolActivityOptions(tc.Name))))                  │
-│                                                                      │
-│     ③ accumulated.Add(assistantMessage);                             │
-│        accumulated.Add(toolResultMessage);                           │
-│        // loop back to ①                                             │
-│                                                                      │
-│   ━━ 2N+1 activities for N tool rounds — each retryable separately ━━│
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-The mental model: **step mode bypasses `FunctionInvokingChatClient` so tool calls return raw to the workflow**. The activity calls `IChatClient.GetStreamingResponseAsync` directly with `ChatOptions.Tools` populated from `DurableFunctionRegistry`. The model returns `FunctionCallContent` items; nothing executes them inside the activity. The workflow reads those items back, fans out one `InvokeFunction` activity per tool call, awaits them via `Workflow.WhenAllAsync`, builds `FunctionResultContent` messages from the results, and loops.
-
-### Why `Workflow.WhenAllAsync` and not `Task.WhenAll`
-
-The fan-out step uses `Workflow.WhenAllAsync` — the Temporal SDK's workflow-safe combinator — not `Task.WhenAll`:
-
-```csharp
-var toolOutputs = await Workflow.WhenAllAsync(toolTasks).ConfigureAwait(true);
-```
-
-Inside a Temporal `[Workflow]`, `await`s must run on the workflow scheduler so that task continuations are deterministic on replay. `Task.WhenAll` is technically safe in many cases (when all the awaited tasks come from `Workflow.ExecuteActivityAsync`, which schedules continuations on `TaskScheduler.Current`), but `Workflow.WhenAllAsync` is the project convention and is documented as "the workflow-safe equivalent of `Task.WhenAll`" by the SDK itself. `TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync` (`src/Temporalio.Extensions.Agents/TemporalWorkflowExtensions.cs:112`) already uses it for the parallel-agent pattern; the step-mode loop follows the same convention.
-
-`Workflow.WhenAllAsync` preserves input order. The result list is index-aligned with the input task list, so the workflow can pair `toolOutputs[i]` with `toolCalls[i]` to build `FunctionResultContent(callId: toolCalls[i].CallId, result: toolOutputs[i].Result)` without needing a correlation lookup.
-
-### The iteration cap as a workflow-history bound
-
-Temporal's per-workflow event-history limit (~50K events) is a hard constraint on any in-workflow loop. Each step iteration in step mode contributes:
-
-- One `ActivityScheduled` + one `ActivityCompleted` (or `ActivityFailed` + retries) for the `RunAgentStep` call
-- One pair of events per tool call in the fan-out batch
-
-A two-tool turn that converges in one round costs ~6 events. A model that loops indefinitely on tool calls would consume the history budget and force a continue-as-new mid-turn, which is harder to reason about than a clean structured failure.
-
-`MaxToolCallsPerTurn` (default 20) bounds the loop counter. When the cap is exceeded, the workflow does not throw; it appends an `assistant` message of the form
-
-```
-Maximum tool-call iterations (N) exceeded for this turn. The agent did not converge on a final answer.
-```
-
-to the multi-step transcript and returns the assembled `AgentResponse`. From the caller's perspective the turn completes successfully with a response that calling code can detect and handle.
-
-### Determinism rules for the step loop
-
-The same workflow-determinism rules apply inside `ExecuteStepModeTurnAsync` as anywhere else in `[Workflow]` code. Cross-reference the [Do's and Don'ts — Workflow Determinism](../../how-to/MAF/dos-and-donts.md#workflow-determinism) table:
-
-| Concern | Rule | Why |
-|---|---|---|
-| Parallel fan-out | `Workflow.WhenAllAsync(tasks)` | Project convention; the SDK-provided workflow-safe combinator |
-| Wall-clock time | `Workflow.UtcNow` | `DateTime.UtcNow` differs across replay |
-| Random GUIDs | `Workflow.NewGuid()` | `Guid.NewGuid()` differs across replay |
-| Logging | `Workflow.Logger` | Direct `ILogger` captured via closure misbehaves on replay |
-| OTel spans | None inside the loop | `ActivitySource.StartActivity()` is non-deterministic; `agent.turn` lives inside `RunAgentStepAsync` instead |
-| `await` continuations | `.ConfigureAwait(true)` (or omit `ConfigureAwait` entirely) | `ConfigureAwait(false)` strips `TaskScheduler.Current`, putting the continuation on the ThreadPool — the workflow hangs at `CompleteWorkflowExecution` |
-| Threading | No `Task.Run`, no threads, no `Task.Delay`, no `Thread.Sleep` | Same scheduler-stripping risk |
-
-The step loop in `AgentWorkflow.cs` follows all of these rules: every `await` either omits `ConfigureAwait` or uses `ConfigureAwait(true)`; the loop counter is a local `int`; iteration timestamps for the final `AgentResponse.CreatedAt` come from `Workflow.UtcNow`; and there is no in-workflow OTel span (the `agent.turn` span fires inside `RunAgentStepAsync`, which runs in activity context).
-
-### Continue-as-new across step mode
-
-`AgentWorkflowInput.EnablePerToolActivities`, `PerToolActivityOptions`, and `MaxToolCallsPerTurn` are all carried through `CreateContinueAsNewException` so successive runs preserve per-tool retry constraints and the iteration cap across continue-as-new transitions. A long-running agent session does not lose its step-mode configuration when it CANs — the next run resumes with the same options.
-
-For the user-facing how-to, see [Per-Tool Temporal Activities (Step Mode)](../../how-to/MAF/durable-agents.md).
-
----
-
-## Durable Agent Workflow Loop (v0.3 `AddDurableAgent`)
-
-v0.3 of the API introduces a third dispatch path alongside default mode and step mode: the **durable agent loop**, opted into by registering an agent via `TemporalAgentsOptions.AddDurableAgent(...)` instead of the legacy `AddAIAgent` / `AddAIAgentFactory`. Architecturally, this is a successor to step mode — the loop still lives in `[Workflow]` code, still fans out per-tool activities via `Workflow.WhenAllAsync`, still bounds itself with a per-turn iteration cap. The differences are deliberate: per-agent tool registry (instead of a flat process-wide one), distinct activity types in the Temporal Web UI (so two agents on one worker can carry tools with the same name), and a composed `IChatClient` pipeline that includes `UseAIContextProviders` so provider lifecycle hooks fire per LLM call.
-
-The legacy step-mode path coexists with the new durable path through Phase 4. **Phase 5 removes step mode**; this section will absorb the step-mode diagram once that ships. Until then, both paths are documented so readers migrating from v0.2 can compare them.
-
-### The branch in `AgentWorkflow`
-
-`AgentWorkflowInput.IsDurable` is set by `DefaultTemporalAgentClient` when the agent name resolves to a `DurableAgentRegistration`. The workflow's `ExecuteAgentTurnAsync` checks the flag first:
-
-```csharp
-if (_input!.IsDurable)
-{
-    return await ExecuteDurableAgentTurnAsync(runRequest, activityOptions).ConfigureAwait(true);
-}
-if (_input!.EnablePerToolActivities)
-{
-    return await ExecuteStepModeTurnAsync(runRequest, activityOptions).ConfigureAwait(true);
-}
-// default mode: ExecuteAgentAsync wraps the entire turn in one activity
-```
-
-The flag travels through `CreateContinueAsNewException` so the dispatch path is preserved across CAN transitions. Same for `DurableAgentToolActivityOptions` — the per-tool retry/timeout dictionary is pinned at workflow start (built once by the client from the agent's `DurableToolOptions`) and carried forward as input.
+The only implementable design within Temporal's public API is to put the dispatch loop in `[Workflow]` code. `AgentWorkflow.ExecuteDurableAgentTurnAsync` is that loop.
 
 ### Durable mode data flow
 
 ```
-┌──────────────── DURABLE AGENT MODE (v0.3, AddDurableAgent) ────────────────┐
+┌──────────────── DURABLE AGENT MODE (AddDurableAgent) ──────────────────────┐
 │                                                                            │
 │   AgentWorkflow.ExecuteDurableAgentTurnAsync                               │
 │                                                                            │
@@ -855,7 +717,7 @@ The flag travels through `CreateContinueAsNewException` so the dispatch path is 
 │           Inside the activity:                                             │
 │           ├─ ResolveDurableAgent(name) → CachedDurableAgent (lazy compose) │
 │           │   ├─ user-supplied IChatClient                                 │
-│           │   ├─ UseAIContextProviders(providers)  ← per-step lifecycle    │
+│           │   ├─ UseAIContextProvider(providers)   ← per-step lifecycle    │
 │           │   └─ ChatClientAgent { UseProvidedChatClientAsIs = true }      │
 │           ├─ Clone agent.ChatOptions; stamp Instructions / Tools / format  │
 │           ├─ Call agent.ChatClient.GetStreamingResponseAsync(messages)     │
@@ -882,36 +744,69 @@ The flag travels through `CreateContinueAsNewException` so the dispatch path is 
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Two activity types, not one
+The mental model: **the workflow owns the tool-dispatch loop** so tool calls return raw to the workflow rather than being auto-dispatched inside the LLM call. The activity calls `IChatClient.GetStreamingResponseAsync` directly with `ChatOptions.Tools` populated from the agent's per-agent tool registry. The model returns `FunctionCallContent` items; nothing executes them inside the activity. The workflow reads those items back, fans out one `InvokeAgentTool` activity per tool call, awaits them via `Workflow.WhenAllAsync`, builds `FunctionResultContent` messages from the results, and loops.
+
+### Two activity types
 
 The durable path dispatches two activity types per turn:
 
 | Activity name | Role |
 |---|---|
-| `Temporalio.Extensions.Agents.RunDurableAgentStep` | One LLM call. Returns either a final assistant message or `FunctionCallContent[]`. Pipeline includes `UseAIContextProviders`. |
+| `Temporalio.Extensions.Agents.RunDurableAgentStep` | One LLM call. Returns either a final assistant message or `FunctionCallContent[]`. Pipeline includes `UseAIContextProvider`. |
 | `Temporalio.Extensions.Agents.InvokeAgentTool` | One tool dispatch. Resolves the tool from the agent's local registry (per-agent — names do not collide across agents). |
 
-This split is intentional. Step mode uses the same `Temporalio.Extensions.AI.InvokeFunction` activity type for every tool, drawing tools from MEAI's flat `DurableFunctionRegistry`. In durable mode, `InvokeAgentTool` carries the `AgentName` so the cached agent state can resolve the tool against its local registry. The Temporal Web UI shows `RunDurableAgentStep` and `InvokeAgentTool` as distinct rows so operators can tell at a glance which dispatch path is in play.
+The split is intentional: `InvokeAgentTool` carries the `AgentName` so the cached agent state can resolve the tool against its local registry. Two agents on the same worker can register tools with the same `AIFunction.Name` without collision, and the Temporal Web UI shows `RunDurableAgentStep` and `InvokeAgentTool` as distinct rows so operators can read the dispatch shape at a glance.
 
-### Iteration cap and structured error
+### Why `Workflow.WhenAllAsync` and not `Task.WhenAll`
 
-Same as step mode: when `MaxToolCallsPerTurn` is exceeded, the workflow appends an assistant message of the form
+The fan-out step uses `Workflow.WhenAllAsync` — the Temporal SDK's workflow-safe combinator — not `Task.WhenAll`:
+
+```csharp
+var toolOutputs = await Workflow.WhenAllAsync(toolTasks).ConfigureAwait(true);
+```
+
+Inside a Temporal `[Workflow]`, `await`s must run on the workflow scheduler so that task continuations are deterministic on replay. `Task.WhenAll` is technically safe in many cases (when all the awaited tasks come from `Workflow.ExecuteActivityAsync`, which schedules continuations on `TaskScheduler.Current`), but `Workflow.WhenAllAsync` is the project convention and is documented as "the workflow-safe equivalent of `Task.WhenAll`" by the SDK itself. `TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync` (`src/Temporalio.Extensions.Agents/TemporalWorkflowExtensions.cs:112`) already uses it for the parallel-agent pattern; the durable loop follows the same convention.
+
+`Workflow.WhenAllAsync` preserves input order. The result list is index-aligned with the input task list, so the workflow can pair `toolOutputs[i]` with `toolCalls[i]` to build `FunctionResultContent(callId: toolCalls[i].CallId, result: toolOutputs[i].Result)` without needing a correlation lookup.
+
+### The iteration cap as a workflow-history bound
+
+Temporal's per-workflow event-history limit (~50K events) is a hard constraint on any in-workflow loop. Each iteration in the durable loop contributes:
+
+- One `ActivityScheduled` + one `ActivityCompleted` (or `ActivityFailed` + retries) for the `RunDurableAgentStep` call
+- One pair of events per tool call in the fan-out batch
+
+A two-tool turn that converges in one round costs ~6 events. A model that loops indefinitely on tool calls would consume the history budget and force a continue-as-new mid-turn, which is harder to reason about than a clean structured failure.
+
+`MaxToolCallsPerTurn` (default `20`, configured per-agent on `DurableAgentBuilder`) bounds the loop counter. When the cap is exceeded, the workflow does not throw; it appends an `assistant` message of the form
 
 ```
 Maximum tool-call iterations (N) exceeded for agent 'AgentName'. The agent did not converge on a final answer.
 ```
 
-to the transcript and returns. Default cap is 20, set via `DurableAgentBuilder.MaxToolCallsPerTurn`.
+to the transcript and returns the assembled `AgentResponse`. From the caller's perspective the turn completes successfully with a response that calling code can detect and handle.
 
 ### Determinism rules
 
-Same as step mode — see the table in [Determinism rules for the step loop](#determinism-rules-for-the-step-loop). Every `await` in `ExecuteDurableAgentTurnAsync` uses `ConfigureAwait(true)` (or omits `ConfigureAwait` entirely); fan-out uses `Workflow.WhenAllAsync`; timestamps come from `Workflow.UtcNow`; no OTel `ActivitySource.StartActivity` is called from inside the workflow body (`agent.turn` and `agent.tool.invoke` spans live inside the activities).
+The same workflow-determinism rules apply inside `ExecuteDurableAgentTurnAsync` as anywhere else in `[Workflow]` code. Cross-reference the [Do's and Don'ts — Workflow Determinism](../../how-to/MAF/dos-and-donts.md#workflow-determinism) table:
+
+| Concern | Rule | Why |
+|---|---|---|
+| Parallel fan-out | `Workflow.WhenAllAsync(tasks)` | Project convention; the SDK-provided workflow-safe combinator |
+| Wall-clock time | `Workflow.UtcNow` | `DateTime.UtcNow` differs across replay |
+| Random GUIDs | `Workflow.NewGuid()` | `Guid.NewGuid()` differs across replay |
+| Logging | `Workflow.Logger` | Direct `ILogger` captured via closure misbehaves on replay |
+| OTel spans | None inside the loop | `ActivitySource.StartActivity()` is non-deterministic; `agent.turn` lives inside `RunDurableAgentStepAsync` instead |
+| `await` continuations | `.ConfigureAwait(true)` (or omit `ConfigureAwait` entirely) | `ConfigureAwait(false)` strips `TaskScheduler.Current`, putting the continuation on the ThreadPool — the workflow hangs at `CompleteWorkflowExecution` |
+| Threading | No `Task.Run`, no threads, no `Task.Delay`, no `Thread.Sleep` | Same scheduler-stripping risk |
+
+The durable loop in `AgentWorkflow.cs` follows all of these rules: every `await` either omits `ConfigureAwait` or uses `ConfigureAwait(true)`; the loop counter is a local `int`; iteration timestamps for the final `AgentResponse.CreatedAt` come from `Workflow.UtcNow`; and there is no in-workflow OTel span (the `agent.turn` span fires inside `RunDurableAgentStepAsync`, which runs in activity context).
 
 ### Continue-as-new across durable mode
 
-Phase 3 carries `IsDurable` and `DurableAgentToolActivityOptions` through `CreateContinueAsNewException` so the dispatch path AND the per-tool retry constraints survive CAN transitions. A write tool registered with `opts.NoRetry()` keeps `MaximumAttempts = 1` across every continue-as-new boundary — the dictionary is built once by the client at workflow start and never re-read from the registration, so registration-time changes do not bleed into running workflows. (Q11c: continue-as-new is settings-frozen.)
+`AgentWorkflowInput.DurableAgentToolActivityOptions` is built once by the client at workflow start (from the agent's per-tool `DurableToolOptions`) and carried through `CreateContinueAsNewException` so the per-tool retry constraints survive CAN transitions. A write tool registered with `opts.NoRetry()` keeps `MaximumAttempts = 1` across every continue-as-new boundary — the options dictionary is never re-read from the registration, so registration-time changes do not bleed into running workflows. Continue-as-new is settings-frozen.
 
-For the user-facing how-to, see [the v0.3 migration guide](../../../MIGRATION-v0.3.md) (forthcoming) and [the durable-agents how-to](../../how-to/MAF/durable-agents.md) (will be renamed to `durable-agents.md` in Phase 5).
+For the user-facing how-to, see [the durable-agents how-to](../../how-to/MAF/durable-agents.md) and the [v0.3 migration guide](../../../MIGRATION-v0.3.md).
 
 ---
 
@@ -1034,8 +929,12 @@ bool conditionMet = await Workflow.WaitConditionAsync(
 **When to adjust**: Set shorter TTLs for ephemeral sessions (chatbots, one-off queries). Set longer TTLs for persistent agents that should stay alive across days or weeks.
 
 ```csharp
-opts.AddAIAgent(myAgent, timeToLive: TimeSpan.FromHours(1));
-// or
+opts.AddDurableAgent("MyAgent", agent =>
+{
+    agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+    agent.TimeToLive = TimeSpan.FromHours(1);
+});
+// or — worker-level default for every agent that does not override
 opts.DefaultTimeToLive = TimeSpan.FromDays(7);
 ```
 

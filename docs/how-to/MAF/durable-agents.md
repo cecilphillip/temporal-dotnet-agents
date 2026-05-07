@@ -1,6 +1,6 @@
 # Durable Agents
 
-In v0.3, every agent registered with `AddDurableAgent` is a **durable agent**: each LLM call runs in a separate `RunDurableAgentStep` activity, and each tool call runs in a separately named `InvokeAgentTool` activity dispatched in parallel via `Workflow.WhenAllAsync`. There is no separate "step mode" toggle — durable agents are the only registration path.
+In v0.3, every agent registered with `AddDurableAgent` is a **durable agent**: each LLM call runs in a separate `RunDurableAgentStep` activity, and each tool call runs in a separately named `InvokeAgentTool` activity dispatched in parallel via `Workflow.WhenAllAsync`. There is no opt-in flag — durable agents are the only registration path.
 
 This makes per-tool retry granularity explicit and prevents the legacy foot-guns where write-style tools could re-fire on a transient activity retry.
 
@@ -49,7 +49,7 @@ builder.Services
     });
 ```
 
-No `BuildServiceProvider()` bootstrap. No `EnablePerToolActivities` flag. No string-keyed dictionary. No `AddDurableTools` separate registration. No "don't use `UseFunctionInvocation()`" caveat — the library composes the chat pipeline correctly internally.
+No `BuildServiceProvider()` bootstrap, no opt-in flag, no string-keyed retry dictionary, no separate tool registry, and no "don't use `UseFunctionInvocation()`" caveat — the library composes the chat pipeline correctly internally. See [the v0.3 migration guide](../../../MIGRATION-v0.3.md) if you are coming from v0.2.
 
 ## Fluent sugar on `DurableToolOptions`
 

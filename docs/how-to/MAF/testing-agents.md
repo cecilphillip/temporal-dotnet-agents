@@ -107,12 +107,16 @@ public void AddTemporalAgents_RegistersKeyedAIAgentProxies()
     var services = new ServiceCollection();
     services.AddSingleton(A.Fake<ITemporalClient>());
 
+    services.AddChatClient(new StubChatClient());
+
     services
         .AddHostedTemporalWorker("test-queue")
         .AddTemporalAgents(opts =>
         {
-            opts.AddAIAgent(new StubAIAgent("AgentA"));
-            opts.AddAIAgent(new StubAIAgent("AgentB"));
+            opts.AddDurableAgent("AgentA", agent =>
+                agent.ChatClient = sp => sp.GetRequiredService<IChatClient>());
+            opts.AddDurableAgent("AgentB", agent =>
+                agent.ChatClient = sp => sp.GetRequiredService<IChatClient>());
         });
 
     var sp = services.BuildServiceProvider();
@@ -250,10 +254,13 @@ public sealed class IntegrationTestFixture : IAsyncLifetime
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<ITemporalClient>(Environment.Client);
 
+        builder.Services.AddChatClient(new EchoChatClient());
+
         builder.Services
             .AddHostedTemporalWorker(TaskQueue)
             .AddTemporalAgents(options =>
-                options.AddAIAgent(new EchoAIAgent("EchoAgent")));
+                options.AddDurableAgent("EchoAgent", agent =>
+                    agent.ChatClient = sp => sp.GetRequiredService<IChatClient>()));
 
         return builder.Build();
     }
@@ -426,12 +433,19 @@ public async Task AgentFactory_ResolvesServiceDependencies_AtActivityTime()
     builder.Services.AddSingleton<ITemporalClient>(fixture.Environment.Client);
     builder.Services.AddSingleton<IMyCustomService, MyCustomService>();
 
+    builder.Services.AddChatClient(myChatClient);
+
     builder.Services
         .AddHostedTemporalWorker("custom-queue-" + Guid.NewGuid())
         .AddTemporalAgents(opts =>
         {
-            opts.AddAIAgentFactory("FactoryAgent",
-                sp => new MyAgent(sp.GetRequiredService<IMyCustomService>()));
+            opts.AddDurableAgent("FactoryAgent", agent =>
+            {
+                agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+                agent.AddTool("do_thing", sp => AIFunctionFactory.Create(
+                    sp.GetRequiredService<IMyCustomService>().DoThing,
+                    "do_thing"));
+            });
         });
 
     using var host = builder.Build();

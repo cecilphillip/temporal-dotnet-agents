@@ -49,13 +49,34 @@ A classifier agent runs as the first step inside a Temporal workflow. The workfl
 No special routing configuration needed — just register the agents:
 
 ```csharp
+services.AddChatClient(chatClient);
+
 services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(classifierAgent);
-        opts.AddAIAgent(ordersAgent);
-        opts.AddAIAgent(techSupportAgent);
-        opts.AddAIAgent(generalAgent);
+        opts.AddDurableAgent("Classifier", agent =>
+        {
+            agent.Instructions = "Classify the user's question into one of: ORDERS, TECH_SUPPORT, GENERAL.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
+        opts.AddDurableAgent("OrdersAgent", agent =>
+        {
+            agent.Description  = "Handles order tracking, returns, and shipping.";
+            agent.Instructions = "You are an orders specialist...";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
+        opts.AddDurableAgent("TechSupportAgent", agent =>
+        {
+            agent.Description  = "Handles technical issues and troubleshooting.";
+            agent.Instructions = "You are a technical support specialist...";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
+        opts.AddDurableAgent("GeneralAgent", agent =>
+        {
+            agent.Description  = "Handles questions that don't fit other specialists.";
+            agent.Instructions = "You are a general assistant.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
     })
     .AddWorkflow<CustomerServiceWorkflow>();
 ```
@@ -137,29 +158,41 @@ The workflow discovers available agents by calling an activity that queries `opt
 #### Step 1: Register agents with descriptions
 
 ```csharp
-var ordersAgent = chatClient.AsAIAgent(
-    name: "OrdersAgent",
-    description: "Handles order tracking, returns, and shipping.",
-    instructions: "You are an orders specialist...");
-
-var techSupportAgent = chatClient.AsAIAgent(
-    name: "TechSupportAgent",
-    description: "Handles technical issues, app crashes, and troubleshooting.",
-    instructions: "You are a technical support specialist...");
+services.AddChatClient(chatClient);
 
 services.AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(classifierAgent);   // not a routable specialist
-        opts.AddAIAgent(ordersAgent);
-        opts.AddAIAgent(techSupportAgent);
-        opts.AddAIAgent(generalAgent);
+        // Not a routable specialist — no Description set, so it is excluded from GetAgentDescriptors().
+        opts.AddDurableAgent("Classifier", agent =>
+        {
+            agent.Instructions = "Classify the user's question.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
+        opts.AddDurableAgent("OrdersAgent", agent =>
+        {
+            agent.Description  = "Handles order tracking, returns, and shipping.";
+            agent.Instructions = "You are an orders specialist...";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
+        opts.AddDurableAgent("TechSupportAgent", agent =>
+        {
+            agent.Description  = "Handles technical issues, app crashes, and troubleshooting.";
+            agent.Instructions = "You are a technical support specialist...";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
+        opts.AddDurableAgent("GeneralAgent", agent =>
+        {
+            agent.Description  = "Handles general questions and fallback routing.";
+            agent.Instructions = "You are a general assistant.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+        });
     })
     .AddWorkflow<DynamicRoutingWorkflow>()
     .AddSingletonActivities<RoutingActivities>();
 ```
 
-> The `description:` you pass to `AsAIAgent()` is automatically stored in the agent registry. `AddAIAgent` extracts `agent.Description` at registration time; `AddAIAgentFactory` and `AddAgentProxy` each accept an optional `description` parameter. Agents without a description (e.g. a classifier) are excluded from `GetAgentDescriptors()` automatically. The `AgentDescriptor` record in `Temporalio.Extensions.Agents.State` is the `(Name, Description)` shape the method returns.
+> The `Description` you set on the builder is stored in the agent registry. `AddAgentProxy` accepts an optional `description` parameter for proxy-only declarations. Agents registered without a description (e.g. a classifier) are excluded from `GetAgentDescriptors()` automatically. The `AgentDescriptor` record in `Temporalio.Extensions.Agents.State` is the `(Name, Description)` shape the method returns.
 
 #### Step 2: Define routing activities
 
