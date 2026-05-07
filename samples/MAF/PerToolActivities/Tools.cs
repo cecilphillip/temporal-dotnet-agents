@@ -30,13 +30,25 @@ public sealed class OrderService
     };
 
     private int _lookupCalls;
+    private int _failArmed;
 
     /// <summary>
-    /// When <see langword="true"/>, the next call to <see cref="LookupOrder"/> throws once,
-    /// then succeeds on every subsequent call. Used by the second demo scenario to prove
-    /// that the lookup activity retries on its own without re-running write tools.
+    /// When set to <see langword="true"/>, arms a one-shot latch: the next call to
+    /// <see cref="LookupOrder"/> consumes the latch and throws, and every subsequent
+    /// call succeeds until the latch is re-armed. Used by the second demo scenario to
+    /// prove that the lookup activity retries on its own without re-running write tools.
     /// </summary>
-    public bool FailOnceEnabled { get; set; }
+    /// <remarks>
+    /// The latch is a self-clearing flag rather than a "first call ever" predicate so
+    /// the behavior is independent of how many calls earlier scenarios have made on the
+    /// same singleton instance. Setting <see langword="false"/> disarms the latch
+    /// without triggering a throw.
+    /// </remarks>
+    public bool FailOnceEnabled
+    {
+        get => Interlocked.CompareExchange(ref _failArmed, 0, 0) == 1;
+        set => Interlocked.Exchange(ref _failArmed, value ? 1 : 0);
+    }
 
     /// <summary>How many times <see cref="LookupOrder"/> has been invoked total (across attempts).</summary>
     public int LookupCalls => Volatile.Read(ref _lookupCalls);
@@ -44,13 +56,13 @@ public sealed class OrderService
     [Description("Look up the current status of a customer order by order ID.")]
     public string LookupOrder([Description("Order ID, e.g. ORD-001")] string orderId)
     {
-        var n = Interlocked.Increment(ref _lookupCalls);
+        Interlocked.Increment(ref _lookupCalls);
 
-        if (FailOnceEnabled && n == 1)
+        // Atomically consume the one-shot latch. If armed, swap to disarmed and throw;
+        // Temporal retries the InvokeFunction activity automatically (default unbounded
+        // retry) and the second attempt sees the latch already consumed.
+        if (Interlocked.CompareExchange(ref _failArmed, 0, 1) == 1)
         {
-            // Transient failure on the first attempt only. Temporal retries the
-            // InvokeFunction activity automatically (default unbounded retry); the
-            // second attempt sees n == 2 and succeeds.
             throw new InvalidOperationException("Transient lookup failure — should retry");
         }
 

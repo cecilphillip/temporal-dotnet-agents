@@ -33,6 +33,16 @@ internal sealed record DurableToolRegistration(
 /// All <c>Add*</c> methods return the builder so configuration can be expressed fluently; using the
 /// property setters directly is also fully supported.
 /// </para>
+/// <para>
+/// <b>Factory composition lifecycle.</b> Factories registered via <see cref="ChatClient"/>,
+/// <see cref="AddTool(AIFunction, Action{DurableToolOptions}?)"/>,
+/// <see cref="AddContextProvider(Func{IServiceProvider, AIContextProvider})"/>, and
+/// <see cref="HistoryStore"/> are invoked once at first activity dispatch using the worker's root
+/// <see cref="IServiceProvider"/>. The resolved values are cached for the lifetime of the worker
+/// process. Anything resolved through these factories should therefore be a singleton (or carry its
+/// own internal scoping); services registered with <c>AddScoped</c> will silently behave as
+/// singletons under this composition path.
+/// </para>
 /// </remarks>
 public sealed class DurableAgentBuilder
 {

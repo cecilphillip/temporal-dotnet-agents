@@ -142,13 +142,26 @@ for (int i = 0; i < questions.Length; i++)
     Console.WriteLine();
 }
 
+// Resolve the inner agent-session workflow ID BEFORE shutdown so the query path
+// is unambiguous. The store is keyed by this ID (TemporalAgentSessionId.WorkflowId
+// ⇒ "ta-supportagent-{key}"), NOT by the parent workflow ID — querying the parent
+// for history events or snapshotting under the parent ID would both miss.
+var agentSessionWorkflowId = await handle.QueryAsync(wf => wf.GetAgentSessionWorkflowId());
+if (agentSessionWorkflowId is null)
+{
+    Console.WriteLine(
+        "  ⚠ GetAgentSessionWorkflowId returned null — falling back to parent " +
+        "workflow ID. Snapshot and payload checks will likely show empty results.");
+    agentSessionWorkflowId = workflowId;
+}
+
 // Signal the workflow to wrap up so it doesn't keep running forever.
 await handle.SignalAsync(wf => wf.ShutdownAsync());
 
 // ── Step 8: Print verification output ────────────────────────────────────────
-var fullHistory = store.SnapshotFull(workflowId);
+var fullHistory = store.SnapshotFull(agentSessionWorkflowId);
 Console.WriteLine($"=== Full History (audit trail via SnapshotFull) ===");
-Console.WriteLine($"Session '{workflowId}': {fullHistory.Count} entries " +
+Console.WriteLine($"Session '{agentSessionWorkflowId}': {fullHistory.Count} entries " +
                   $"({fullHistory.Count / 2} request + {fullHistory.Count / 2} response)");
 Console.WriteLine();
 
@@ -159,12 +172,15 @@ Console.WriteLine(
     $"(turns where full history > 4 entries triggered the recent-N truncation).");
 Console.WriteLine();
 
-// Inspect the most recent RunDurableAgentStep activity payload from the workflow's
-// history. Confirms turn-1's question is NOT carried in the late-turn
-// ActivityScheduled event — Layer 1 keeps PII out of Temporal events.
+// Inspect the most recent RunDurableAgentStep activity payload from the
+// AGENT-SESSION workflow's history (NOT the parent's — RunDurableAgentStep is
+// scheduled on the inner agent-session workflow). Confirms turn-1's question is
+// NOT carried in the late-turn ActivityScheduled event — Layer 1 keeps PII out
+// of Temporal events.
 Console.WriteLine($"=== Temporal Activity Payload Inspection ===");
 string? lastStepPayload = null;
-await foreach (var ev in handle.FetchHistoryEventsAsync())
+var agentSessionHandle = temporalClient.GetWorkflowHandle(agentSessionWorkflowId);
+await foreach (var ev in agentSessionHandle.FetchHistoryEventsAsync())
 {
     if (ev.ActivityTaskScheduledEventAttributes is { } attrs &&
         attrs.ActivityType.Name == "Temporalio.Extensions.Agents.RunDurableAgentStep" &&
@@ -271,5 +287,18 @@ namespace ExternalHistoryStore
             _shutdownRequested = true;
             return Task.CompletedTask;
         }
+
+        /// <summary>
+        /// Exposes the inner agent-session workflow ID once a session has been created.
+        /// The session is created lazily inside the first <see cref="AskAsync"/> call;
+        /// this query returns <see langword="null"/> until then. The demo driver uses the
+        /// returned ID to inspect the external history store and the agent-session
+        /// workflow's activity payloads — the parent workflow's ID is the wrong key for
+        /// both because the store is keyed by the agent session's workflow ID
+        /// (<c>ta-supportagent-{key}</c>), not the parent <c>support-acme-{guid}</c>.
+        /// </summary>
+        [WorkflowQuery("GetAgentSessionWorkflowId")]
+        public string? GetAgentSessionWorkflowId() =>
+            _session?.SessionId.WorkflowId;
     }
 }
