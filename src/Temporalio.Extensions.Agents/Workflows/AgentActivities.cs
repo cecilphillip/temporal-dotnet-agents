@@ -17,13 +17,17 @@ namespace Temporalio.Extensions.Agents.Workflows;
 /// Cached state for a durable agent registered via <c>TemporalAgentsOptions.AddDurableAgent</c>.
 /// Composed once at first activity dispatch (lazy) and reused for the lifetime of the worker.
 /// Holds the constructed <see cref="AIAgent"/>, the resolved per-agent tool registry (used by
-/// <see cref="AgentActivities.InvokeAgentToolAsync"/>), and the immutable
-/// <see cref="DurableAgentRegistration"/> snapshot the workflow was registered with.
+/// <see cref="AgentActivities.InvokeAgentToolAsync"/>), the immutable
+/// <see cref="DurableAgentRegistration"/> snapshot the workflow was registered with, and the
+/// resolved <see cref="IAgentHistoryStore"/> (or <see langword="null"/> when the agent uses
+/// in-workflow history).
 /// </summary>
 internal sealed record CachedDurableAgent(
     AIAgent Agent,
     IReadOnlyDictionary<string, AIFunction> Tools,
-    DurableAgentRegistration Registration);
+    DurableAgentRegistration Registration,
+    IAgentHistoryStore? HistoryStore,
+    IReadOnlyList<AIContextProvider> ContextProviders);
 
 /// <summary>
 /// Temporal activities that perform the actual AI inference for agent sessions.
@@ -452,6 +456,37 @@ internal sealed class AgentActivities(
         // Restore the StateBag so AIContextProvider state survives across step iterations.
         var session = TemporalAgentSession.FromStateBag(sessionId, input.SerializedStateBag);
 
+        // Phase 4 (v0.3): when an external history store is configured for this agent, the first
+        // step of a turn loads prior session history from the store and prepends it to the
+        // accumulated messages. Subsequent steps in the same turn already see the loaded history
+        // (it stays inside `accumulated` between iterations), so we only load on IsFirstStep.
+        // Final-step append happens after the LLM call below — only when the response has no
+        // tool calls (IsFinal = true).
+        IReadOnlyList<ChatMessage> messagesForLlm = input.AccumulatedMessages;
+        if (cached.HistoryStore is not null && input.IsFirstStep)
+        {
+            var prior = await cached.HistoryStore.LoadAsync(sessionId.WorkflowId, ct).ConfigureAwait(false);
+            if (prior.Count > 0)
+            {
+                var priorMessageCount = 0;
+                foreach (var entry in prior)
+                {
+                    priorMessageCount += entry.Messages.Count;
+                }
+
+                var combined = new List<ChatMessage>(priorMessageCount + input.AccumulatedMessages.Count);
+                foreach (var entry in prior)
+                {
+                    foreach (var m in entry.Messages)
+                    {
+                        combined.Add(m);
+                    }
+                }
+                combined.AddRange(input.AccumulatedMessages);
+                messagesForLlm = combined;
+            }
+        }
+
         // Build the per-call ChatOptions: clone the agent's registration-time template, then
         // stamp Instructions / Tools / ResponseFormat — the three values that are owned per-call
         // by the workflow + request rather than by the agent's static configuration.
@@ -472,12 +507,57 @@ internal sealed class AgentActivities(
             chatOptions.Tools = [.. chatOptions.Tools.Where(t => enabledNames.Contains(t.Name))];
         }
 
-        // Use the agent's composed IChatClient so the AIContextProvider pipeline fires.
-        // ChatClientAgent exposes its constructor-supplied IChatClient via the public ChatClient
-        // property (MAF 1.0 surface), which is the wrapped pipeline we built in ComposeDurableAgent.
+        // Use the agent's underlying IChatClient. ChatClientAgent exposes its constructor-supplied
+        // IChatClient via the public ChatClient property (MAF 1.0 surface). The durable path drives
+        // the provider lifecycle (Q10 / CP1) explicitly below — InvokingAsync before the LLM call,
+        // InvokedAsync afterwards — because UseAIContextProviders depends on AgentRunContext that
+        // ChatClientAgent.RunAsync sets up but the durable workflow loop bypasses.
         var chatClient = (cached.Agent as ChatClientAgent)?.ChatClient
             ?? throw new InvalidOperationException(
                 $"Durable agent '{input.AgentName}' is not a ChatClientAgent; cannot resolve its IChatClient pipeline.");
+
+        // Phase 4: invoke provider InvokingAsync hooks before the LLM call, accumulating any
+        // additional system messages / tool advice the providers want to inject for THIS call.
+        // The contract (Q10/CP1) is "fires once per LLM call" — we honor that by calling here
+        // on every RunDurableAgentStepAsync invocation.
+        var augmentedMessages = messagesForLlm;
+        var providerAIContexts = cached.ContextProviders.Count == 0
+            ? null
+            : new List<Microsoft.Agents.AI.AIContext>(cached.ContextProviders.Count);
+        if (cached.ContextProviders.Count > 0)
+        {
+            // Assemble an aggregated AIContext that providers can mutate by adding messages/tools.
+            var aggregated = new Microsoft.Agents.AI.AIContext();
+            foreach (var provider in cached.ContextProviders)
+            {
+                var invokingCtx = new Microsoft.Agents.AI.AIContextProvider.InvokingContext(
+                    cached.Agent, session, aggregated);
+                var providerCtx = await provider.InvokingAsync(invokingCtx, ct).ConfigureAwait(false);
+                providerAIContexts!.Add(providerCtx);
+            }
+
+            // Prepend any provider-supplied system/instruction messages so the LLM sees them
+            // alongside the conversation. Mirrors what UseAIContextProviders does internally.
+            var extraMessages = new List<ChatMessage>();
+            foreach (var ctxResult in providerAIContexts!)
+            {
+                if (ctxResult.Messages is { } extra)
+                {
+                    foreach (var m in extra)
+                    {
+                        extraMessages.Add(m);
+                    }
+                }
+            }
+
+            if (extraMessages.Count > 0)
+            {
+                var combined = new List<ChatMessage>(extraMessages.Count + messagesForLlm.Count);
+                combined.AddRange(extraMessages);
+                combined.AddRange(messagesForLlm);
+                augmentedMessages = combined;
+            }
+        }
 
         var temporalContext = new TemporalAgentContext(ctx.TemporalClient, session, services);
         TemporalAgentContext.SetCurrent(temporalContext);
@@ -498,7 +578,7 @@ internal sealed class AgentActivities(
             // timeout. Mirrors RunAgentStepAsync exactly.
             var collected = new List<ChatResponseUpdate>();
             await foreach (var update in chatClient.GetStreamingResponseAsync(
-                    input.AccumulatedMessages, chatOptions, ct).WithCancellation(ct).ConfigureAwait(false))
+                    augmentedMessages, chatOptions, ct).WithCancellation(ct).ConfigureAwait(false))
             {
                 collected.Add(update);
                 ctx.Heartbeat(update.Text);
@@ -525,13 +605,48 @@ internal sealed class AgentActivities(
             _logger.LogAgentActivityCompleted(input.AgentName, sessionId.WorkflowId,
                 response.Usage?.InputTokenCount, response.Usage?.OutputTokenCount, response.Usage?.TotalTokenCount);
 
+            // Phase 4: notify providers that the LLM call succeeded. Mirrors the post-call hook
+            // UseAIContextProviders would emit for each provider in the chain.
+            if (cached.ContextProviders.Count > 0)
+            {
+                var invokedCtx = new Microsoft.Agents.AI.AIContextProvider.InvokedContext(
+                    cached.Agent,
+                    session,
+                    requestMessages: augmentedMessages,
+                    responseMessages: response.Messages);
+                foreach (var provider in cached.ContextProviders)
+                {
+                    await provider.InvokedAsync(invokedCtx, ct).ConfigureAwait(false);
+                }
+            }
+
             var serializedStateBag = session.SerializeStateBag();
+            var isFinal = toolCalls.Count == 0;
+
+            // Phase 4: when external history is configured AND this is the final step of the
+            // turn (no more tool calls), append the request entry plus the response entry to
+            // the store. The request entry is reconstructed from input.Request; the response
+            // entry wraps the assistant's text answer (intermediate tool messages stay inside
+            // the workflow's accumulated list — they aren't persisted as response entries).
+            if (cached.HistoryStore is not null && isFinal)
+            {
+                var requestEntry = AgentSessionRequest.FromRunRequest(input.Request, DateTimeOffset.UtcNow);
+                var responseEntry = AgentSessionResponse.FromAgentResponse(
+                    input.Request.CorrelationId ?? string.Empty,
+                    new AgentResponse { Messages = new[] { assistantMessage } },
+                    DateTimeOffset.UtcNow);
+
+                await cached.HistoryStore.AppendAsync(
+                    sessionId.WorkflowId,
+                    new DurableSessionEntry[] { requestEntry, responseEntry },
+                    ct).ConfigureAwait(false);
+            }
 
             return new AgentStepResult
             {
-                IsFinal = toolCalls.Count == 0,
+                IsFinal = isFinal,
                 AssistantMessage = assistantMessage,
-                ToolCalls = toolCalls.Count == 0 ? null : toolCalls,
+                ToolCalls = isFinal ? null : toolCalls,
                 UpdatedStateBag = serializedStateBag,
                 Usage = response.Usage,
             };
@@ -540,6 +655,26 @@ internal sealed class AgentActivities(
         {
             span?.SetStatus(ActivityStatusCode.Error, ex.Message);
             _logger.LogAgentActivityFailed(input.AgentName, sessionId.WorkflowId, ex);
+
+            // Phase 4: notify providers about the failed LLM call so any per-call resources can
+            // be released. Best-effort — provider failures here don't mask the original error.
+            if (cached.ContextProviders.Count > 0)
+            {
+                var invokedCtx = new Microsoft.Agents.AI.AIContextProvider.InvokedContext(
+                    cached.Agent, session, requestMessages: augmentedMessages, invokeException: ex);
+                foreach (var provider in cached.ContextProviders)
+                {
+                    try
+                    {
+                        await provider.InvokedAsync(invokedCtx, ct).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Suppressed — re-throwing the original exception below is more useful.
+                    }
+                }
+            }
+
             throw;
         }
         finally
@@ -594,17 +729,21 @@ internal sealed class AgentActivities(
             throw new AgentNotRegisteredException(name);
         }
 
-        // Compose the chat-client pipeline. Providers are wired via UseAIContextProviders so that
-        // MAF's AIContextProviderChatClient handles the per-step lifecycle (Q10 / CP1):
-        // Invoking/InvokedAsync fire once per LLM call, not once per turn.
+        // Resolve providers. The durable-agent path drives the per-LLM-call lifecycle hook
+        // (Q10 / CP1) explicitly inside RunDurableAgentStepAsync — see the Invoking/Invoked
+        // sites there. We do NOT wrap with UseAIContextProviders here because the durable
+        // workflow loop calls IChatClient.GetStreamingResponseAsync directly (bypassing
+        // ChatClientAgent.RunAsync); MAF's AIContextProviderChatClient decorator depends on an
+        // ambient AgentRunContext that ChatClientAgent.RunAsync sets up but that the durable
+        // path does not enter. The cached Agent's ChatOptions.AIContextProviders is still
+        // populated below so RunAsync-using callers (legacy paths) see the providers, but the
+        // durable path uses cached.Registration.ContextProviderFactories directly.
         var userClient = registration.ChatClient(providerServices);
         var providers = registration.ContextProviderFactories.Count == 0
             ? Array.Empty<AIContextProvider>()
             : registration.ContextProviderFactories.Select(f => f(providerServices)).ToArray();
 
-        IChatClient chatClient = providers.Length == 0
-            ? userClient
-            : userClient.AsBuilder().UseAIContextProviders(providers).Build();
+        IChatClient chatClient = userClient;
 
         // Resolve tools. The factory's resolved AIFunction.Name must match the name declared
         // on the builder (registration.Tools[i].Name) — otherwise dispatch by string key from
@@ -654,7 +793,12 @@ internal sealed class AgentActivities(
 
         var agent = new ChatClientAgent(chatClient, agentOptions);
 
-        return new CachedDurableAgent(agent, resolvedTools, registration);
+        // Phase 4 (v0.3): resolve the IAgentHistoryStore for this agent. Per-agent factory wins;
+        // worker-level factory is the fallback. Both null means in-workflow history.
+        var storeFactory = registration.HistoryStore ?? agentsOptions.HistoryStore;
+        var resolvedStore = storeFactory?.Invoke(providerServices);
+
+        return new CachedDurableAgent(agent, resolvedTools, registration, resolvedStore, providers);
     }
 
     /// <summary>

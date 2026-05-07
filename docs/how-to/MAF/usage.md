@@ -79,11 +79,37 @@ builder.Services
 | `WithMaxAttempts(int n)` | Sets a fixed-retry policy. |
 | `WithTimeout(TimeSpan t)` | Sets `StartToCloseTimeout`. |
 
+### Inheritance — per-agent vs worker-level
+
+For every scalar setting the rule is: **if you set it on the agent, it overrides the worker default; if you leave it `null`, the worker-level default applies.**
+
+| Per-agent setting (`DurableAgentBuilder`) | Worker default (`TemporalAgentsOptions`) |
+|-------------------------------------------|------------------------------------------|
+| `agent.TimeToLive` | `opts.DefaultTimeToLive` |
+| `agent.ApprovalTimeout` | `opts.ApprovalTimeout` |
+| `agent.ActivityTimeout` | `opts.ActivityTimeout` |
+| `agent.HeartbeatTimeout` | `opts.HeartbeatTimeout` |
+| `agent.RetryPolicy` | `opts.RetryPolicy` |
+| `agent.MaxEntryCount` | `opts.MaxEntryCount` |
+| `agent.HistoryReducer` | `opts.HistoryReducer` |
+| `agent.HistoryStore` | `opts.HistoryStore` |
+| `agent.MaxToolCallsPerTurn` | *no worker fallback — defaults to `20`* |
+
+The retry-policy hierarchy adds one more layer specifically for tools. From most to least specific:
+
+1. `agent.AddTool(t, opts => opts.RetryPolicy = ...)` — the per-tool override (use `opts.NoRetry()` on write tools).
+2. `agent.RetryPolicy` — the agent-level default for any tool that doesn't override.
+3. `opts.RetryPolicy` — the worker-level default used by agents that don't override.
+
+There is **no per-agent "default for all my tools" cascade beyond `agent.RetryPolicy`** — set policies per tool when the per-tool default is genuinely different.
+
 ### Lifecycle and composition
 
-The chat client, tool factories, and context providers run lazily on first activity dispatch and are cached for the lifetime of the worker process. Concurrent first-dispatches for the same agent compose at most once.
+The chat client, tool factories, context providers, and history-store factory all run lazily on first activity dispatch and are cached for the lifetime of the worker process. Concurrent first-dispatches for the same agent compose at most once.
 
 The library composes the chat pipeline internally and passes `UseProvidedChatClientAsIs = true` to MAF so that `FunctionInvokingChatClient` is **not** auto-injected — the workflow owns the tool-dispatch loop. Register a bare `IChatClient` in DI (do not call `.UseFunctionInvocation()`).
+
+`AIContextProvider.InvokingAsync` and `InvokedAsync` fire **once per LLM call** (per `RunDurableAgentStep` activity). A turn that takes 3 LLM-step iterations to converge will see 3 invocation pairs. Make these hooks idempotent and cheap, or cache results via `StateBag` to skip redundant work within a turn.
 
 For the workflow-loop semantics (per-tool fan-out, crash safety, continue-as-new) see [`docs/architecture/MAF/agent-sessions-and-workflow-loop.md`](../../architecture/MAF/agent-sessions-and-workflow-loop.md).
 

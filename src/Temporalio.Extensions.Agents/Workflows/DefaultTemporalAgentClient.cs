@@ -236,40 +236,111 @@ internal sealed class DefaultTemporalAgentClient(
     /// use the worker-level values verbatim.
     /// </summary>
     /// <remarks>
-    /// Phase 3 wires the durability flag (<see cref="AgentWorkflowInput.IsDurable"/>) and the
-    /// per-tool activity options dictionary
-    /// (<see cref="AgentWorkflowInput.DurableAgentToolActivityOptions"/>). Phase 4 broadens the
-    /// inheritance to include all per-agent scalars (timeouts, retry policy, max entry count,
-    /// history reducer, etc.). Until then, scalars continue to flow from the worker-level options
-    /// unchanged.
+    /// Phase 4 (v0.3): every per-agent scalar on <see cref="DurableAgentRegistration"/>
+    /// (TimeToLive, ApprovalTimeout, ActivityTimeout, HeartbeatTimeout, RetryPolicy,
+    /// MaxEntryCount, MaxToolCallsPerTurn, HistoryReducer) flows through the inheritance rule
+    /// <c>effective = registration.X ?? options.X</c>. The worker-level property names are still
+    /// the v0.2 forms (no <c>Default*</c> prefix); Phase 5 will rename them as a breaking change.
+    /// <para>
+    /// External history is opted into when <em>either</em> <see cref="DurableAgentRegistration.HistoryStore"/>
+    /// or <see cref="TemporalAgentsOptions.HistoryStore"/> is non-null; the workflow flag
+    /// <see cref="AgentWorkflowInput.UseExternalStore"/> reflects this composite decision so the
+    /// workflow side can omit history from <see cref="ExecuteAgentInput.ConversationHistory"/>
+    /// and skip carry-forward at continue-as-new. The legacy
+    /// <see cref="TemporalAgentsOptions.UseExternalHistory"/> flag still drives this for legacy
+    /// agents.
+    /// </para>
     /// </remarks>
-    private AgentWorkflowInput BuildAgentWorkflowInput(string agentName)
+    internal AgentWorkflowInput BuildAgentWorkflowInput(string agentName) =>
+        BuildAgentWorkflowInputCore(agentName, options, taskQueue);
+
+    /// <summary>
+    /// Pure builder used by <see cref="BuildAgentWorkflowInput(string)"/> and unit tests.
+    /// Extracted so the inheritance rule can be exercised without instantiating an
+    /// <see cref="ITemporalClient"/> or starting a worker.
+    /// </summary>
+    internal static AgentWorkflowInput BuildAgentWorkflowInputCore(
+        string agentName,
+        TemporalAgentsOptions options,
+        string taskQueue)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(taskQueue);
+
         var registration = options.DurableAgentRegistrations.GetValueOrDefault(agentName);
 
-        Dictionary<string, ActivityOptions>? toolActivityOptions = null;
-        if (registration is not null)
+        if (registration is null)
         {
-            toolActivityOptions = BuildDurableAgentToolActivityOptions(registration);
+            // Legacy path — preserve v0.2 behavior verbatim. Worker-level scalars flow through
+            // unchanged so existing AddAIAgent/AddAIAgentFactory callers see no behavior change.
+            return new AgentWorkflowInput
+            {
+                AgentName = agentName,
+                TaskQueue = taskQueue,
+                TimeToLive = options.GetTimeToLive(agentName) ?? TimeSpan.FromDays(14),
+                ActivityTimeout = options.ActivityTimeout,
+                HeartbeatTimeout = options.HeartbeatTimeout,
+                ApprovalTimeout = options.ApprovalTimeout,
+                RetryPolicy = options.RetryPolicy,
+                MaxEntryCount = options.MaxEntryCount,
+                HistoryReducer = options.HistoryReducer,
+                EnableSearchAttributes = options.EnableSearchAttributes,
+                UseExternalStore = options.UseExternalHistory,
+                EnablePerToolActivities = options.EnablePerToolActivities,
+                PerToolActivityOptions = options.PerToolActivityOptions,
+                MaxToolCallsPerTurn = options.MaxToolCallsPerTurn,
+                IsDurable = false,
+            };
         }
+
+        // Durable path (Phase 4): apply the inheritance rule for every settable scalar.
+        // For each setting, prefer the registration's value when set; otherwise fall back to the
+        // worker-level default. The per-agent registration's TimeToLive is also reflected in
+        // the legacy _agentTimeToLive map by AddDurableAgent so options.GetTimeToLive() still
+        // returns the per-agent value here — but we go through the registration directly for
+        // clarity and to avoid the tiny risk of map drift.
+        var perAgentTimeToLive = registration.TimeToLive ?? options.GetTimeToLive(agentName) ?? TimeSpan.FromDays(14);
+        var perAgentActivityTimeout = registration.ActivityTimeout ?? options.ActivityTimeout;
+        var perAgentHeartbeatTimeout = registration.HeartbeatTimeout ?? options.HeartbeatTimeout;
+        var perAgentApprovalTimeout = registration.ApprovalTimeout ?? options.ApprovalTimeout;
+        var perAgentRetryPolicy = registration.RetryPolicy ?? options.RetryPolicy;
+        var perAgentMaxEntryCount = registration.MaxEntryCount ?? options.MaxEntryCount;
+        var perAgentHistoryReducer = registration.HistoryReducer ?? options.HistoryReducer;
+
+        // Compose per-tool activity options using the resolved per-agent timeouts/retry policy
+        // as defaults so write tools that don't set explicit overrides still inherit from the
+        // per-agent values rather than the worker-wide defaults.
+        var toolActivityOptions = BuildDurableAgentToolActivityOptions(
+            registration,
+            perAgentActivityTimeout,
+            perAgentHeartbeatTimeout,
+            perAgentRetryPolicy);
+
+        // Q6 inheritance: external store is opt-in via either the per-agent or the worker-level
+        // factory. The activity-side resolution looks at the same composite condition — see
+        // AgentActivities.ComposeDurableAgent.
+        var hasExternalStore = registration.HistoryStore is not null || options.HistoryStore is not null;
 
         return new AgentWorkflowInput
         {
             AgentName = agentName,
             TaskQueue = taskQueue,
-            TimeToLive = options.GetTimeToLive(agentName) ?? TimeSpan.FromDays(14),
-            ActivityTimeout = options.ActivityTimeout,
-            HeartbeatTimeout = options.HeartbeatTimeout,
-            ApprovalTimeout = options.ApprovalTimeout,
-            RetryPolicy = options.RetryPolicy,
-            MaxEntryCount = options.MaxEntryCount,
-            HistoryReducer = options.HistoryReducer,
+            TimeToLive = perAgentTimeToLive,
+            ActivityTimeout = perAgentActivityTimeout,
+            HeartbeatTimeout = perAgentHeartbeatTimeout,
+            ApprovalTimeout = perAgentApprovalTimeout,
+            RetryPolicy = perAgentRetryPolicy,
+            MaxEntryCount = perAgentMaxEntryCount,
+            HistoryReducer = perAgentHistoryReducer,
             EnableSearchAttributes = options.EnableSearchAttributes,
-            UseExternalStore = options.UseExternalHistory,
-            EnablePerToolActivities = options.EnablePerToolActivities,
-            PerToolActivityOptions = options.PerToolActivityOptions,
-            MaxToolCallsPerTurn = registration?.MaxToolCallsPerTurn ?? options.MaxToolCallsPerTurn,
-            IsDurable = registration is not null,
+            UseExternalStore = hasExternalStore,
+            // Legacy step-mode settings are intentionally not propagated to durable agents —
+            // the durable workflow branch supersedes step mode (see AgentWorkflow.cs comments).
+            EnablePerToolActivities = false,
+            PerToolActivityOptions = null,
+            MaxToolCallsPerTurn = registration.MaxToolCallsPerTurn,
+            IsDurable = true,
             DurableAgentToolActivityOptions = toolActivityOptions,
             // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
         };
@@ -278,26 +349,27 @@ internal sealed class DefaultTemporalAgentClient(
     /// <summary>
     /// Pre-computes the per-tool <see cref="ActivityOptions"/> dictionary from a durable agent's
     /// tool registrations. Each entry uses the per-tool overrides where set, falling back to the
-    /// worker-level defaults for unset fields. Built at workflow start so retry constraints are
-    /// pinned at the time the workflow began running and survive across continue-as-new
-    /// transitions (the dictionary travels with <see cref="AgentWorkflowInput"/>).
+    /// supplied per-agent defaults (which themselves cascade from worker-level defaults). Built
+    /// at workflow start so retry constraints are pinned at the time the workflow began running
+    /// and survive across continue-as-new transitions (the dictionary travels with
+    /// <see cref="AgentWorkflowInput"/>).
     /// </summary>
-    private Dictionary<string, ActivityOptions> BuildDurableAgentToolActivityOptions(
-        DurableAgentRegistration registration)
+    private static Dictionary<string, ActivityOptions> BuildDurableAgentToolActivityOptions(
+        DurableAgentRegistration registration,
+        TimeSpan defaultActivityTimeout,
+        TimeSpan defaultHeartbeatTimeout,
+        RetryPolicy? defaultRetryPolicy)
     {
         var result = new Dictionary<string, ActivityOptions>(StringComparer.OrdinalIgnoreCase);
-        var workerActivityTimeout = options.ActivityTimeout;
-        var workerHeartbeatTimeout = options.HeartbeatTimeout;
-        RetryPolicy? workerRetryPolicy = options.RetryPolicy;
 
         foreach (var tool in registration.Tools)
         {
             var toolOpts = tool.Options;
             result[tool.Name] = new ActivityOptions
             {
-                StartToCloseTimeout = toolOpts.StartToCloseTimeout ?? workerActivityTimeout,
-                HeartbeatTimeout = toolOpts.HeartbeatTimeout ?? workerHeartbeatTimeout,
-                RetryPolicy = toolOpts.RetryPolicy ?? workerRetryPolicy,
+                StartToCloseTimeout = toolOpts.StartToCloseTimeout ?? defaultActivityTimeout,
+                HeartbeatTimeout = toolOpts.HeartbeatTimeout ?? defaultHeartbeatTimeout,
+                RetryPolicy = toolOpts.RetryPolicy ?? defaultRetryPolicy,
                 Summary = tool.Name,
             };
         }

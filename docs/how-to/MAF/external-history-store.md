@@ -102,6 +102,47 @@ That's the entire opt-in. After this, every new agent session created on this wo
 
 ---
 
+## Using `HistoryStore` with `AddDurableAgent`
+
+`AddDurableAgent` (the v0.3 registration path) replaces the legacy `UseExternalHistory = true` + `UseExternalAgentHistory<T>()` opt-in pair with a **factory-shaped** entry that runs at first activity dispatch. Two slots:
+
+- **Worker default**: `opts.HistoryStore = sp => sp.GetRequiredService<MyStore>()`. Applies to every durable agent on the worker that doesn't override.
+- **Per-agent override**: `agent.HistoryStore = sp => sp.GetRequiredService<HipaaStore>()`. Wins over the worker default for that one agent.
+
+When **either** is non-null, external history is opted in for that agent. There is no boolean opt-in flag — the presence of a factory drives the behavior.
+
+```csharp
+builder.Services.AddSingleton<MyStore>();
+builder.Services.AddSingleton<HipaaStore>();
+
+builder.Services
+    .AddHostedTemporalWorker(taskQueue)
+    .AddTemporalAgents(opts =>
+    {
+        // Worker-level default: every durable agent uses MyStore unless it overrides.
+        opts.HistoryStore = sp => sp.GetRequiredService<MyStore>();
+
+        opts.AddDurableAgent("StandardAgent", agent =>
+        {
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            // No HistoryStore override — inherits opts.HistoryStore (MyStore).
+        });
+
+        opts.AddDurableAgent("ComplianceAgent", agent =>
+        {
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            // Per-agent override — this one agent uses the regulated store instead.
+            agent.HistoryStore = sp => sp.GetRequiredService<HipaaStore>();
+        });
+    });
+```
+
+> **Per-agent opt-out is not supported.** If you need one agent on a worker to keep history in workflow state while another uses a store, register them on separate worker builders (different task queues). The store factory applies uniformly to every durable agent on a single worker that doesn't override.
+
+The same `IAgentHistoryStore` interface and contract apply — see [Implementing `IAgentHistoryStore`](#implementing-iagenthistorystore) below. The legacy `UseExternalHistory = true` flag and `services.UseExternalAgentHistory<TStore>()` extension still work for legacy `AddAIAgent` / `AddAIAgentFactory` registrations through Phase 4 of the v0.3 rollout; Phase 5 removes both. New code should use `opts.HistoryStore` + per-agent override.
+
+---
+
 ## Implementing `IAgentHistoryStore`
 
 The interface is small:

@@ -398,9 +398,15 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
     {
         Workflow.Logger.LogDurableAgentTurnStarted(_input!.AgentName, Workflow.Info.WorkflowId);
 
-        // Accumulated messages threaded through the step loop. Initial set is the request
-        // messages — note: the request entry was already appended to history by the base.
-        var accumulated = new List<ChatMessage>(runRequest.Messages);
+        // Accumulated messages threaded through the step loop. The base appended this turn's
+        // request entry to History before calling us; flatten History when in-workflow history
+        // mode is on so the LLM sees prior turns. When external-store mode is on the workflow's
+        // history is metadata-only (Messages stripped) — the FIRST step's activity loads prior
+        // history from the store and prepends it; the workflow only seeds the current turn's
+        // request messages here.
+        var accumulated = _input!.UseExternalStore
+            ? new List<ChatMessage>(runRequest.Messages)
+            : FlattenHistoryMessages();
 
         // Track every assistant + function-result message produced across the loop so the
         // final AgentResponse exposes the full multi-step transcript.
@@ -418,6 +424,10 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
                 AccumulatedMessages = accumulated,
                 SerializedStateBag = _currentStateBag,
                 SessionId = null,
+                // First-step flag triggers an external-history-store load inside the activity.
+                // Subsequent iterations within the same turn already carry the loaded history
+                // through `accumulated`, so loading again would duplicate prior entries.
+                IsFirstStep = iteration == 0,
             };
 
             // Do NOT use the ConfigureAwait-false escape hatch here: this runs inside a
@@ -516,6 +526,33 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             Usage = totalUsage,
             CreatedAt = Workflow.UtcNow,
         };
+    }
+
+    /// <summary>
+    /// Flattens the in-workflow conversation <see cref="DurableChatWorkflowBase{TOutput}.History"/>
+    /// (which already includes this turn's request entry, just appended by the base) into a
+    /// flat list of <see cref="ChatMessage"/> instances suitable for an LLM call. Used by
+    /// <see cref="ExecuteDurableAgentTurnAsync"/> when external history mode is off so that
+    /// multi-turn conversations carry prior assistant + tool messages forward.
+    /// </summary>
+    private List<ChatMessage> FlattenHistoryMessages()
+    {
+        var totalMessageCount = 0;
+        foreach (var entry in History)
+        {
+            totalMessageCount += entry.Messages.Count;
+        }
+
+        var messages = new List<ChatMessage>(totalMessageCount);
+        foreach (var entry in History)
+        {
+            foreach (var m in entry.Messages)
+            {
+                messages.Add(m);
+            }
+        }
+
+        return messages;
     }
 
     /// <summary>
