@@ -445,18 +445,23 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
 
             var response = await proxy.RunAsync("Send me nothing back", session);
 
-            // The response should be valid but contain no messages.
+            // The v0.3 durable path normalizes a stream that yields no updates by emitting
+            // a single empty-content assistant ChatMessage (see RunDurableAgentStepAsync's
+            // assistantMessage fallback). The contract we care about is "doesn't crash" —
+            // exactly one message comes back, and its content is empty.
             Assert.NotNull(response);
-            Assert.Empty(response.Messages);
+            Assert.Single(response.Messages);
+            Assert.Equal(string.Empty, response.Messages[0].Text);
 
-            // Verify the history recorded both the request and the empty response.
+            // Verify the history recorded both the request and the (empty-content) response.
             var handle = _fixture.Client.GetWorkflowHandle<AgentWorkflow>(
                 session.SessionId.WorkflowId);
             var history = await handle.QueryAsync(wf => wf.GetHistory());
 
             Assert.Equal(2, history.Count); // request + response
             var storedResponse = Assert.IsType<AgentSessionResponse>(history[1]);
-            Assert.Empty(storedResponse.Messages);
+            Assert.Single(storedResponse.Messages);
+            Assert.Equal(string.Empty, storedResponse.Messages[0].Text);
 
             _output.WriteLine("Empty agent response round-tripped without crash.");
         }

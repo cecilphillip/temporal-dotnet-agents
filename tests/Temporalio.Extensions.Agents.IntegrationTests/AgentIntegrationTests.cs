@@ -46,14 +46,22 @@ public class AgentIntegrationTests : IClassFixture<IntegrationTestFixture>
     }
 
     [Fact]
-    public async Task SingleTurn_ResponseAgentIdMatchesWorkflowId()
+    public async Task SingleTurn_SessionRoutesToExpectedWorkflowId()
     {
         var session = (TemporalAgentSession)await _fixture.AgentProxy.CreateSessionAsync();
 
         var response = await _fixture.AgentProxy.RunAsync("Ping", session);
 
-        // AgentWorkflowWrapper.RunCoreAsync sets response.AgentId = this.Id (workflow ID)
-        Assert.Equal(session.SessionId.WorkflowId, response.AgentId);
+        // The v0.3 durable path does not stamp AgentResponse.AgentId (AgentWorkflowWrapper
+        // was removed). Instead, verify session-to-workflow routing: the workflow we just
+        // ran is reachable via the session's WorkflowId, and its history includes the turn.
+        Assert.NotNull(response);
+        Assert.NotEmpty(response.Messages);
+        Assert.StartsWith("ta-echoagent-", session.SessionId.WorkflowId);
+
+        var handle = _fixture.Client.GetWorkflowHandle<AgentWorkflow>(session.SessionId.WorkflowId);
+        var history = await handle.QueryAsync(wf => wf.GetHistory());
+        Assert.NotEmpty(history);
     }
 
     // ── Multi-turn / history ───────────────────────────────────────────────────

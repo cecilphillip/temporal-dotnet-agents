@@ -28,7 +28,6 @@ public class DurableAgentIntegrationTests : IClassFixture<DurableAgentEnvironmen
 
     private const string RunDurableAgentStepActivity = "Temporalio.Extensions.Agents.RunDurableAgentStep";
     private const string InvokeAgentToolActivity = "Temporalio.Extensions.Agents.InvokeAgentTool";
-    private const string ExecuteAgentActivity = "Temporalio.Extensions.Agents.ExecuteAgent";
 
     public DurableAgentIntegrationTests(DurableAgentEnvironmentFixture fixture)
     {
@@ -60,7 +59,6 @@ public class DurableAgentIntegrationTests : IClassFixture<DurableAgentEnvironmen
 
         Assert.Contains(RunDurableAgentStepActivity, activityNames);
         Assert.DoesNotContain(InvokeAgentToolActivity, activityNames);
-        Assert.DoesNotContain(ExecuteAgentActivity, activityNames);
 
         await host.StopAsync();
     }
@@ -95,9 +93,8 @@ public class DurableAgentIntegrationTests : IClassFixture<DurableAgentEnvironmen
 
         Assert.True(stepCount >= 2, $"expected >= 2 RunDurableAgentStep activities; got {stepCount}");
         Assert.Equal(1, toolCount);
-        // Sanity: legacy step-mode and single-activity paths should NOT have run.
+        // Sanity: legacy step-mode path should NOT have run.
         Assert.DoesNotContain("Temporalio.Extensions.Agents.RunAgentStep", activityNames);
-        Assert.DoesNotContain(ExecuteAgentActivity, activityNames);
 
         await host.StopAsync();
     }
@@ -234,43 +231,6 @@ public class DurableAgentIntegrationTests : IClassFixture<DurableAgentEnvironmen
             }
         }
         Assert.Equal(1, invokeAgentToolScheduleCount);
-
-        await host.StopAsync();
-    }
-
-    // ── Legacy AddAIAgent registration still uses the legacy path ───────────────
-
-    [Fact]
-    public async Task DurableAgent_LegacyAddAIAgent_UsesLegacyPath()
-    {
-        var taskQueue = $"durable-agent-legacy-{Guid.NewGuid():N}";
-        var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddSingleton<ITemporalClient>(_env.Client);
-
-        var workerBuilder = builder.Services.AddHostedTemporalWorker(taskQueue);
-        workerBuilder.AddTemporalAgents(opts =>
-        {
-            opts.AddDurableAgent("EchoAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient());
-        });
-
-        using var host = builder.Build();
-        await host.StartAsync();
-
-        var proxy = host.Services.GetTemporalAgentProxy("EchoAgent");
-        var session = await proxy.CreateSessionAsync();
-        var response = await proxy.RunAsync("Hello!", session);
-        Assert.NotNull(response);
-
-        var sessionId = ((TemporalAgentSession)session).SessionId;
-        var handle = _env.Client.GetWorkflowHandle(sessionId.WorkflowId);
-        var activityNames = await CollectActivityNamesAsync(handle);
-
-        // Legacy single-activity path runs ExecuteAgent only — neither the legacy step-mode
-        // nor the new durable-agent activities should be scheduled.
-        Assert.Contains(ExecuteAgentActivity, activityNames);
-        Assert.DoesNotContain(RunDurableAgentStepActivity, activityNames);
-        Assert.DoesNotContain(InvokeAgentToolActivity, activityNames);
-        Assert.DoesNotContain("Temporalio.Extensions.Agents.RunAgentStep", activityNames);
 
         await host.StopAsync();
     }
