@@ -147,13 +147,15 @@ External Caller (e.g. TemporalAIAgentProxy)
     AgentWorkflow [WorkflowUpdate("Run")]
         ← Serializes via _isProcessing, records request in _history
     ↓
-    Workflow.ExecuteActivityAsync(AgentActivities.ExecuteAgentAsync)
-        ← AI inference runs inside an activity
+    Loop: Workflow.ExecuteActivityAsync(AgentActivities.RunDurableAgentStepAsync)
+        ← One LLM call per dispatch
+        ← For each pending tool call, fan out via Workflow.WhenAllAsync over
+          AgentActivities.InvokeAgentToolAsync (one activity per tool)
     ↓
-    AgentActivities.ExecuteAgentAsync [Activity]
-        ← Resolves AIAgent from factory cache, rebuilds history, calls LLM
+    AgentActivities.RunDurableAgentStepAsync [Activity]
+        ← Resolves CachedDurableAgent (lazy compose), calls IChatClient
     ↓
-    AgentResponse returned to AgentWorkflow → recorded in _history
+    Final AgentResponse returned to AgentWorkflow → recorded in _history
     ↓
     Update response returned to DefaultTemporalAgentClient → returned to caller
 ```
@@ -172,15 +174,17 @@ Orchestrating [Workflow] (e.g. ResearchWorkflow)
     TemporalAIAgent.RunCoreAsync()
         ← Appends request to TemporalAIAgent._history (workflow state)
     ↓
-    Workflow.ExecuteActivityAsync(
-        (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
+    Drive the durable loop in-place:
+      Workflow.ExecuteActivityAsync(
+        (AgentActivities a) => a.RunDurableAgentStepAsync(stepInput),
         activityOptions)
         ← Activity result is recorded in the orchestrating workflow's event history
+      Per pending tool call:
+        Workflow.ExecuteActivityAsync(
+          (AgentActivities a) => a.InvokeAgentToolAsync(toolInput),
+          toolOptions)
     ↓
-    AgentActivities.ExecuteAgentAsync [Activity]
-        ← Resolves AIAgent from factory cache, rebuilds history, calls LLM
-    ↓
-    AgentResponse returned to TemporalAIAgent → appended to _history as response entry
+    Final AgentResponse returned to TemporalAIAgent → appended to _history as response entry
     ↓
     AgentResponse returned to orchestrating workflow code
 ```

@@ -16,9 +16,11 @@ This sample demonstrates:
 User input
     │
     ▼
-proxy.RunAsync(messages, session)        ← [WorkflowUpdate] to AgentWorkflow
+proxy.RunAsync(messages, session)            ← [WorkflowUpdate] to AgentWorkflow
     │
-    └─ AgentActivities.ExecuteAgentAsync()   ← activity (24h timeout)
+    ├─ AgentActivities.RunDurableAgentStepAsync()   ← LLM call (returns FunctionCallContent)
+    │
+    └─ AgentActivities.InvokeAgentToolAsync()       ← activity per tool (24h timeout)
            │
            └─ send_email tool invoked
                   │
@@ -33,7 +35,8 @@ proxy.RunAsync(messages, session)        ← [WorkflowUpdate] to AgentWorkflow
                          │
                   WaitConditionAsync satisfied → tool resumes
                          │
-                  email sent (or rejected)
+                  email sent (or rejected) → result returns to workflow,
+                                             next RunDurableAgentStepAsync iteration runs
 ```
 
 ## Highlights

@@ -2,9 +2,9 @@
 
 How to wrap the inner `IChatClient` so every LLM call made by an agent is observable — log inputs and outputs, time the request, capture token usage, attach custom telemetry — without changing how Temporal dispatches the activity.
 
-This is the answer to "I want per-LLM-call observability today." If you have read about a future opt-in granular tool dispatch mode and concluded you need it for visibility, you almost certainly do not — see [Comparison with granular tool dispatch](#comparison-with-granular-tool-dispatch) below.
+This is the answer to "I want per-LLM-call observability today." See also the [`docs/design-decisions.md`](../../design-decisions.md) entry on durable-agent dispatch granularity for the underlying architectural rationale.
 
-> **Applies to `ChatClientAgent` only.** This pattern works because `ChatClientAgent` reads `ChatClientFactory` from its run options (or accepts a `clientFactory` constructor parameter) and applies it before each LLM call. **`A2AAgent`, graph-workflow agents, and other non-`ChatClientAgent` `AIAgent` subtypes do not have an inner `IChatClient` to wrap** — they dispatch via different protocols (HTTP+JSON for A2A; in-process graph orchestration for workflow agents). Registering a non-`ChatClientAgent` and supplying a `ChatClientFactory` will silently no-op. If you need observability for those agent types, instrument at the agent's own dispatch layer instead (e.g., HTTP-client middleware for A2A; OpenTelemetry source for graph workflows).
+> **Applies to `ChatClientAgent`-backed durable agents.** In v0.3, `AddDurableAgent` constructs a `ChatClientAgent` internally from the user's `agent.ChatClient` factory, with `UseProvidedChatClientAsIs = true` (so MAF does not auto-inject `FunctionInvokingChatClient` — the workflow owns the tool-dispatch loop). The interception point is the `IChatClient` your factory returns; decorate it before returning it from the factory. **`A2AAgent`, graph-workflow agents, and other non-`ChatClientAgent` `AIAgent` subtypes do not have an inner `IChatClient` to wrap** — they dispatch via different protocols and are not produced by `AddDurableAgent`. If you need observability for those agent types, instrument at the agent's own dispatch layer instead (e.g., HTTP-client middleware for A2A; OpenTelemetry source for graph workflows).
 
 ---
 
@@ -26,11 +26,16 @@ Do **not** use this pattern for:
 
 ## How it works
 
-The `ChatClientAgent` (returned by `IChatClient.AsAIAgent(...)`) accepts a `clientFactory: Func<IChatClient, IChatClient>` at construction. MAF applies this factory before each `RunAsync` / `RunStreamingAsync` call to produce the `IChatClient` actually used for that turn. The factory runs **inside the activity** — the wrapped client is not part of workflow replay state, so OTel spans, logs, and metrics emitted by the decorator propagate through the activity's existing trace context.
+In v0.3, `AddDurableAgent` lazily composes the agent at first activity dispatch (`AgentActivities.ComposeDurableAgent`):
 
-`Temporalio.Extensions.Agents` is layered cleanly on top of this. Internally, `AgentWorkflowWrapper` (the per-activity adapter inside `AgentActivities.ExecuteAgentAsync`) composes its own `ChatClientFactory` over whatever the registered agent already had, in order to apply per-request tool filtering and response-format overrides. Your factory and the library's factory both run on the same `IChatClient` pipeline; nothing about the pattern is exclusive to the library.
+1. Resolve `IChatClient` by invoking the user-supplied `agent.ChatClient` factory against the worker's `IServiceProvider`.
+2. Resolve each tool's `Factory(sp)` and each context provider's factory.
+3. Build a `ChatClientAgent` with `UseProvidedChatClientAsIs = true` so MAF does **not** auto-wrap the client in `FunctionInvokingChatClient`. The tool loop is owned by the workflow (`AgentWorkflow.ExecuteDurableAgentTurnAsync`) which dispatches each LLM call as a separate `RunDurableAgentStep` activity and each tool call as a separate `InvokeAgentTool` activity, fanned out via `Workflow.WhenAllAsync`.
+4. Cache the composed agent on `AgentActivities._durableAgentCache`.
 
-The cleanest interception point for application code is therefore the `clientFactory` parameter of `AsAIAgent(...)` at agent registration time — it is in the same place as `UseFunctionInvocation()`, and it composes naturally with whatever middleware the agent already uses.
+Each `RunDurableAgentStep` activity calls `IChatClient.GetStreamingResponseAsync` on the cached client with a freshly constructed `ChatOptions` (cloned from `registration.ChatOptions`, with library-stamped `Tools` / `Instructions` / `ResponseFormat`). Per-request tool filtering (`TemporalAgentRunOptions.EnableToolNames`) and response-format selection are applied to that `ChatOptions` before the call — they do **not** require an additional `ChatClientFactory` decorator.
+
+The cleanest interception point for application code is therefore the `agent.ChatClient` factory itself: return a decorated `IChatClient` from the factory and every `RunDurableAgentStep` activity sees calls flow through it. Because the factory runs inside the activity (not on the workflow side), OTel spans, logs, and metrics emitted by the decorator nest naturally inside the activity's existing trace context.
 
 ---
 
@@ -149,54 +154,48 @@ var session = await proxy.CreateSessionAsync();
 var response = await proxy.RunAsync("What's the weather?", session);
 ```
 
-The decorator runs inside `AgentActivities.ExecuteAgentAsync` for every LLM round of every turn. Logs and spans nest naturally inside the existing `agent.turn` span (see [Observability](./observability.md) for the full span hierarchy).
+The decorator runs inside each `AgentActivities.RunDurableAgentStepAsync` activity for every LLM round of every turn. Logs and spans nest naturally inside the existing `agent.turn` span (see [Observability](./observability.md) for the full span hierarchy).
 
 ---
 
-## Composing with the library's own decoration
+## Composing with the library's own per-step `ChatOptions`
 
-`AgentWorkflowWrapper` adds its own `ChatClientFactory` per request to apply tool filtering (`TemporalAgentRunOptions.EnableToolNames`) and response-format overrides (`ChatClientAgentRunOptions.ChatOptions.ResponseFormat`). When the registered agent already has a `clientFactory` (your logging decorator), the library wraps it — both run, in pipeline order, on every call.
+The library does not decorate your `IChatClient` — it constructs a fresh `ChatOptions` per step from `registration.ChatOptions` (cloned), then stamps `Instructions`, `Tools`, and `ResponseFormat` on it according to the active `TemporalAgentRunOptions` (e.g., `EnableToolNames` filtering) and the originating `RunRequest`. Your decorator sees the resulting `ChatOptions` on every call.
 
 Concretely, for a registered agent with the example factory above:
 
 ```
 inner OpenAI client
-  → UseFunctionInvocation       (function-invocation loop)
-    → LoggingChatClient          (your decorator, logs every round)
-      → ConfigureOptions block   (library's per-request tool filter / response format)
+  → LoggingChatClient                   (your decorator, logs every round)
+    ↑
+    invoked by RunDurableAgentStepAsync via IChatClient.GetStreamingResponseAsync
+    with a per-step ChatOptions (tools / instructions / response format stamped by the library)
 ```
 
-You do not need to do anything special to compose. Register your decorator at agent construction; the library composes around it.
+You do not need to do anything special to compose: return the decorated client from `agent.ChatClient` and the library's per-step `ChatOptions` shaping happens transparently around it.
 
 ---
 
-## Comparison with granular tool dispatch
+## Comparison with the v0.3 dispatch model
 
-Two questions look similar but have different answers:
+Per-LLM-call observability and per-tool durability are different concerns, and v0.3 supports both directly:
 
-| Need | Solution today | Status |
-|---|---|---|
-| **Per-LLM-call observability** — see every model request and response, time it, log it, span it. | `ChatClientFactory` interception (this guide). | Available now, library-level support, no opt-in flag. |
-| **Per-tool durability** — each tool call retried independently in Temporal event history, with its own timeout and retry policy. | A future opt-in `EnableGranularDispatch` mode in `TemporalAgentsOptions`. | Deferred — gated by a documented set of exit criteria. See `docs/design-decisions.md` § "Exit criteria — when would granular dispatch be added?" |
+| Need | Solution |
+|---|---|
+| **Per-LLM-call observability** — see every model request and response, time it, log it, span it. | `IChatClient` decorator returned from `agent.ChatClient` (this guide). |
+| **Per-tool durability** — each tool call retried independently in Temporal event history, with its own timeout and retry policy. | Built in. Every `agent.AddTool(...)` runs as a separately-named `InvokeAgentTool` activity. Configure retry/timeout per tool via the `DurableToolOptions` callback (e.g., `agent.AddTool(t, opts => opts.NoRetry())` for non-idempotent write tools). See [`durable-agents.md`](./durable-agents.md). |
 
-The two are different problems:
-
-- **Observability** is about *seeing* what happens during a turn. The full-loop activity model is correct here — Temporal records the turn-level checkpoint, and `ChatClientFactory` interception adds round-level detail without changing the durability shape.
-- **Durability** is about *what gets retried* when something fails. The full-loop model retries the whole turn (LLM + all tools) on activity failure. Granular dispatch would retry only the failing tool, but at the cost of additional implementation complexity and a documented incompatibility with stateful `AIContextProvider` implementations.
-
-If you came here because you wanted "more visibility into when agents execute tools," `ChatClientFactory` interception is the answer. The decorator sees every LLM round — including the rounds where the model returns `FunctionCallContent` — and you can log tool requests, tool results, and the final assistant message all from one place.
-
-If you came here because you have a documented production incident where a flaky tool caused costly full-turn replays, see the gate criteria in `docs/design-decisions.md`.
+Both work together. The decorator sees every LLM round — including the rounds where the model returns `FunctionCallContent` — and the workflow's tool fan-out (`Workflow.WhenAllAsync`) is independently visible in Temporal event history with one event group per tool call.
 
 ---
 
 ## References
 
-- `docs/design-decisions.md` § "Function Invocation: Loop Ownership and Durability Granularity" — the underlying design rationale for keeping the full-loop model as the default.
-- `docs/design-decisions.md` § "Exit criteria — when would granular dispatch be added?" — what evidence would unblock the deferred granular mode.
-- `docs/how-to/MAF/observability.md` — the full OTel span hierarchy. Spans emitted by your decorator nest inside `agent.turn`.
-- `src/Temporalio.Extensions.Agents/AgentWorkflowWrapper.cs` — how the library composes its own `ChatClientFactory` over yours, per request.
-- `samples/MAF/BasicAgent/Program.cs` — the canonical `AsAIAgent(..., clientFactory: ...)` registration shape.
+- [`docs/design-decisions.md`](../../design-decisions.md) — the underlying design rationale for the v0.3 durable-agent dispatch model.
+- [`docs/how-to/MAF/durable-agents.md`](./durable-agents.md) — per-tool retry/timeout configuration via `DurableToolOptions`.
+- [`docs/how-to/MAF/observability.md`](./observability.md) — the full OTel span hierarchy. Spans emitted by your decorator nest inside `agent.turn`.
+- `src/Temporalio.Extensions.Agents/Workflows/AgentActivities.cs` — `ComposeDurableAgent` and `RunDurableAgentStepAsync`, where the per-step `ChatOptions` is built and the decorated `IChatClient` is invoked.
+- `samples/MAF/BasicAgent/Program.cs` — canonical `agent.ChatClient = sp => ...` registration shape.
 - [`Microsoft.Extensions.AI.DelegatingChatClient`](https://learn.microsoft.com/dotnet/api/microsoft.extensions.ai.delegatingchatclient) — the base class for chat client decorators.
 
 ---

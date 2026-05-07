@@ -546,3 +546,61 @@ The plan permitted either approach. Bundled because: (a) every sample touches on
 - `just test-integration-ai`: 13/13.
 - Determinism guard: zero `ConfigureAwait(false)` in `AgentWorkflow.cs` / `DurableChatWorkflowBase.cs`.
 - End-to-end: started Worker in background, ran Client, four turns succeeded (capital of France → Paris; population; weather tool call; summary). No exception.
+
+---
+
+## 2026-05-07 — Cosmetic sample bug fixes (post-v0.3 verification)
+
+End-to-end verification of all 11 v0.3 samples surfaced two cosmetic sample bugs.
+Three diagnostic reports (mine, agent-smith, morpheus) converged on the same
+root causes — both sample-author bugs, no library regressions.
+
+### Bug 1: ExternalHistoryStore — SnapshotFull printed 0 entries
+
+Session-ID mismatch in the demo driver. Activity writes are keyed by
+`TemporalAgentSessionId.WorkflowId` ⇒ `ta-supportagent-{key}`, but the demo
+driver was reading the store using the parent `SupportSessionWorkflow` ID
+(`support-acme-{guid}`). Same bug also broke the activity-payload canary
+check — `RunDurableAgentStep` is scheduled on the inner agent-session
+workflow, so iterating `handle.FetchHistoryEventsAsync()` on the parent
+found no matching activity-scheduled events.
+
+**Fix** (`samples/MAF/ExternalHistoryStore/Program.cs`):
+- Added `[WorkflowQuery("GetAgentSessionWorkflowId")]` on `SupportSessionWorkflow`
+  that returns `_session?.SessionId.WorkflowId` (null until first turn creates
+  the session).
+- After the demo loop, query the inner ID, fall back to parent with a console
+  warning if null, then route both `store.SnapshotFull(...)` and the payload
+  fetch through `temporalClient.GetWorkflowHandle(agentSessionWorkflowId)`.
+
+### Bug 2: PerToolActivities — FailOnceEnabled dead in Scenario 2
+
+`Tools.cs:47-49` predicate `if (FailOnceEnabled && n == 1)` keyed on a
+process-wide cumulative counter. After Scenario 1 incremented past 1,
+Scenario 2's first call saw `n >= 2` and the throw branch was dead — so
+"Per-tool retry granularity confirmed" never printed.
+
+**Fix** (`samples/MAF/PerToolActivities/Tools.cs`): replaced cumulative-counter
+predicate with a self-clearing latch using
+`Interlocked.CompareExchange(ref _failArmed, 0, 1)` for atomic arm-and-consume.
+Public `FailOnceEnabled` property surface preserved (getter/setter contract
+unchanged) so the demo driver in `Program.cs` doesn't need any changes.
+
+### Doc paragraph: DurableAgentBuilder factory composition contract
+
+Added a `<remarks>` paragraph at the class level describing the lazy
+first-dispatch composition lifecycle: `ChatClient` / `AddTool` /
+`AddContextProvider` / `HistoryStore` factories are invoked once at first
+activity dispatch with the worker's root `IServiceProvider`, results cached
+for the worker's lifetime, and `AddScoped` services silently behave as
+singletons under this path.
+
+### Verification
+- `just build`: 0 warnings, 0 errors.
+- `just test-unit-all`: 482 passed (292 Agents + 190 AI).
+- `just test-integration`: 66/66.
+- `just test-integration-ai`: 13/13.
+- Sample runtime verification deferred to chief.
+
+### Commit
+`66965f7` — `fix(samples): cosmetic bug fixes in ExternalHistoryStore and PerToolActivities`

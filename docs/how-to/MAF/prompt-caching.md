@@ -22,8 +22,8 @@ How conversation history grows in TemporalAgents, how the framework manages it a
 Every agent session in TemporalAgents maintains a conversation history — the full sequence of user messages, assistant responses, tool calls, and tool results. This history is:
 
 1. **Stored in workflow state** (`AgentWorkflow._history`) as a `List<DurableSessionEntry>` populated with `AgentSessionRequest` / `AgentSessionResponse` instances (MAF subclasses of the shared `DurableSessionRequest` / `DurableSessionResponse` types in `Temporalio.Extensions.AI`). Each entry's `Messages` is `IReadOnlyList<ChatMessage>` (MEAI type, stored directly).
-2. **Passed to the activity** on every turn as part of `ExecuteAgentInput.ConversationHistory`
-3. **Flattened into a single `List<ChatMessage>`** inside `AgentActivities.ExecuteAgentAsync` and sent to the LLM
+2. **Flattened into `AgentStepInput.AccumulatedMessages`** at the start of every turn by `AgentWorkflow.ExecuteDurableAgentTurnAsync`, then re-sent on each step of the per-LLM-call durable loop
+3. **Sent to the LLM** by `AgentActivities.RunDurableAgentStepAsync` via `IChatClient.GetStreamingResponseAsync`
 4. **Carried across continue-as-new boundaries** via `AgentWorkflowInput.CarriedHistory`
 
 This means that by default, the LLM sees the **complete conversation** on every turn. For long-running sessions, this can lead to significant token costs and eventually hit context window limits.
@@ -41,19 +41,21 @@ Turn 3:  ... = 6 entries
 Turn N:  ... = 2N entries
 ```
 
-The history is serialized as the activity input, so the Temporal event payload grows with each turn. More importantly, the full history is rebuilt and sent to the LLM on every call:
+The flattened message list is serialized into each `RunDurableAgentStep` activity input as `AgentStepInput.AccumulatedMessages`, so the Temporal event payload grows with each turn (one entry per LLM step within the turn). The full history is rebuilt at the start of each turn and re-sent on every step:
 
 ```csharp
-// Inside AgentActivities.ExecuteAgentAsync
-// Pre-allocate to the total message count to avoid list resizing.
-int messageCount = 0;
-foreach (var entry in input.ConversationHistory)
-    messageCount += entry.Messages.Count;
+// Inside AgentWorkflow.ExecuteDurableAgentTurnAsync, before the per-step loop:
+var accumulated = FlattenHistoryMessages();   // _history → flat List<ChatMessage>
 
-var allMessages = new List<ChatMessage>(messageCount);
-foreach (var entry in input.ConversationHistory)
-    foreach (var msg in entry.Messages)
-        allMessages.Add(msg);
+// On each iteration:
+var stepInput = new AgentStepInput
+{
+    AgentName = _input.AgentName,
+    Request = runRequest,
+    AccumulatedMessages = accumulated,        // re-sent every step
+    SerializedStateBag = _currentStateBag,
+    IsFirstStep = (iteration == 0),
+};
 ```
 
 `entry.Messages` is `IReadOnlyList<ChatMessage>` (MEAI types stored directly), so no per-message conversion step is needed — each `msg` is already a `ChatMessage`.
@@ -322,7 +324,7 @@ var options = new TemporalAgentRunOptions
 
 For a detailed explanation of how `AIContextProvider` and `AgentSessionStateBag` work, see [Session StateBag & Context Providers](../architecture/MAF/session-statebag-and-context-providers.md).
 
-The key insight for token optimization: providers run inside `AgentActivities.ExecuteAgentAsync` (the activity, not the workflow), so they can make external I/O calls safely. The provider decides what context to inject — it could be a few relevant memories from a vector database rather than the entire conversation history.
+The key insight for token optimization: providers run inside `AgentActivities.RunDurableAgentStepAsync` (the activity, not the workflow), so they can make external I/O calls safely. The provider decides what context to inject — it could be a few relevant memories from a vector database rather than the entire conversation history.
 
 ---
 

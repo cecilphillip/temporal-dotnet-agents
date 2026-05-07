@@ -165,11 +165,11 @@ In Temporal, each activity execution is a separate method call. The `TemporalAge
 The `StateBag` is passed explicitly through three layers as a `JsonElement?`:
 
 ```
-AgentActivities.ExecuteAgentAsync
+AgentActivities.RunDurableAgentStepAsync
   │
   ├── START: TemporalAgentSession.FromStateBag(sessionId, input.SerializedStateBag)
   │          └── if SerializedStateBag is non-null: AgentSessionStateBag.Deserialize(bagEl)
-  │          └── if null (first turn):              new AgentSessionStateBag()
+  │          └── if null (first step):              new AgentSessionStateBag()
   │
   ├── ... AIContextProvider runs, reads/writes the restored StateBag ...
   │
@@ -178,18 +178,21 @@ AgentActivities.ExecuteAgentAsync
            └── if StateBag.Count > 0: returns JsonElement via StateBag.Serialize()
 ```
 
-The serialized `JsonElement?` is wrapped in `ExecuteAgentResult` and returned to `AgentWorkflow`:
+The serialized `JsonElement?` is returned on `AgentStepResult.UpdatedStateBag` and threaded back into the next iteration by `AgentWorkflow.ExecuteDurableAgentTurnAsync`:
 
 ```csharp
-// AgentWorkflow stores the serialized bag after each turn
-_currentStateBag = result.SerializedStateBag;
+// AgentWorkflow stores the serialized bag after each step
+_currentStateBag = stepResult.UpdatedStateBag;
 
-// AgentWorkflow passes it to the next activity call
-var input = new ExecuteAgentInput(
-    agentName:           _agentName,
-    request:             update,
-    conversationHistory: _history,
-    serializedStateBag:  _currentStateBag);   // ← restored in next activity
+// AgentWorkflow passes it to the next step activity
+var stepInput = new AgentStepInput
+{
+    AgentName           = _input.AgentName,
+    Request             = runRequest,
+    AccumulatedMessages = accumulated,
+    SerializedStateBag  = _currentStateBag,   // ← restored in next activity
+    IsFirstStep         = (iteration == 0),
+};
 ```
 
 ### Across Continue-as-New
@@ -232,11 +235,11 @@ Provider runs            Provider runs
 
 Activity ends            Activity ends
   bag serialized           bag serialized
-  → ExecuteAgentResult     → ExecuteAgentResult
+  → AgentStepResult        → AgentStepResult
 
 Workflow stores          Workflow stores
   _currentStateBag =       _currentStateBag =
-  result.SerializedStateBag result.SerializedStateBag
+  stepResult.UpdatedStateBag stepResult.UpdatedStateBag
 ```
 
 ---
@@ -383,7 +386,7 @@ session ??= await CreateSessionAsync(cancellationToken);
 // session is never referenced again below this line
 
 _history.Add(request);                              // ← instance field
-var input = new ExecuteAgentInput(_agentName, request, [.. _history]);
+// Drives the durable per-step loop with [.. _history] flattened into AgentStepInput.AccumulatedMessages
 ```
 
 This means calling `CreateSessionAsync` twice on the same `TemporalAIAgent` and using both sessions produces **shared, interleaved history**:
@@ -468,7 +471,7 @@ Each provider reads only its own key — they are fully independent.
 
 4. **The bag survives continue-as-new.** `AgentWorkflowInput.CarriedStateBag` carries it across workflow history resets — providers never need to reinitialize after a long-running session triggers continue-as-new.
 
-5. **Providers run in the activity, not in the workflow.** `ChatClientAgent.RunAsync` is called inside `AgentActivities.ExecuteAgentAsync`. All I/O (external Mem0 calls, LLM calls) is safe here. Never call `RunAsync` directly inside a `[Workflow]` class.
+5. **Providers run in the activity, not in the workflow.** `IChatClient.GetStreamingResponseAsync` is called inside `AgentActivities.RunDurableAgentStepAsync`, and `AIContextProvider.InvokingAsync` runs immediately before it. All I/O (external Mem0 calls, LLM calls) is safe here. Never call `RunAsync` directly inside a `[Workflow]` class.
 
 ---
 
@@ -477,7 +480,7 @@ Each provider reads only its own key — they are fully independent.
 - `src/Temporalio.Extensions.Agents/TemporalAgentSession.cs` — `FromStateBag`, `SerializeStateBag`
 - `src/Temporalio.Extensions.Agents/AgentActivities.cs` — activity entry point; restore/serialize lifecycle
 - `src/Temporalio.Extensions.Agents/AgentWorkflow.cs` — `_currentStateBag`, continue-as-new transfer
-- `src/Temporalio.Extensions.Agents/State/ExecuteAgentInput.cs` — `SerializedStateBag` field
+- `src/Temporalio.Extensions.Agents/Workflows/AgentStepInput.cs` — `SerializedStateBag` field
 - `src/Temporalio.Extensions.Agents/State/AgentWorkflowInput.cs` — `CarriedStateBag` field
 - `agent-framework/dotnet/src/Microsoft.Agents.AI.Abstractions/AgentSessionStateBag.cs`
 - `agent-framework/dotnet/src/Microsoft.Agents.AI.Abstractions/AIContextProvider.cs`

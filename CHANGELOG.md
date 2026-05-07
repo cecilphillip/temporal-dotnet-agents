@@ -9,94 +9,179 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+---
+
+## [0.3.0] - 2026-05-07
+
+This release consolidates the MAF-side public API around a single fluent registration path and
+moves agent dispatch onto a workflow-managed durable loop with per-tool Temporal activities. See
+[`MIGRATION-v0.3.md`](./MIGRATION-v0.3.md) for upgrade instructions, including the in-flight
+workflow drain requirement.
+
 ### Added
+
+- **`AddDurableAgent("Name", agent => { ... })`** — the only registration path for MAF agents
+  in v0.3. Replaces `AddAIAgent(...)` and `AddAIAgentFactory(...)`. Configures `ChatClient`,
+  tools, context providers, per-agent timeouts, `HistoryStore`, `MaxToolCallsPerTurn`,
+  `TimeToLive`, and `RetryPolicy` on a single fluent `DurableAgentBuilder`.
+
+- **`DurableAgentBuilder`** — fluent builder for per-agent settings. Supports
+  `agent.ChatClient = sp => ...`, `agent.AddTool(tool, opts => ...)`,
+  `agent.AddContextProvider(sp => ...)`, `agent.HistoryStore = sp => ...`,
+  `agent.MaxToolCallsPerTurn`, and the per-agent overrides for the worker-level `Default*`
+  options.
+
+- **`DurableToolOptions`** — per-tool retry/timeout configuration via the second argument to
+  `agent.AddTool(tool, opts => opts.NoRetry())`. Fluent helpers `.NoRetry()`,
+  `.WithMaxAttempts(n)`, `.WithTimeout(t)`. Write-style tools (send email, write record,
+  charge card) should call `.NoRetry()` to prevent double-execution on retry.
+
+- **`Temporalio.Extensions.Agents.RunDurableAgentStep` activity**
+  (`AgentActivities.RunDurableAgentStepAsync`) — performs one LLM call per dispatch and returns
+  either a final assistant message or a list of pending `FunctionCallContent` items. Used by
+  the durable-agent workflow loop in `AgentWorkflow.ExecuteDurableAgentTurnAsync`.
+
+- **`Temporalio.Extensions.Agents.InvokeAgentTool` activity**
+  (`AgentActivities.InvokeAgentToolAsync`) — performs one tool dispatch per pending
+  `FunctionCallContent`. Per-agent local tool registry, distinct from MEAI's flat
+  `InvokeFunction` activity. Tool resolution scopes per-agent, so two agents on the same worker
+  can register tools with the same name without collision.
+
+- **External `IAgentHistoryStore` opt-in via `opts.HistoryStore = sp => ...`** (worker-level)
+  or `agent.HistoryStore = sp => ...` (per-agent). When configured, the workflow strips message
+  payloads from in-workflow history entries and the activity loads/appends from the store. See
+  [`docs/how-to/MAF/external-history-store.md`](./docs/how-to/MAF/external-history-store.md).
 
 - **`DurableChatWorkflowBase<TOutput>` virtual hooks** for subclass extension:
   `InitializeTurnCount(carriedHistory)`, `UpsertCustomSearchAttributes()`, and a
-  `protected int CurrentTurnNumber { get; }` accessor. Enables future workflow
-  subclasses (e.g., the agents library's `AgentWorkflow` in Layer 3 Phase 2) to
-  share the session-loop body while customizing turn-count semantics, search
-  attributes, and per-turn metadata access.
+  `protected int CurrentTurnNumber { get; }` accessor. `AgentWorkflow` inherits from
+  `DurableChatWorkflowBase<AgentResponse>` and uses these hooks to share the session-loop body
+  while customizing turn-count semantics, the `AgentName` search attribute, and per-turn
+  metadata access.
 
-- **`DurableSessionRequest.FromMessages` auto-generates correlation ID and
-  timestamp** when arguments are null. Uses `Workflow.NewGuid()`/`Workflow.UtcNow`
-  inside workflow context, `Guid.NewGuid()`/`DateTimeOffset.UtcNow` otherwise.
-  Collapses the null-fallback boilerplate that previously lived at every
-  call site.
+- **`DurableSessionRequest.FromMessages` auto-generates correlation ID and timestamp** when
+  arguments are null. Uses `Workflow.NewGuid()`/`Workflow.UtcNow` inside workflow context,
+  `Guid.NewGuid()`/`DateTimeOffset.UtcNow` otherwise.
 
 ### Changed (BREAKING)
 
+- **`AddAIAgent(agent)` and `AddAIAgentFactory(name, sp => agent)` are removed.** Replaced by
+  `AddDurableAgent("Name", agent => { agent.ChatClient = sp => ...; })`. The v0.2 surface that
+  allowed registration of arbitrary `AIAgent` subtypes (`A2AAgent`, graph-workflow agents,
+  custom `AIAgent` subclasses) is removed; v0.3 narrows registration to `ChatClientAgent` shape
+  with `UseProvidedChatClientAsIs = true`.
+
+- **`EnablePerToolActivities` flag is removed** from `TemporalAgentsOptions`. Per-tool Temporal
+  activities are now the default for every `AddDurableAgent` registration — there is no
+  opt-in. Configure per-tool retry/timeout via `agent.AddTool(tool, opts => opts.NoRetry())`.
+
+- **`PerToolActivityOptions` dictionary is removed** from `TemporalAgentsOptions`. Per-tool
+  options are now expressed via the `DurableToolOptions` callback on
+  `agent.AddTool(tool, opts => ...)`.
+
+- **`UseExternalHistory` flag is removed** from `TemporalAgentsOptions`. External-store mode is
+  now opt-in implicitly: setting `opts.HistoryStore = sp => ...` (worker-level) or
+  `agent.HistoryStore = sp => ...` (per-agent) is the trigger.
+
+- **`UseExternalAgentHistory<T>()` extension is removed.** Use standard DI:
+  `services.AddSingleton<TStore>()` plus `opts.HistoryStore = sp => sp.GetRequiredService<TStore>()`.
+
+- **Worker-level option names prefixed with `Default*`.** `TimeToLive`, `ApprovalTimeout`,
+  `ActivityTimeout`, `HeartbeatTimeout`, `RetryPolicy`, `MaxEntryCount`, and `HistoryReducer`
+  on `TemporalAgentsOptions` are renamed to `DefaultTimeToLive`, `DefaultApprovalTimeout`,
+  `DefaultActivityTimeout`, `DefaultHeartbeatTimeout`, `DefaultRetryPolicy`,
+  `DefaultMaxEntryCount`, and `DefaultHistoryReducer`. Per-agent overrides on
+  `DurableAgentBuilder` keep the unprefixed names (`agent.TimeToLive`, etc.). The worker-level
+  `HistoryStore` factory keeps the unprefixed name because its presence is itself the opt-in.
+  Inheritance: `effective = registration.X ?? options.DefaultX`.
+
+  **Note:** `Temporalio.Extensions.AI`'s `DurableExecutionOptions` is unchanged — the
+  unprefixed names (`ActivityTimeout`, `HeartbeatTimeout`, `RetryPolicy`, `ApprovalTimeout`,
+  `HistoryReducer`) remain on the MEAI side. The `Default*` rename is MAF-only.
+
+- **`AgentActivities.ExecuteAgentAsync` activity is removed.** Replaced by
+  `AgentActivities.RunDurableAgentStepAsync` (single durable path, one LLM call per dispatch)
+  and `AgentActivities.InvokeAgentToolAsync` (per-tool dispatch).
+
+- **`ExecuteAgentInput` and `ExecuteAgentResult` types are removed.** Replaced by
+  `AgentStepInput` / `AgentStepResult` (for `RunDurableAgentStepAsync`) and `InvokeAgentToolInput`
+  / `InvokeAgentToolResult` (for `InvokeAgentToolAsync`).
+
+- **`AgentWorkflowWrapper` class is removed.** The library composes the chat pipeline directly
+  inside `AgentActivities.ResolveDurableAgent` / `ComposeDurableAgent` (using
+  `UseProvidedChatClientAsIs = true` to skip MAF's auto-`FunctionInvokingChatClient`).
+  Per-request tool filtering and response-format selection are handled by mutating
+  `ChatOptions` per step inside `RunDurableAgentStepAsync`. Per-LLM-call observability moves to
+  decorating the `IChatClient` returned from `agent.ChatClient`; see
+  [`docs/how-to/MAF/llm-call-interception.md`](./docs/how-to/MAF/llm-call-interception.md).
+
+- **`agent.ContextProviders.Add(...)` is removed.** Replaced by `agent.AddContextProvider(...)`
+  on the `DurableAgentBuilder`. Context providers are registered at agent registration time,
+  not mutated at run time inside the activity.
+
 - **`SearchAttributes` field renamed to `EnableSearchAttributes`** on
-  `DurableExecutionOptions`, `DurableChatWorkflowInput`, and the equivalent
-  fields on the agents library's `TemporalAgentsOptions` and `AgentWorkflowInput`.
-  Type changes from a nullable opt-in object to a `bool` (default `false`).
-  Same opt-in semantics, more discoverable name, simpler type.
+  `DurableExecutionOptions`, `DurableChatWorkflowInput`, and the equivalent fields on the
+  agents library's `TemporalAgentsOptions` and `AgentWorkflowInput`. Type changes from a
+  nullable opt-in object to a `bool` (default `false`).
 
-  **Migration:** wherever you set `opts.SearchAttributes = ...` (or the
-  equivalent), change to `opts.EnableSearchAttributes = true`.
+  **Migration:** wherever you set `opts.SearchAttributes = ...` (or the equivalent), change to
+  `opts.EnableSearchAttributes = true`.
 
-- **`TurnCount` search attribute now monotonically grows** across
-  continue-as-new boundaries. Previously reset to 0 on each CAN. The new
-  behavior is more useful for monitoring (turn count over a workflow's
-  lifetime, not per-CAN-segment). Affects both `DurableChatWorkflow` and
-  `AgentWorkflow`.
+- **`TurnCount` search attribute now monotonically grows** across continue-as-new boundaries.
+  Previously reset to 0 on each CAN. Affects both `DurableChatWorkflow` and `AgentWorkflow`.
 
-  **Migration:** if you have dashboards or queries against the `TurnCount`
-  search attribute that assumed CAN-segment semantics, update them to expect
-  monotonic growth.
+  **Migration:** if you have dashboards or queries against the `TurnCount` search attribute
+  that assumed CAN-segment semantics, update them to expect monotonic growth.
 
-- **`DurableChatWorkflowBase<TOutput>.RunTurnAsync` signature changed.**
-  From `(IReadOnlyList<ChatMessage> userMessages, string? correlationId,
-  ChatOptions? chatOptions, ...)` to `(DurableSessionRequest requestEntry,
-  ChatOptions? chatOptions = null, CancellationToken cancellationToken =
-  default)`. Caller constructs the request entry directly via
-  `DurableSessionRequest.FromMessages(...)`.
+- **`DurableChatWorkflowBase<TOutput>.RunTurnAsync` signature changed.** From
+  `(IReadOnlyList<ChatMessage> userMessages, string? correlationId, ChatOptions? chatOptions, ...)`
+  to `(DurableSessionRequest requestEntry, ChatOptions? chatOptions = null, CancellationToken cancellationToken = default)`.
+  Caller constructs the request entry directly via `DurableSessionRequest.FromMessages(...)`.
 
-- **`DurableChatWorkflowBase<TOutput>.ExecuteTurnAsync` abstract signature
-  changed.** From `(ActivityOptions, DurableChatInput)` to `(ActivityOptions,
-  DurableSessionRequest, ChatOptions?)`. Subclass overrides own activity-input
-  construction.
+- **`DurableChatWorkflowBase<TOutput>.ExecuteTurnAsync` abstract signature changed.** From
+  `(ActivityOptions, DurableChatInput)` to `(ActivityOptions, DurableSessionRequest, ChatOptions?)`.
+  Subclass overrides own activity-input construction.
 
-- **`BuildRequestEntry` virtual hook removed** from `DurableChatWorkflowBase`.
-  Subclasses construct request entries at the `[WorkflowUpdate]` call site
-  via `DurableSessionRequest.FromMessages(...)` or library-specific factories.
+- **`BuildRequestEntry` virtual hook removed** from `DurableChatWorkflowBase`. Subclasses
+  construct request entries at the `[WorkflowUpdate]` call site via
+  `DurableSessionRequest.FromMessages(...)` or library-specific factories.
 
-- **`AgentWorkflowInput` inherits from `DurableChatWorkflowInput`.** Shared
-  fields (`MaxEntryCount`, `HistoryReducer`, `OriginalCreatedAt`, etc.) come
-  from the base. MAF-specific fields (`AgentName`, `TaskQueue`,
-  `CarriedStateBag`, `RetryPolicy`) stay on the subclass.
-
-- **`TemporalAgentsOptions` and `AgentWorkflowInput` timeout property names harmonized
-  with the AI library.** `ActivityStartToCloseTimeout` → `ActivityTimeout`,
-  `ActivityHeartbeatTimeout` → `HeartbeatTimeout`. The duplicate declarations on
-  `AgentWorkflowInput` are removed; the inherited fields from
-  `DurableChatWorkflowInput` provide the canonical shape. Type changes from
-  `TimeSpan?` (nullable, no default) to `TimeSpan` (non-null, defaults `5 min` /
-  `2 min` matching the AI library).
-
-  **Migration:** rename `opts.ActivityStartToCloseTimeout = X` → `opts.ActivityTimeout = X`
-  and `opts.ActivityHeartbeatTimeout = X` → `opts.HeartbeatTimeout = X`. Callers that
-  relied on the previous null-default semantics now see explicit 5 min / 2 min defaults.
+- **`AgentWorkflowInput` inherits from `DurableChatWorkflowInput`.** Shared fields
+  (`MaxEntryCount`, `HistoryReducer`, `OriginalCreatedAt`, etc.) come from the base.
+  MAF-specific fields (`AgentName`, `TaskQueue`, `CarriedStateBag`, `RetryPolicy`,
+  `UseExternalStoreMode`, `DurableAgentToolActivityOptions`) stay on the subclass.
 
 ### Changed
 
-- **`AgentWorkflow` now inherits from `DurableChatWorkflowBase<AgentResponse>`.**
-  Internal refactor — public API surface (`TemporalAIAgentProxy.RunAsync`,
-  `DefaultTemporalAgentClient`, `[WorkflowQuery("GetHistory")]`,
-  `[WorkflowSignal("RequestShutdown")]`, HITL approval methods) is unchanged.
-  The session-loop body, turn mutex, continue-as-new triggering, and HITL
-  handlers are now provided by the base class. `AgentWorkflow` shrinks by
-  ~150 lines; future session-loop improvements land once and benefit both
-  libraries.
+- **`AgentWorkflow` inherits from `DurableChatWorkflowBase<AgentResponse>`.** The session-loop
+  body, turn mutex, continue-as-new triggering, and HITL handlers are provided by the base
+  class. `AgentWorkflow` shrinks by ~150 lines; future session-loop improvements land once and
+  benefit both libraries.
 
-  MAF-specific concerns retained on the `AgentWorkflow` subclass:
-  fire-and-forget signal handler (`RunAgentFireAndForgetAsync`), StateBag
-  carry-forward across continue-as-new, and agent-name structured logging.
-  The `AgentName` search attribute is upserted via the new
-  `UpsertCustomSearchAttributes` virtual hook. Activity-input construction
-  (`ExecuteAgentInput`) lives in the subclass's `ExecuteTurnAsync` override;
-  `BuildResponseEntry` produces an `AgentSessionResponse` from the
-  `AgentResponse` output via `AgentSessionResponse.FromAgentResponse(...)`.
+  MAF-specific concerns retained on the `AgentWorkflow` subclass: fire-and-forget signal
+  handler (`RunAgentFireAndForgetAsync`), StateBag carry-forward across continue-as-new, the
+  `AgentName` search attribute (via the `UpsertCustomSearchAttributes` virtual hook), and the
+  durable-agent dispatch loop in `ExecuteDurableAgentTurnAsync`.
+
+### Migration
+
+See [MIGRATION-v0.3.md](./MIGRATION-v0.3.md) for upgrade instructions, including the
+in-flight-workflow drain requirement. Workflows started on v0.2 cannot replay on v0.3 because
+the activity-input shapes (`ExecuteAgentInput` → `AgentStepInput`) are incompatible — drain
+in-flight `AgentWorkflow` runs before deploying.
+
+### Fixed
+
+- **Durable-agent registrations now register only `AgentJobWorkflow` from the proxy-only
+  registration path** (commit `7f2d7ce`). Previously the proxy-only path could double-register
+  the workflow on a worker that also had a `[Workflow]`-attribute registration of
+  `AgentJobWorkflow`, producing a startup-time duplicate-registration error.
+
+- **Sample fixes** in `ConfigurableAgent` and the per-tool-activities sample (commits
+  `66965f7`, `cdb6c33`) — cosmetic console output and DI wiring corrections; no library
+  behavior changes.
 
 ---
 
@@ -386,4 +471,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Scheduled run results are not captured**: scheduled runs are fire-and-forget by design.
   Run status and workflow event history are visible in the Temporal Web UI.
 
+[0.3.0]: https://github.com/cecilphillip/TemporalAgents/releases/tag/v0.3.0
 [0.1.0]: https://github.com/cecilphillip/TemporalAgents/releases/tag/v0.1.0

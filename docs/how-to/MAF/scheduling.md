@@ -39,7 +39,7 @@ Understanding the distinction between these two workflows is key to choosing the
 
 ### AgentJobWorkflow (Scheduled/Deferred)
 
-A minimal workflow that runs a single agent activity and exits:
+A minimal workflow that drives the same v0.3 durable-agent dispatch loop as `AgentWorkflow`, but without long-lived session state:
 
 ```csharp
 // Internal — you don't instantiate this directly
@@ -49,28 +49,52 @@ internal sealed class AgentJobWorkflow
     [WorkflowRun]
     public async Task RunAsync(AgentJobInput input)
     {
-        var activityInput = new ExecuteAgentInput(
-            input.AgentName,
-            input.Request,
-            []);  // empty history — no prior context
+        var stepActivityOptions = new ActivityOptions
+        {
+            StartToCloseTimeout = input.ActivityTimeout,
+            HeartbeatTimeout = input.HeartbeatTimeout,
+            RetryPolicy = input.RetryPolicy,
+        };
 
-        await Workflow.ExecuteActivityAsync(
-            (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
-            new ActivityOptions
+        var accumulated = new List<ChatMessage>(input.Request.Messages);
+
+        for (var iteration = 0; iteration < 20; iteration++)
+        {
+            var stepInput = new AgentStepInput
             {
-                StartToCloseTimeout = input.ActivityTimeout,
-                HeartbeatTimeout = input.HeartbeatTimeout,
-            });
+                AgentName = input.AgentName,
+                Request = input.Request,
+                AccumulatedMessages = accumulated,
+                SerializedStateBag = null,
+                SessionId = null,
+                IsFirstStep = iteration == 0,
+            };
+
+            var stepResult = await Workflow.ExecuteActivityAsync(
+                (AgentActivities a) => a.RunDurableAgentStepAsync(stepInput),
+                stepActivityOptions);
+
+            accumulated.Add(stepResult.AssistantMessage);
+            if (stepResult.IsFinal || stepResult.ToolCalls is null or { Count: 0 })
+            {
+                return;
+            }
+
+            // Each pending tool call dispatches as its own InvokeAgentToolAsync activity,
+            // fanned out via Workflow.WhenAllAsync. (Loop body elided for brevity — see
+            // AgentJobWorkflow.cs for the full pattern.)
+        }
     }
 }
 ```
 
 **Properties:**
-- No conversation history — starts fresh every time
-- No StateBag persistence
+- No conversation history — starts fresh every time (no `HistoryStore` load on `IsFirstStep`)
+- No StateBag persistence (`SerializedStateBag` is always `null`)
 - No TTL loop or `[WorkflowUpdate]` handlers
 - No continue-as-new
 - Result is visible in the Temporal Web UI event history
+- Same per-step / per-tool activity dispatch as the long-lived `AgentWorkflow`, so retries, timeouts, and per-tool `DurableToolOptions` apply identically
 
 ### AgentWorkflow (Full Session)
 
@@ -277,7 +301,7 @@ Three OTel spans cover scheduling operations:
 | `temporal.agent.schedule.delayed` | `RunAgentDelayedAsync` | `agent.name`, `agent.session_id`, `schedule.delay` |
 | `temporal.agent.schedule.one_time` | `ScheduleOneTimeAgentRunAsync` | `agent.name`, `schedule.job_id`, `schedule.delay` |
 
-Once the scheduled workflow executes, the standard `agent.turn` span fires inside `AgentActivities.ExecuteAgentAsync` — the same code path as interactive sessions. This means scheduled runs are fully visible in your tracing backend alongside interactive sessions.
+Once the scheduled workflow executes, the standard `agent.turn` span fires inside `AgentActivities.RunDurableAgentStepAsync` — the same code path as interactive sessions, with one span per LLM call. This means scheduled runs are fully visible in your tracing backend alongside interactive sessions.
 
 For full OTel setup instructions, see [Observability](./observability.md).
 

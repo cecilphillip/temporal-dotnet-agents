@@ -124,8 +124,8 @@ foreach (var name in subscriberNames)
 > kick off sub-agents without waiting for their results, use `TemporalAIAgent.RunAsync`
 > inside `Workflow.ExecuteActivityAsync` (via `GetAgent`) — or use
 > `ExecuteAgentsInParallelAsync` if you do want to collect results later.
-> `AgentActivities` and `ExecuteAgentInput` are `internal` and cannot be referenced
-> from consumer code.
+> `AgentActivities`, `AgentStepInput`, and `InvokeAgentToolInput` are `internal` and cannot be
+> referenced from consumer code.
 
 ---
 

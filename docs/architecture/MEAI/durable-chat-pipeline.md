@@ -387,7 +387,7 @@ The session-loop body is implemented once in `DurableChatWorkflowBase<TOutput>` 
 
 | Hook | Purpose |
 |---|---|
-| `Task<TOutput> ExecuteTurnAsync(ActivityOptions activityOptions, DurableSessionRequest requestEntry, ChatOptions? chatOptions)` | Owns activity-input construction and dispatch. Receives the pre-built request entry plus per-turn `ChatOptions`. The subclass builds whatever activity payload it needs (e.g., `DurableChatInput` for MEAI, `ExecuteAgentInput` for MAF) and calls `Workflow.ExecuteActivityAsync`. |
+| `Task<TOutput> ExecuteTurnAsync(ActivityOptions activityOptions, DurableSessionRequest requestEntry, ChatOptions? chatOptions)` | Owns activity-input construction and dispatch. Receives the pre-built request entry plus per-turn `ChatOptions`. The subclass builds whatever activity payload it needs (e.g., `DurableChatInput` for MEAI, `AgentStepInput` for MAF's per-step durable loop) and calls `Workflow.ExecuteActivityAsync`. |
 | `DurableSessionResponse BuildResponseEntry(string correlationId, TOutput output, DateTimeOffset createdAt)` | Converts the typed activity output (`TOutput`) into a `DurableSessionResponse` (or a library-specific subclass such as `AgentSessionResponse`). |
 | `ContinueAsNewException CreateContinueAsNewException(DurableChatWorkflowInput input)` | Builds a typed `ContinueAsNew` exception preserving any subclass-specific carry-forward fields. |
 

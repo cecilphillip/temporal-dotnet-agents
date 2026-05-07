@@ -73,7 +73,8 @@ The exact LLM phrasing varies, but the structural assertions are stable:
 - **Tenant injection proven**: replies reference the tenant tier or SLA
   because `TenantContextProvider.InvokingCalls` rises by one per turn.
 - **PII out of Temporal**: the last `ActivityScheduled` event payload
-  contains neither the `ConversationHistory` key nor turn-1's order ID.
+  contains only the current turn's request — prior-turn messages are
+  stripped before the event is written, and turn-1's order ID is absent.
 
 ## Two-Layer Architecture
 
@@ -82,25 +83,30 @@ The exact LLM phrasing varies, but the structural assertions are stable:
 │                                                                                 │
 │  [WorkflowUpdate("Ask")]  ──►  GetAgent("SupportAgent").RunAsync(messages)      │
 │                                       │                                         │
-│                                       │  ExecuteActivityAsync(ExecuteAgentInput)│
-│                                       │  - UseExternalStore = true              │
-│                                       │  - ConversationHistory = null  ◄── Layer 1│
+│                                       │  ExecuteActivityAsync(                  │
+│                                       │     RunDurableAgentStepAsync(           │
+│                                       │       AgentStepInput {                  │
+│                                       │         AccumulatedMessages = current   │
+│                                       │           turn only — prior-turn        │
+│                                       │           messages stripped ◄── Layer 1 │
+│                                       │         IsFirstStep = (iter == 0) }))   │
 │                                       ▼                                         │
 └─────────────────────────────────────  │  ──────────────────────────────────────┘
                                         │  (activity boundary — Temporal event written here)
 ┌─────────────────────────────────────  │  ──────── Activity (inside worker process) ──┐
 │                                       ▼                                              │
-│  IAgentHistoryStore.LoadAsync(sessionId)   ◄── Layer 1: returns recent N entries     │
+│  if (IsFirstStep && HistoryStore != null)                                            │
+│    IAgentHistoryStore.LoadAsync(sessionId)   ◄── Layer 1: returns recent N entries   │
 │         │                                                                            │
 │         │  rebuilt messages[]                                                        │
 │         ▼                                                                            │
-│  ChatClientAgent (MAF) — invokes AIContextProviders before the IChatClient call:     │
+│  AIContextProviders fire before the IChatClient call:                                │
 │    └─►  TenantContextProvider.InvokingAsync(ctx)  ◄── Layer 2: emits system context  │
 │              │                                                                       │
 │              ▼                                                                       │
 │    IChatClient.GetStreamingResponseAsync(messages + tenant-system, options)          │
 │                                                                                      │
-│  IAgentHistoryStore.AppendAsync(sessionId, [request, response])  ◄── Layer 1         │
+│  on final step: IAgentHistoryStore.AppendAsync(sessionId, [request, response])       │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 

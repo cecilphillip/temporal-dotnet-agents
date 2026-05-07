@@ -55,9 +55,9 @@ External storage decouples conversation length from Temporal event size: each ac
 
 ### `IAgentHistoryStore` is a Temporal-level coordination interface
 
-When the Agents library detects that an effective `HistoryStore` is set for an agent, the workflow code path changes: `ExecuteAgentInput.ConversationHistory` is set to `null` and `ExecuteAgentInput.UseExternalStore` is set to `true`. This change happens *before* the `ActivityScheduled` event is written, so conversation messages never enter the Temporal event log.
+When the Agents library detects that an effective `HistoryStore` is set for an agent, the workflow code path changes: prior turns are stripped from the in-workflow history (`ShouldStripMessagesFromHistoryEntry` returns `true` while building the per-step `AccumulatedMessages`), so the activity input that ships in the `ActivityScheduled` event carries only the current request entry plus any messages produced inside the same turn. Prior turns are no longer included in the Temporal event log.
 
-This decision must live at the workflow boundary. Anything that runs inside the activity — including any `AIContextProvider` — runs *after* the event is already written. By that point the PII has already been recorded.
+When the activity runs with `AgentStepInput.IsFirstStep == true` and the resolved agent has a configured `IAgentHistoryStore`, the activity loads prior history from the store and prepends it to `AccumulatedMessages` before calling the LLM. This decision must live at the workflow boundary: anything that runs inside the activity — including any `AIContextProvider` — runs *after* the event is already written. By that point the PII would already be recorded.
 
 ### `ChatHistoryProvider` is the right abstraction inside the activity
 
@@ -175,9 +175,9 @@ public interface IAgentHistoryStore
 
 | Method | Called from | When |
 |---|---|---|
-| `LoadAsync` | `AgentActivities.ExecuteAgentAsync` | Start of every turn — must return entries in append order |
-| `AppendAsync` | `AgentActivities.ExecuteAgentAsync` | End of every turn — appends `[requestEntry, responseEntry]` |
-| `ReplaceAsync` | `AgentWorkflow` (inside a dedicated activity) | Continue-as-new — replaces store contents with a tail-trim to `MaxEntryCount` |
+| `LoadAsync` | `AgentActivities.RunDurableAgentStepAsync` | First step of every turn (`IsFirstStep == true`) — must return entries in append order |
+| `AppendAsync` | `AgentActivities.RunDurableAgentStepAsync` | Final step of every turn (when the LLM produces a non-tool-calling response) — appends `[requestEntry, responseEntry]` |
+| `ReplaceAsync` | `AgentActivities.ReduceHistoryInStoreAsync` (dispatched by `AgentWorkflow`) | Continue-as-new — replaces store contents with a tail-trim to `MaxEntryCount` |
 
 `sessionId` is `TemporalAgentSessionId.WorkflowId` (a string of the form `ta-{agentName}-{key}`). It is always provided by the library; you don't generate it.
 
@@ -268,7 +268,7 @@ Existing sessions and new sessions coexist seamlessly across a deployment that f
 
 | Session state at deploy | Behavior after the deploy |
 |---|---|
-| Workflow started before `opts.HistoryStore` was set, still running | Continues using in-memory history — the `AgentWorkflowInput.UseExternalStore` flag travels with the workflow |
+| Workflow started before `opts.HistoryStore` was set, still running | Continues using in-memory history — the `AgentWorkflowInput.UseExternalStoreMode` flag travels with the workflow |
 | Workflow started before `opts.HistoryStore` was set, completes naturally | Done — the next message creates a new workflow that reads the current options |
 | Workflow started before `opts.HistoryStore` was set, hits continue-as-new | Carries history forward via `CarriedHistory` (in-memory path), as it always has |
 | New workflow started after `opts.HistoryStore` is set | Reads the current configuration, uses the store from turn 1 |
@@ -308,9 +308,9 @@ This is acceptable for the regulated-workload use case: the same caller that opt
 
 Inspect a workflow's history after opting in (`temporal workflow show -w ta-myagent-...`):
 
-- `ExecuteAgent` activity input no longer contains a `ConversationHistory` field — it is `null` and serialized as absent.
-- `UseExternalStore = true` is the marker that the activity should call `LoadAsync` instead of reading from the input.
+- The `RunDurableAgentStep` activity input (`AgentStepInput`) no longer contains the prior conversation in `AccumulatedMessages` — those messages are stripped at the workflow boundary.
 - The activity input still carries the new request entry on the wire — the *current* turn's user message is in the activity payload. Only prior turns are absent.
+- On the first step of a turn, the activity loads prior history from the store via `IAgentHistoryStore.LoadAsync` (using `IsFirstStep == true` as the trigger).
 
 If you need *zero* message content in Temporal events, including the current turn, you must additionally redact request content at the caller before sending it to `RunAgentAsync`.
 

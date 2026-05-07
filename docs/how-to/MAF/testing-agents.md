@@ -183,20 +183,26 @@ public void ValidateAgent_UnknownName_ReturnsFallback()
 
 ### Testing StateBag Serialization
 
-`ExecuteAgentInput` and `ExecuteAgentResult` carry an optional serialized StateBag. Verify round-trip fidelity:
+`AgentStepInput` and `AgentStepResult` carry an optional serialized StateBag (`SerializedStateBag` and `UpdatedStateBag` respectively). Verify round-trip fidelity:
 
 ```csharp
 [Fact]
-public void ExecuteAgentInput_WithStateBag_RoundTrips()
+public void AgentStepInput_WithStateBag_RoundTrips()
 {
     var bag = new AgentSessionStateBag();
     bag["key1"] = "value1";
 
-    var input = new ExecuteAgentInput("TestAgent", request, history,
-        serializedStateBag: bag.Serialize());
+    var input = new AgentStepInput
+    {
+        AgentName           = "TestAgent",
+        Request             = request,
+        AccumulatedMessages = messages,
+        SerializedStateBag  = bag.Serialize(),
+        IsFirstStep         = true,
+    };
 
     var json = JsonSerializer.Serialize(input);
-    var deserialized = JsonSerializer.Deserialize<ExecuteAgentInput>(json)!;
+    var deserialized = JsonSerializer.Deserialize<AgentStepInput>(json)!;
 
     Assert.NotNull(deserialized.SerializedStateBag);
 }

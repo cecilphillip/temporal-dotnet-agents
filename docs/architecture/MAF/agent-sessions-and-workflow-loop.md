@@ -9,7 +9,7 @@ This document explains how `TemporalAgentSession` bridges the Microsoft Agent Fr
 1. [TemporalAgentSession: Bridging Two Worlds](#temporalagentsession-bridging-two-worlds)
 2. [The Agent Loop Inside AgentWorkflow](#the-agent-loop-inside-agentworkflow)
 3. [Sending Messages via WorkflowUpdate](#sending-messages-via-workflowupdate)
-4. [AgentWorkflowWrapper: Per-Turn Interception](#agentworkflowwrapper-per-turn-interception)
+4. [Durable Agent Composition](#durable-agent-composition)
 5. [External History Store](#external-history-store)
 6. [Durable Agent Workflow Loop](#durable-agent-workflow-loop)
 7. [Crashes, Heartbeats, and Timeouts](#crashes-heartbeats-and-timeouts)
@@ -124,7 +124,7 @@ AgentWorkflow : DurableChatWorkflowBase<AgentResponse>     ← in Temporalio.Ext
     ├─ [WorkflowUpdate("RunAgent")] + [WorkflowUpdateValidator]
     ├─ [WorkflowSignal("RunFireAndForget")]
     ├─ override BuildResponseEntry → AgentSessionResponse.FromAgentResponse(...)
-    ├─ override ExecuteTurnAsync   → builds ExecuteAgentInput, dispatches AgentActivities
+    ├─ override ExecuteTurnAsync   → drives ExecuteDurableAgentTurnAsync (the durable loop)
     ├─ override CreateContinueAsNewException → carries _currentStateBag forward
     └─ override UpsertCustomSearchAttributes → upserts AgentName
 ```
@@ -254,7 +254,7 @@ The four overrides on `AgentWorkflow`:
 | Hook | Purpose |
 |---|---|
 | `BuildResponseEntry(correlationId, AgentResponse output, createdAt)` | Returns `AgentSessionResponse.FromAgentResponse(...)` so the entry on the wire is the MAF subclass with `OrchestrationId`/`ResponseType`/`ResponseSchema` discrimination preserved. |
-| `ExecuteTurnAsync(activityOptions, requestEntry, chatOptions)` | Constructs `ExecuteAgentInput` from the request entry, the in-memory `_history`, the carried `_currentStateBag`, and `_input.AgentName`. Dispatches `AgentActivities.ExecuteAgentAsync` (not `DurableChatActivities`). Persists the updated StateBag back into `_currentStateBag` after the activity returns. |
+| `ExecuteTurnAsync(activityOptions, requestEntry, chatOptions)` | Drives the per-step durable loop in `ExecuteDurableAgentTurnAsync`: each iteration dispatches `AgentActivities.RunDurableAgentStepAsync` (one LLM call) and, if the step returns pending tool calls, fans out one `AgentActivities.InvokeAgentToolAsync` activity per call via `Workflow.WhenAllAsync`. Persists the updated StateBag back into `_currentStateBag` after each step. |
 | `CreateContinueAsNewException(input)` | Casts `input` to `AgentWorkflowInput` (safe — `AgentWorkflowInput : DurableChatWorkflowInput`) and constructs a new `AgentWorkflowInput` carrying `_currentStateBag` forward as `CarriedStateBag` so the StateBag survives continue-as-new boundaries. |
 | `UpsertCustomSearchAttributes()` | Upserts the `AgentName` typed search attribute. Called by the base after the standard `TurnCount` / `SessionCreatedAt` upserts. Default in the base is a no-op; `DurableChatWorkflow` (the MEAI sibling) does not override it because chat sessions are not named. |
 
@@ -301,21 +301,14 @@ Each entry contains:
 | `OrchestrationId` (request only) | `AgentSessionRequest` (MAF-specific) | Workflow ID of the orchestrating workflow, if this was a sub-agent call |
 | `ResponseType` / `ResponseSchema` (request only) | `AgentSessionRequest` (MAF-specific) | Structured-output format hint preserved across replay |
 
-When the activity executes, it receives the **entire history** flattened into a list of `ChatMessage` objects. Because `entry.Messages` is already `IReadOnlyList<ChatMessage>`, no conversion step is needed — the messages are appended directly. This gives the LLM full conversational context on every turn:
+When a turn starts, `ExecuteDurableAgentTurnAsync` flattens `_history` into a working `accumulated` list of `ChatMessage` objects. That list is the seed for the per-step loop: each `RunDurableAgentStep` activity receives it as `AgentStepInput.AccumulatedMessages`, the LLM sees the full conversation on every iteration, and the workflow appends each step's assistant message (and any tool-result message) back onto the list before the next iteration. Because `entry.Messages` is already `IReadOnlyList<ChatMessage>`, no conversion step is needed:
 
 ```csharp
-// Inside AgentActivities.ExecuteAgentAsync
-int messageCount = 0;
-foreach (var entry in input.ConversationHistory)
-    messageCount += entry.Messages.Count;
-
-var allMessages = new List<ChatMessage>(messageCount);
-foreach (var entry in input.ConversationHistory)
-    foreach (var msg in entry.Messages)
-        allMessages.Add(msg);
+// Inside AgentWorkflow.ExecuteDurableAgentTurnAsync, before the loop:
+var accumulated = FlattenHistoryMessages();   // _history → flat List<ChatMessage>
 
 // allMessages now contains: [User: "Hi", Assistant: "Hello!", User: "Weather?"]
-// The LLM sees the full conversation
+// Each iteration re-sends this (plus any in-turn tool messages) to the LLM
 ```
 
 ### Continue-as-New: History Carryover
@@ -398,45 +391,77 @@ Here is the complete path a message takes from an external caller to the LLM and
 ┌──────────────────────────────────────────────────────────────┐
 │   AgentWorkflow.ExecuteTurnAsync (override)                  │
 │                                                              │
-│   8. activityInput = new ExecuteAgentInput(                  │
-│        agentName:          _input.AgentName,                 │
-│        request:            requestEntry,                     │
-│        history:            _history.ToList(),                │
-│        serializedStateBag: _currentStateBag)                 │
+│   8. accumulated = FlattenHistoryMessages()                  │
+│      (List<ChatMessage> seeded from _history)                │
 │                                                              │
-│   9. Workflow.ExecuteActivityAsync(                          │
-│        (AgentActivities a) => a.ExecuteAgentAsync(input))    │
+│   9. Drive the durable loop:                                 │
+│      for (iteration = 0; iteration < MaxToolCallsPerTurn; ++):│
+│        stepInput = new AgentStepInput {                      │
+│          AgentName, Request = runRequest,                    │
+│          AccumulatedMessages = accumulated,                  │
+│          SerializedStateBag = _currentStateBag,              │
+│          IsFirstStep = (iteration == 0) }                    │
 │                                                              │
+│        stepResult = await Workflow.ExecuteActivityAsync(     │
+│          (AgentActivities a) =>                              │
+│             a.RunDurableAgentStepAsync(stepInput))           │
+│                                                              │
+│        _currentStateBag = stepResult.UpdatedStateBag         │
+│        accumulated.Add(stepResult.AssistantMessage)          │
+│                                                              │
+│        if (stepResult.IsFinal) → return AgentResponse        │
+│                                                              │
+│        // Fan out tool calls — see Durable Workflow Loop §   │
+│        toolResults = await Workflow.WhenAllAsync(            │
+│          stepResult.ToolCalls.Select(tc =>                   │
+│            Workflow.ExecuteActivityAsync(                    │
+│              (AgentActivities a) =>                          │
+│                a.InvokeAgentToolAsync(toolInput))))          │
+│                                                              │
+│        accumulated.Add(new ChatMessage(Tool,                 │
+│          functionResultContents))                            │
+│      // loop back                                            │
 └───────────┬──────────────────────────────────────────────────┘
             │
             ↓
 ┌──────────────────────────────────────────────────────────────┐
-│   AgentActivities.ExecuteAgentAsync  [Activity]              │
+│   AgentActivities.RunDurableAgentStepAsync  [Activity]       │
 │                                                              │
-│   10. Resolve real AIAgent from factory dictionary           │
-│   11. Parse sessionId from ctx.Info.WorkflowId               │
-│   12. Create AgentWorkflowWrapper(realAgent, request, ...)   │
-│   13. Rebuild allMessages from ConversationHistory           │
+│   10. ResolveDurableAgent(input.AgentName)                   │
+│       → CachedDurableAgent (lazy via ComposeDurableAgent)    │
+│         ├─ user-supplied IChatClient (from agent.ChatClient) │
+│         ├─ AIContextProviders (from agent.AddContextProvider)│
+│         └─ ChatClientAgent { UseProvidedChatClientAsIs=true }│
+│   11. Parse sessionId from input.SessionId or WorkflowId     │
+│   12. session = TemporalAgentSession.FromStateBag(           │
+│         sessionId, input.SerializedStateBag)                 │
+│   13. messages = input.AccumulatedMessages                   │
+│       (+ HistoryStore.LoadAsync prepended on IsFirstStep,    │
+│         + AIContextProvider.InvokingAsync messages)          │
 │   14. Set TemporalAgentContext.Current (for tools)           │
 │                                                              │
-│   15. wrapper.RunStreamingAsync(allMessages, session, ...)   │
-│       ├─ AgentWorkflowWrapper applies tool/format filters    │
-│       ├─ DelegatingAIAgent delegates to real agent           │
-│       └─ Real AIAgent calls IChatClient → LLM inference      │
+│   15. chatClient.GetStreamingResponseAsync(messages,         │
+│         per-step ChatOptions stamped with Tools/Instructions)│
+│       (Workflow owns the tool loop, so the model returns     │
+│        FunctionCallContent rather than auto-invoking tools.) │
 │                                                              │
 │   16. Stream chunks, ctx.Heartbeat(update.Text) on each      │  ← Heartbeat (always)
-│       ├─ Without handler: collect into AgentResponse         │
+│       ├─ Without handler: collect into AgentStepResult       │
 │       └─ With handler: also call OnStreamingResponseUpdateAsync│
 │                                                              │
-│   18. Return AgentResponse                                   │
+│   17. Return AgentStepResult {                               │
+│         IsFinal, AssistantMessage, ToolCalls,                │
+│         UpdatedStateBag, Usage }                             │
 └───────────┬──────────────────────────────────────────────────┘
             │
             ↓
 ┌──────────────────────────────────────────────────────────────┐
-│   AgentWorkflow.ExecuteTurnAsync (continued)                 │
+│   AgentWorkflow.ExecuteTurnAsync (after loop completes)      │
 │                                                              │
-│   17. _currentStateBag = result.SerializedStateBag           │  ← MAF: persist
-│   18. return result.Response  (AgentResponse)                │
+│   18. return AgentResponse {                                 │
+│         Messages = allTurnMessages,                          │
+│         Usage    = totalUsage,                               │
+│         CreatedAt = Workflow.UtcNow }                        │
 │                                                              │
 │   Back in the base's RunTurnAsync:                           │
 │   19. responseEntry =                                        │
@@ -475,92 +500,57 @@ The signal handler starts a background task inside the workflow that follows the
 
 ---
 
-## AgentWorkflowWrapper: Per-Turn Interception
+## Durable Agent Composition
 
-### Why it exists
+### Lazy composition at first dispatch
 
-`AgentWorkflowWrapper` is the `DelegatingAIAgent` subclass that `AgentActivities.ExecuteAgentAsync` instantiates at step 12 of the flow diagram above, wrapping the real `AIAgent` before invoking it. The wrapper exists because there is no external setter on `ChatClientAgent` for per-turn configuration: tool lists and response format are applied inside the framework's own pipeline construction, which happens during `RunAsync`. The only way to intercept that construction — and to override service resolution and the agent's reported identity — is to subclass `DelegatingAIAgent` and override the three entry points that MAF exposes for exactly this purpose: `RunCoreAsync`, `GetService`, and `IdCore`.
+In v0.3, the durable-agent dispatch path no longer interposes a `DelegatingAIAgent` wrapper around the user's agent at run time. Instead, `AgentActivities.ResolveDurableAgent(name)` constructs the `ChatClientAgent` lazily on the **first** activity dispatch and caches it on `_durableAgentCache` for the worker's lifetime. The composition step (`ComposeDurableAgent`) does five things:
 
-A new `AgentWorkflowWrapper` is created on each activity invocation. Its constructor takes the real `AIAgent`, the deserialized `RunRequest` (which carries the per-turn settings from the caller), the `TemporalAgentSession`, and the activity's `IServiceProvider`.
+1. Resolve `IChatClient` by invoking `registration.ChatClient(serviceProvider)` — the user-supplied factory from `AddDurableAgent`.
+2. Resolve each `AIContextProvider` by invoking `registration.ContextProviderFactories[i](serviceProvider)`.
+3. Resolve each tool's `AIFunction` by invoking `registration.Tools[i].Factory(serviceProvider)`. The resolved tool's `Name` must match the name declared on `AddTool` (otherwise the activity throws — name mismatches indicate a registration bug).
+4. Clone `registration.ChatOptions` and stamp `Instructions` and `Tools` onto the clone.
+5. Construct `new ChatClientAgent(chatClient, new ChatClientAgentOptions { Name, Description, ChatOptions, AIContextProviders, UseProvidedChatClientAsIs = true })`.
 
-### Per-turn tool filtering and response format (`GetRunOptions`)
+`UseProvidedChatClientAsIs = true` is load-bearing. Without it, MAF would auto-wrap the chat client in `FunctionInvokingChatClient`, which would execute tools inside the `IChatClient` pipeline — defeating the whole point of the v0.3 design where the **workflow** owns the tool-dispatch loop and each tool call becomes its own `InvokeAgentTool` activity.
 
-The heart of the class is `GetRunOptions`, which builds the `ChatClientAgentRunOptions` that `RunCoreAsync` passes to the inner agent. MAF's `ChatClientAgent` applies `ChatClientAgentRunOptions.ChatClientFactory` as the last step before making the LLM call, giving the caller a chance to wrap or reconfigure the `IChatClient` pipeline. `GetRunOptions` exploits this by wrapping any existing factory the caller supplied and then appending a `ConfigureOptions` step:
+### Per-step `ChatOptions` shaping
 
-```csharp
-chatAgentRunOptions.ChatClientFactory = chatClient =>
-{
-    ChatClientBuilder builder = chatClient.AsBuilder();
-    if (originalFactory is not null)
-        builder.Use(originalFactory);          // preserve caller's factory
-
-    return builder.ConfigureOptions(newOptions =>
-    {
-        if (runRequest.ResponseFormat is not null)
-            newOptions.ResponseFormat = runRequest.ResponseFormat;
-
-        if (runRequest.EnableToolCalls)
-        {
-            if (tools is not null && runRequest.EnableToolNames?.Count > 0)
-                newOptions.Tools = [.. tools.Where(t => runRequest.EnableToolNames.Contains(t.Name))];
-        }
-        else
-        {
-            newOptions.Tools = null;   // disable all tools for this turn
-        }
-    }).Build();
-};
-```
-
-**Tool filtering.** `TemporalAgentRunOptions.EnableToolCalls` and `EnableToolNames` are copied to `RunRequest` fields by `TemporalAIAgentProxy` (and `TemporalAIAgent`) before the `WorkflowUpdate` is sent. Those values survive serialization through Temporal's event history and are available on the `RunRequest` inside the activity. `EnableToolCalls = false` clears `ChatOptions.Tools` entirely; an `EnableToolNames` list restricts the tools to the named subset, matched by `AITool.Name`.
-
-**Response format.** `RunRequest.ResponseFormat` carries the `ChatResponseFormat` from `options.ResponseFormat` (checked first) or from `ChatClientAgentRunOptions.ChatOptions.ResponseFormat` if the caller passed a `ChatClientAgentRunOptions` directly. This makes structured output a per-turn configuration rather than something baked into the agent at construction time.
-
-The `ConfigureOptions` step runs at the innermost position of the client pipeline — after the caller's own factory — so it overrides, rather than competes with, whatever the caller has already set.
-
-### Service locator: `TemporalAgentSessionId` (`GetService`)
-
-`AgentWorkflowWrapper` overrides `GetService` so that anything inside the agent pipeline — a tool, `IChatClient` middleware — can discover the Temporal session context through MAF's service-locator pattern:
+Per-turn tool filtering and response format are applied inside `RunDurableAgentStepAsync` itself, **not** through a `DelegatingAIAgent` wrapper. The activity clones `registration.ChatOptions` per step and rewrites three fields based on the originating `RunRequest`:
 
 ```csharp
-public override object? GetService(Type serviceType, object? serviceKey = null)
-{
-    if (serviceType == typeof(TemporalAgentSessionId))
-        return session.SessionId;
+// Inside RunDurableAgentStepAsync:
+var chatOptions = registration.ChatOptions?.Clone() ?? new ChatOptions();
+chatOptions.Instructions = registration.Instructions;
+chatOptions.Tools = cached.Tools.Values.Cast<AITool>().ToList();
+chatOptions.ResponseFormat = input.Request.ResponseFormat;
 
-    // Fall through to the DI container, then to the inner agent
-    object? result = services?.GetService(serviceType);
-    return result ?? base.GetService(serviceType, serviceKey);
+if (!input.Request.EnableToolCalls)
+{
+    chatOptions.Tools = null;       // disable all tools for this turn
+}
+else if (input.Request.EnableToolNames is { Count: > 0 } enabledNames)
+{
+    chatOptions.Tools = [.. chatOptions.Tools.Where(t => enabledNames.Contains(t.Name))];
 }
 ```
 
-A tool that needs to call back into the same session — for example, to fan out to a sub-agent or to look up HITL context — calls `agent.GetService<TemporalAgentSessionId>()`. Without this override, the inner `ChatClientAgent`'s `GetService` would return `null` for that type, and the tool would have no way to correlate itself with the running workflow. The wrapper also forwards keyed and non-keyed requests to the activity's `IServiceProvider` before delegating to the inner agent, so any DI-registered service is reachable from within a tool through the same path.
+`TemporalAgentRunOptions.EnableToolCalls` and `EnableToolNames` are copied onto `RunRequest` by `TemporalAIAgentProxy` / `TemporalAIAgent` before the `WorkflowUpdate` is sent, survive serialization through Temporal's event history, and are available on `AgentStepInput.Request` inside every step activity. `EnableToolCalls = false` clears `ChatOptions.Tools` entirely; an `EnableToolNames` list restricts the active tools to the named subset.
 
-### `IdCore` and `AgentId` propagation
+### Discovering session context from inside a tool
 
-`DelegatingAIAgent.RunCoreAsync` delegates to `InnerAgent.RunAsync()`. Inside that call, MAF's `AIAgent` base stamps `AgentId = this.Id` on the returned `AgentResponse`. `AIAgent.Id` is computed from `IdCore`, and if no explicit ID was set at construction, `IdCore` returns the GUID that was generated when the `ChatClientAgent` was instantiated. That GUID is meaningless to external callers.
+Tools dispatched in `InvokeAgentToolAsync` need to discover their workflow context — to call `TemporalAgentContext.Current.RequestApprovalAsync(...)`, to read the session ID, etc. Two mechanisms cover this:
 
-`AgentWorkflowWrapper` overrides `IdCore` to return the Temporal workflow ID:
+- `TemporalAgentContext.Current` (an `AsyncLocal`) is set by `RunDurableAgentStepAsync` before the LLM call and by `InvokeAgentToolAsync` before each tool call. It carries `IServiceProvider`, the agent name, the session ID, and the activity execution context.
+- `TemporalAgentSession.GetService(typeof(TemporalAgentSessionId))` returns the session ID directly. The session is the `AgentSession` instance that the activity restores from `AgentStepInput.SerializedStateBag` at the start of each step.
 
-```csharp
-protected override string? IdCore => session.SessionId.WorkflowId;
-```
-
-`RunCoreAsync` then overwrites the `AgentResponse` with the wrapper's own `this.Id`:
-
-```csharp
-var response = await base.RunCoreAsync(messages, session, GetRunOptions(options), ct);
-response.AgentId = this.Id;
-return response;
-```
-
-The same correction is applied in the streaming path (`RunCoreStreamingAsync`), where each `AgentResponseUpdate.AgentId` is set to `this.Id` as it is yielded. The library itself never reads `AgentId` internally — external callers use it to correlate a response back to the session that produced it, and a stable, meaningful workflow ID is more useful than a transient construction-time GUID.
+There is no `AgentWorkflowWrapper` interposed between the `ChatClientAgent` and the user's `IChatClient` in v0.3. Application code that needs to decorate the `IChatClient` should do so by returning a decorated client from `agent.ChatClient` — see [`docs/how-to/MAF/llm-call-interception.md`](../../how-to/MAF/llm-call-interception.md).
 
 ---
 
 ## External History Store
 
-The default code path described in [The Agent Loop Inside AgentWorkflow](#the-agent-loop-inside-agentworkflow) keeps conversation history on the workflow itself: `_history` is a `List<DurableSessionEntry>` on the `DurableChatWorkflowBase`, every entry is serialized into the `ExecuteAgentInput.ConversationHistory` field on each activity dispatch, and the full history is carried across continue-as-new boundaries via `AgentWorkflowInput.CarriedHistory`. This is the right default for many workloads — it is simple, fully replay-safe, and requires no external infrastructure.
+The default code path described in [The Agent Loop Inside AgentWorkflow](#the-agent-loop-inside-agentworkflow) keeps conversation history on the workflow itself: `_history` is a `List<DurableSessionEntry>` on the `DurableChatWorkflowBase`, the contents are flattened into the per-step `AgentStepInput.AccumulatedMessages` list on every `RunDurableAgentStep` dispatch, and the full history is carried across continue-as-new boundaries via `AgentWorkflowInput.CarriedHistory`. This is the right default for many workloads — it is simple, fully replay-safe, and requires no external infrastructure.
 
 For two specific problems — PII-in-Temporal-events and O(n²) event growth — the workflow boundary itself needs to change. `IAgentHistoryStore` is the opt-in interface that does that.
 
@@ -572,15 +562,15 @@ That approach does not work for the PII case. The order of operations is:
 
 ```
 1. Workflow code calls Workflow.ExecuteActivityAsync(...)
-2. Temporal serializes ExecuteAgentInput (including ConversationHistory) into
+2. Temporal serializes AgentStepInput (including AccumulatedMessages) into
    the ActivityScheduled event and writes it to the event log
 3. A worker picks up the activity task
-4. AgentActivities.ExecuteAgentAsync runs — AIContextProvider runs here
+4. AgentActivities.RunDurableAgentStepAsync runs — AIContextProvider runs here
 ```
 
-By the time step 4 happens, step 2 has already written the full history payload to Temporal's durable event log. An `AIContextProvider` running inside the activity can mutate what the *LLM* sees, but it cannot un-write the bytes that Temporal already persisted. The PII is in the event log regardless.
+By the time step 4 happens, step 2 has already written the full message payload to Temporal's durable event log. An `AIContextProvider` running inside the activity can mutate what the *LLM* sees, but it cannot un-write the bytes that Temporal already persisted. The PII is in the event log regardless.
 
-The fix has to live at the workflow boundary, before step 2: the workflow must omit `ConversationHistory` from the activity input in the first place. That is what configuring an `IAgentHistoryStore` factory (`opts.HistoryStore` worker-level, or `agent.HistoryStore` per-agent) achieves.
+The fix has to live at the workflow boundary, before step 2: the workflow must omit prior-turn messages from `AgentStepInput.AccumulatedMessages` in the first place. That is what configuring an `IAgentHistoryStore` factory (`opts.HistoryStore` worker-level, or `agent.HistoryStore` per-agent) achieves — the workflow strips message payloads from in-workflow history entries (`ShouldStripMessagesFromHistoryEntry` returns `true`) so prior turns never enter `AccumulatedMessages` on the wire.
 
 ### The two-layer split
 
@@ -588,12 +578,12 @@ The fix has to live at the workflow boundary, before step 2: the workflow must o
 
 | Layer | Interface | Where it runs | Concern |
 |---|---|---|---|
-| Workflow coordination | `IAgentHistoryStore` | `AgentWorkflow` | Decides whether `ConversationHistory` is in the activity payload at all — controls what hits the Temporal event log |
-| LLM context injection | `ChatHistoryProvider` (via the library-provided `TemporalChatHistoryProvider` adapter) | `AgentActivities` | Surfaces history into the prompt for a single LLM call — controls what the model sees |
+| Workflow coordination | `IAgentHistoryStore` | `AgentWorkflow` | Decides whether prior-turn messages are in the activity payload at all — controls what hits the Temporal event log |
+| LLM context injection | `AIContextProvider` (registered via `agent.AddContextProvider`) | `AgentActivities.RunDurableAgentStepAsync` | Surfaces extra context into the prompt for a single LLM call — controls what the model sees |
 
-Inside `AgentActivities.ExecuteAgentAsync`, when `input.UseExternalStore == true`, the library builds a `TemporalChatHistoryProvider` that wraps `IAgentHistoryStore` and inserts it into the agent's `AIContextProviders` list. This makes the activity-side flow MAF-native (the library is not manually flattening `input.ConversationHistory` into `ChatMessage`s the way it does in the default path) while keeping the workflow-level coordination clean.
+Inside `RunDurableAgentStepAsync`, when the resolved `CachedDurableAgent.HistoryStore` is non-null and `AgentStepInput.IsFirstStep == true`, the library calls `IAgentHistoryStore.LoadAsync(sessionId)` and prepends the loaded entries' messages to `messagesForLlm` before invoking the chat client. This keeps the workflow-level event log free of prior-turn PII while still giving the model full conversational context for the LLM call. After the final step of a turn, `IAgentHistoryStore.AppendAsync` records the new request/response entries.
 
-The two layers are complementary, not alternatives. `IAgentHistoryStore` controls Temporal-event content; `ChatHistoryProvider` controls LLM-call content. You need the first to address PII and event growth; the library uses the second internally to surface history into the model.
+The two layers are complementary, not alternatives. `IAgentHistoryStore` controls Temporal-event content; `AIContextProvider` controls LLM-call content. You need the first to address PII and event growth; you can register additional `AIContextProvider` instances on the same agent for memory, retrieval-augmented context, or similar use cases.
 
 ### Modified data flow
 
@@ -603,59 +593,68 @@ The flow diagram in [The Full Message Flow](#the-full-message-flow) changes in t
 ┌──────────────────────────────────────────────────────────────┐
 │   AgentWorkflow.ExecuteTurnAsync (override)                  │
 │                                                              │
-│   8'. activityInput = new ExecuteAgentInput(                 │
-│        agentName:          _input.AgentName,                 │
-│        request:            requestEntry,                     │
-│        history:            null,            ← OMITTED        │
-│        useExternalStore:   true,            ← NEW            │
-│        serializedStateBag: _currentStateBag)                 │
+│   8'. accumulated = FlattenHistoryMessages()                 │
+│       (workflow strips messages from prior-turn entries —    │
+│        ShouldStripMessagesFromHistoryEntry returns true —    │
+│        so 'accumulated' contains only this turn's request)   │
 │                                                              │
-│   9. Workflow.ExecuteActivityAsync(                          │
-│        (AgentActivities a) => a.ExecuteAgentAsync(input))    │
+│       _input.UseExternalStoreMode = true                     │
+│                                                              │
+│   9. for (iteration = 0; ...; ++):                           │
+│        stepInput = new AgentStepInput {                      │
+│          AgentName, Request, AccumulatedMessages,            │
+│          SerializedStateBag, IsFirstStep = (iteration == 0) }│
+│                                                              │
+│        Workflow.ExecuteActivityAsync(                        │
+│          (AgentActivities a) =>                              │
+│             a.RunDurableAgentStepAsync(stepInput))           │
 │                                                              │
 │   ━━ ActivityScheduled event written here ━━                 │
-│   ━━ Payload contains: agent name, request entry,            │
-│   ━━ session ID, useExternalStore=true. NO PRIOR HISTORY.    │
+│   ━━ Payload contains: agent name, RunRequest,               │
+│   ━━ this turn's messages only. NO PRIOR-TURN HISTORY.       │
 └───────────┬──────────────────────────────────────────────────┘
             │
             ↓
 ┌──────────────────────────────────────────────────────────────┐
-│   AgentActivities.ExecuteAgentAsync  [Activity]              │
+│   AgentActivities.RunDurableAgentStepAsync  [Activity]       │
 │                                                              │
-│   10. Resolve real AIAgent from factory dictionary           │
-│   11. Parse sessionId from ctx.Info.WorkflowId               │
-│   11b. if (input.UseExternalStore)                           │  ← NEW
-│           historyProvider = new TemporalChatHistoryProvider( │
-│               historyStore, sessionId.WorkflowId);           │
-│           agent.ContextProviders.Add(historyProvider);       │
-│   12. Create AgentWorkflowWrapper(realAgent, request, ...)   │
-│   13. (Default path: rebuild allMessages from history.       │
-│        External-store path: TemporalChatHistoryProvider      │
-│        loads via IAgentHistoryStore.LoadAsync at turn start) │
+│   10. ResolveDurableAgent → CachedDurableAgent (with         │
+│       resolvedStore = registration.HistoryStore              │
+│                       ?? agentsOptions.HistoryStore)         │
+│   11. Parse sessionId from input.SessionId or WorkflowId     │
+│   11b. if (cached.HistoryStore is not null && IsFirstStep)   │  ← EXTERNAL STORE
+│           prior = await cached.HistoryStore                  │
+│             .LoadAsync(sessionId.WorkflowId, ct);            │
+│           messagesForLlm = prior.SelectMany(e => e.Messages) │
+│             .Concat(input.AccumulatedMessages).ToList();     │
+│   12. Build per-step ChatOptions (Tools, Instructions,       │
+│       ResponseFormat)                                        │
+│   13. session = TemporalAgentSession.FromStateBag(...)       │
+│       Run AIContextProvider.InvokingAsync hooks              │
 │   14. Set TemporalAgentContext.Current (for tools)           │
 │                                                              │
-│   15. wrapper.RunStreamingAsync(allMessages, session, ...)   │
-│       (LLM call as before)                                   │
+│   15. chatClient.GetStreamingResponseAsync(messagesForLlm,   │
+│         chatOptions)                                         │
 │                                                              │
-│   15b. if (input.UseExternalStore)                           │  ← NEW
-│           await historyStore.AppendAsync(                    │
-│               sessionId.WorkflowId,                          │
-│               [requestEntry, responseEntry]);                │
+│   15b. if (cached.HistoryStore is not null && step is final) │  ← EXTERNAL STORE
+│           await cached.HistoryStore.AppendAsync(             │
+│             sessionId.WorkflowId,                            │
+│             [requestEntry, responseEntry], ct);              │
 │                                                              │
-│   18. Return AgentResponse                                   │
+│   17. Return AgentStepResult                                 │
 └───────────┬──────────────────────────────────────────────────┘
 ```
 
 The two changes are:
 
-- **Step 8'**: `ConversationHistory` is set to `null` and the new `UseExternalStore` flag is set to `true`. The `ActivityScheduled` event written next contains neither prior history nor PII from prior turns.
-- **Step 11b / 13 / 15b**: The activity uses `TemporalChatHistoryProvider` (backed by `IAgentHistoryStore`) for LLM context injection, and explicitly appends the new request and response entries to the store at the end of the turn.
+- **Step 8'**: prior-turn entries in the workflow's `_history` are stripped of their `Messages` payload (`ShouldStripMessagesFromHistoryEntry` returns `true`). `accumulated` therefore carries only this turn's request on the wire — the `ActivityScheduled` event written next contains no prior-turn PII.
+- **Step 11b / 15b**: on the **first** step of a turn, the activity loads prior history from `IAgentHistoryStore.LoadAsync` and prepends those messages to the LLM call. On the **final** step (the step that produces a non-tool-calling response), the activity appends the new request and response entries to the store.
 
-`requestEntry` is reconstructed inside the activity via `AgentSessionRequest.FromRunRequest(input.Request, DateTimeOffset.UtcNow)` rather than by indexing into a list — there is no list to index into when `UseExternalStore = true`.
+The flag that travels with the workflow is `AgentWorkflowInput.UseExternalStoreMode` — it is set when the workflow is created and survives continue-as-new boundaries (see [Continue-as-new behavior change](#continue-as-new-behavior-change) below).
 
 ### Continue-as-new behavior change
 
-The `CreateContinueAsNewException` override in `AgentWorkflow` branches on `_input.UseExternalStore`:
+The `CreateContinueAsNewException` override in `AgentWorkflow` branches on `_input.UseExternalStoreMode`:
 
 ```csharp
 protected override WorkflowContinueAsNewException CreateContinueAsNewException(
@@ -664,11 +663,11 @@ protected override WorkflowContinueAsNewException CreateContinueAsNewException(
     var agentInput = (AgentWorkflowInput)input;
     var nextInput = new AgentWorkflowInput
     {
-        AgentName        = agentInput.AgentName,
-        TaskQueue        = agentInput.TaskQueue,
-        UseExternalStore = agentInput.UseExternalStore,
-        CarriedStateBag  = _currentStateBag,
-        CarriedHistory   = agentInput.UseExternalStore
+        AgentName            = agentInput.AgentName,
+        TaskQueue            = agentInput.TaskQueue,
+        UseExternalStoreMode = agentInput.UseExternalStoreMode,
+        CarriedStateBag      = _currentStateBag,
+        CarriedHistory       = agentInput.UseExternalStoreMode
             ? null                       // store owns it
             : _history.ToList(),         // default path: carry forward
         // ... other fields
@@ -677,7 +676,7 @@ protected override WorkflowContinueAsNewException CreateContinueAsNewException(
 }
 ```
 
-When `UseExternalStore = true` and a `HistoryReducer` is configured, the workflow dispatches a `ReduceHistoryInStoreAsync` activity *before* throwing the continue-as-new exception. That activity loads the entries via `IAgentHistoryStore.LoadAsync`, applies the reducer, and writes the result back via `IAgentHistoryStore.ReplaceAsync`. The new run then sees the reduced entries on its first `LoadAsync`. If no reducer is configured, the store is left untouched across the boundary.
+When `UseExternalStoreMode = true`, the workflow dispatches a `ReduceHistoryInStoreAsync` activity *before* throwing the continue-as-new exception when the store has more than `MaxEntryCount` entries. That activity loads the entries via `IAgentHistoryStore.LoadAsync` and writes a deterministic tail-trim back via `IAgentHistoryStore.ReplaceAsync` (`prior.Skip(prior.Count - MaxEntryCount)`). Custom reduction logic — summarisation, role-aware pruning — must live inside the store implementation's `ReplaceAsync` (which is free to ignore the trimmed list and re-load the full backend). The user's `DefaultHistoryReducer` / `agent.HistoryReducer` delegate is `[JsonIgnore]` and cannot be transported into a Temporal activity, so the external-store path always performs the fixed tail-trim.
 
 ### Worker-startup validation
 
@@ -846,7 +845,7 @@ new ActivityOptions
 }
 ```
 
-**What it controls**: Maximum wall-clock time for a single `ExecuteAgentAsync` activity execution, measured from when the worker starts executing the activity to when it must return a result.
+**What it controls**: Maximum wall-clock time for a single `RunDurableAgentStepAsync` (or `InvokeAgentToolAsync`) activity execution, measured from when the worker starts executing the activity to when it must return a result.
 
 **What happens on timeout**: Temporal marks the activity as failed. The workflow's `ExecuteActivityAsync` call throws a `TimeoutException`. Since there is no retry policy configured by default, the activity is **not** automatically retried — the workflow itself fails.
 

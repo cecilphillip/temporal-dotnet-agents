@@ -75,7 +75,7 @@ public class ResearchWorkflow
 
 ### History Accumulation
 
-Each `TemporalAIAgent` instance maintains its own conversation history (`List<DurableSessionEntry>`, populated with `AgentSessionRequest` / `AgentSessionResponse` instances). The request entries are constructed via `AgentSessionRequest.FromRunRequest`. When `RunAsync` is called, the full history is sent to `AgentActivities.ExecuteAgentAsync` as part of the input. Each entry already exposes its messages as `IReadOnlyList<ChatMessage>` (MEAI types), so the activity flattens the entries into a single `List<ChatMessage>` and passes it to the real `AIAgent` without any per-message conversion step. The agent sees the complete conversation context on every turn.
+Each `TemporalAIAgent` instance maintains its own conversation history (`List<DurableSessionEntry>`, populated with `AgentSessionRequest` / `AgentSessionResponse` instances). The request entries are constructed via `AgentSessionRequest.FromRunRequest`. When `RunAsync` is called, the workflow flattens the entries into an `accumulated` list of `ChatMessage`s and drives the durable loop: each LLM call dispatches `AgentActivities.RunDurableAgentStepAsync` with that list as `AgentStepInput.AccumulatedMessages`; each pending tool call dispatches `AgentActivities.InvokeAgentToolAsync`. Each entry already exposes its messages as `IReadOnlyList<ChatMessage>` (MEAI types), so no per-message conversion step is needed. The agent sees the complete conversation context on every step of every turn.
 
 ### Deterministic Session IDs
 
@@ -421,10 +421,10 @@ public async Task<string> RunAsync(string question)
 - `src/Temporalio.Extensions.Agents/TemporalWorkflowExtensions.cs` — `GetAgent`, `ExecuteAgentsInParallelAsync`
 - `src/Temporalio.Extensions.Agents/TemporalAIAgent.cs` — workflow-safe agent with activity-based execution
 - `src/Temporalio.Extensions.Agents/TemporalAgentContext.cs` — async-local Temporal capabilities for tools
-- `samples/WorkflowOrchestration/` — Pattern 1 example
-- `samples/MultiAgentRouting/RoutingWorkflow.cs` — Pattern 2 example
-- `samples/EvaluatorOptimizer/EvaluatorOptimizerWorkflow.cs` — iterative agent communication
-- `samples/AmbientAgent/` — Pattern 3 example (cross-workflow signaling)
+- `samples/MAF/WorkflowOrchestration/` — Pattern 1 example
+- `samples/MAF/MultiAgentRouting/RoutingWorkflow.cs` — Pattern 2 example
+- `samples/MAF/EvaluatorOptimizer/EvaluatorOptimizerWorkflow.cs` — iterative agent communication
+- `samples/MAF/AmbientAgent/` — Pattern 3 example (cross-workflow signaling)
 - [Durability & Determinism](./durability-and-determinism.md) — why activity results are cached on replay
 - [Routing Patterns](../how-to/MAF/routing.md) — LLM-powered and workflow-based routing
 

@@ -29,9 +29,9 @@ The useful pattern in either stack is passing a plain stateless `IChatReducer` (
 
 **Passthrough — the outer activity already provides durability.**
 
-`DurableEmbeddingGenerator` dispatches via `Workflow.ExecuteActivityAsync` when `Workflow.InWorkflow == true`. Agent tools run inside `AgentActivities.ExecuteAgentAsync`, which is a Temporal activity — so `Workflow.InWorkflow == false`. The generator passes through to the inner `IEmbeddingGenerator` directly.
+`DurableEmbeddingGenerator` dispatches via `Workflow.ExecuteActivityAsync` when `Workflow.InWorkflow == true`. Agent tools run inside `AgentActivities.InvokeAgentToolAsync`, which is a Temporal activity — so `Workflow.InWorkflow == false`. The generator passes through to the inner `IEmbeddingGenerator` directly.
 
-This is the correct behavior. The `ExecuteAgent` activity wrapper already provides the timeout and retry guarantees for the full tool execution. Dispatching an inner embedding call as a separate activity from inside an activity would create a nested activity that bypasses the outer retry context.
+This is the correct behavior. The per-tool `InvokeAgentTool` activity wrapper already provides the timeout and retry guarantees for the tool execution (configurable per tool via `DurableToolOptions`). Dispatching an inner embedding call as a separate activity from inside an activity would create a nested activity that bypasses the outer retry context.
 
 Practical upshot: inject `IEmbeddingGenerator<string, Embedding<float>>` into tool classes via DI constructor injection. Register with or without `UseDurableExecution()` — the runtime behavior is identical in the tool context. `UseDurableExecution()` is only meaningful when `GenerateAsync` is called from inside a custom `[Workflow]` class.
 
@@ -66,9 +66,9 @@ After Layers 1, 2, and 3, the message, content, entry, workflow-input, and workf
 **Activity layer:** The two libraries dispatch fundamentally different calls in their core activities.
 
 - `DurableChatActivities` calls `IChatClient.GetResponseAsync()` — stateless, returns `ChatResponse`, no session object.
-- `AgentActivities.ExecuteAgentAsync` calls `AIAgent.RunStreamingAsync()` — stateful, manages `TemporalAgentSession`, serializes `AgentSessionStateBag`, streams `AgentResponseUpdate`, and runs `AIContextProvider` hooks.
+- `AgentActivities.RunDurableAgentStepAsync` calls `IChatClient.GetStreamingResponseAsync()` directly (the workflow owns the tool loop) — stateful, manages `TemporalAgentSession`, serializes `AgentSessionStateBag`, streams `ChatResponseUpdate`, and runs `AIContextProvider` hooks. A second activity, `AgentActivities.InvokeAgentToolAsync`, dispatches each pending tool call.
 
-These require separate activity classes. A unified activity base class would need to abstract over the session lifecycle, StateBag serialization, streaming vs. non-streaming response handling, and provider hooks — the result would be more complex than either class alone. The activity-shape divergence is about **session lifecycle and StateBag**, not about how messages are represented or how entries are shaped.
+These require separate activity classes. A unified activity base class would need to abstract over the session lifecycle, StateBag serialization, streaming vs. non-streaming response handling, and provider hooks — the result would be more complex than either class alone. The activity-shape divergence is about **session lifecycle, StateBag, and per-tool dispatch**, not about how messages are represented or how entries are shaped.
 
 **Subclass-only workflow members.** Three concerns live exclusively on `AgentWorkflow` and would need to live somewhere on a MAF subclass regardless of how much further the base evolves:
 
@@ -88,29 +88,29 @@ These are deliberately scoped to the subclass and are not candidates for further
 
 v0.3 narrows registration to `ChatClientAgent` shape — `agent.ChatClient` is a required `Func<IServiceProvider, IChatClient>` slot, and the library composes the agent internally with `UseProvidedChatClientAsIs = true`. Users who need to plug in non-`ChatClientAgent` MAF agents (`A2AAgent`, graph-workflow agents from `Microsoft.Agents.AI.Workflows`, custom `AIAgent` subclasses) cannot do so through `AddDurableAgent` today. The legacy AIAgent-instance-shaped registration was the previous escape hatch; restoring direct support is tracked as a possible follow-on once the new surface stabilises.
 
-The historical compatibility matrix below describes the v0.2 polymorphic-dispatch behavior. It is preserved for context — the same per-`ChatClientAgent` capability cliff applied then.
+The compatibility matrix below describes the v0.3 dispatch behavior. The same per-`ChatClientAgent` capability cliff applies — and is now structurally enforced, since `AddDurableAgent` only constructs `ChatClientAgent` instances.
 
 | Feature | Mechanism | Works for non-`ChatClientAgent`? |
 |---|---|---|
-| Basic `RunAsync` / `RunStreamingAsync` dispatch as a Temporal activity | `AgentWorkflowWrapper` (delegating) → activity-side dispatch | ✅ Yes — polymorphic via `DelegatingAIAgent` |
-| Conversation history (`List<DurableSessionEntry>` with `ChatMessage` content) | Output of any agent's `RunStreamingAsync` is `IAsyncEnumerable<AgentResponseUpdate>`, normalized to `ChatMessage` | ✅ Yes |
+| Basic `RunAsync` / `RunStreamingAsync` dispatch as a Temporal activity | `RunDurableAgentStepAsync` activity drives the per-step loop; the workflow fans out per-tool `InvokeAgentToolAsync` activities | n/a — `AddDurableAgent` does not register non-`ChatClientAgent` shapes |
+| Conversation history (`List<DurableSessionEntry>` with `ChatMessage` content) | The activity returns `AgentStepResult.AssistantMessage` per LLM call; the workflow accumulates and normalizes to `ChatMessage` | ✅ Yes (entry-shape concern; `ChatClientAgent`-shaped agents only) |
 | HITL approval, search attributes, continue-as-new, reducer pipeline | `DurableChatWorkflowBase` — agent-type-agnostic | ✅ Yes |
-| **Per-request tool filtering** (`RunRequest.EnableToolCalls`, `RunRequest.EnableToolNames`) | `AgentWorkflowWrapper.GetRunOptions` attaches a `ChatClientFactory` to the run options that filters tools before each LLM call | ⚠️ **No** — non-`ChatClientAgent` agents don't read `ChatClientFactory`. Filter is silently ignored. |
-| **Per-request response-format override** (`RunRequest.ResponseFormat`) | Same `ChatClientFactory` mechanism | ⚠️ **No** — same as above. |
-| Per-LLM-call interception via `ChatClientFactory` (the [LLM-call interception how-to](how-to/MAF/llm-call-interception.md)) | User-provided `clientFactory` decorator on the `IChatClient` registered in DI | ⚠️ **No** — depends on an inner `IChatClient`, which non-`ChatClientAgent` subtypes don't have. |
-| **Granular tool dispatch** | Workflow-managed loop calling LLM-only via the composed pipeline, dispatching tools as separate activities | ⚠️ **No** — the v0.3 durable loop assumes `ChatClientAgent` shape with a user-supplied `IChatClient`. |
+| **Per-request tool filtering** (`RunRequest.EnableToolCalls`, `RunRequest.EnableToolNames`) | The activity rewrites `chatOptions.Tools` per step before calling `IChatClient.GetStreamingResponseAsync` | ⚠️ **No** — only `ChatClientAgent`-shaped registrations are supported via `AddDurableAgent`. |
+| **Per-request response-format override** (`RunRequest.ResponseFormat`) | The activity stamps `chatOptions.ResponseFormat` per step before the LLM call | ⚠️ **No** — same as above. |
+| Per-LLM-call interception via decorated `IChatClient` (the [LLM-call interception how-to](how-to/MAF/llm-call-interception.md)) | User returns a decorated client from the `agent.ChatClient` factory; the per-step activity invokes it directly | ⚠️ **No** — depends on an inner `IChatClient`, which non-`ChatClientAgent` subtypes don't have. |
+| **Granular tool dispatch** | Built in. The workflow dispatches one `InvokeAgentTool` activity per pending `FunctionCallContent`, with per-tool `DurableToolOptions` for retry/timeout. | ✅ Default behavior in v0.3 for every `AddDurableAgent` registration. |
 
-**One quiet sharp edge.** `AgentWorkflowWrapper.GetRunOptions` accepts `null`, base `AgentRunOptions`, and `ChatClientAgentRunOptions` (it upgrades the first two to a default `ChatClientAgentRunOptions` and rejects other subclasses with `NotSupportedException`). If a future MAF release introduces an A2A- or graph-specific run-options subclass, this validation would need updating. Today no such subclass exists upstream, so the constraint is theoretical — but it's worth flagging for forward compatibility.
+**No `DelegatingAIAgent` interposition in v0.3.** The v0.2 `AgentWorkflowWrapper` (a `DelegatingAIAgent` subclass) is removed. Per-request tool filtering, response-format selection, and identity propagation are now handled by directly mutating the per-step `ChatOptions` inside `RunDurableAgentStepAsync`. There is no run-options upgrade path that would need updating if MAF introduced an A2A- or graph-specific run-options subclass.
 
 ### Rejected directions (preserved for future maintainers)
 
 Two larger redesigns were considered during the Layer-1/2/3 research and explicitly rejected. These are recorded here so a future maintainer evaluating a similar proposal does not have to rediscover the analysis.
 
-**Drop `Microsoft.Agents.AI` for `Microsoft.Agents.AI.Abstractions`.** The TA library only references one concrete (non-abstractions) type from the package: `ChatClientAgentRunOptions`, used in three files (`AgentWorkflowWrapper`, `TemporalAIAgent`, `TemporalAIAgentProxy`). The dependency surface is genuinely narrow. Switching to Abstractions would shrink TA's transitive closure significantly. We rejected this because every TA sample registers agents via `chatClient.AsAIAgent("Name", ...)` — an extension method that lives in the concrete `Microsoft.Agents.AI` package. Forcing every user to add a separate package reference for a method they already use is a real migration cost paid by a whole user base for an upside (smaller transitive surface) that is operational, not architectural. Revisit this only if upstream MAF moves `ChatClientAgentRunOptions` (or an equivalent factory-options shape) to Abstractions.
+**Drop `Microsoft.Agents.AI` for `Microsoft.Agents.AI.Abstractions`.** The TA library references a small set of concrete (non-abstractions) types from the package — `ChatClientAgent`, `ChatClientAgentOptions`, `ChatClientAgentRunOptions` — used in `AgentActivities.ComposeDurableAgent`, `TemporalAIAgent`, and `TemporalAIAgentProxy`. The dependency surface is genuinely narrow. Switching to Abstractions would shrink TA's transitive closure significantly. We rejected this because every TA sample registers agents via `chatClient.AsAIAgent("Name", ...)` — an extension method that lives in the concrete `Microsoft.Agents.AI` package. Forcing every user to add a separate package reference for a method they already use is a real migration cost paid by a whole user base for an upside (smaller transitive surface) that is operational, not architectural. Revisit this only if upstream MAF moves `ChatClientAgentRunOptions` (or an equivalent factory-options shape) to Abstractions.
 
 **Reimplement `ChatClientAgent` as a custom `AIAgent` subclass owned by TA.** This was framed as a way to "own the agent loop" and shed the `ChatClientAgentRunOptions` dependency. We rejected this because `ChatClientAgent.cs` upstream is roughly 1,100 lines that handle `ChatHistoryProvider` resolution, `AIContextProvider` pipeline plumbing, per-service-call persistence, `ContinuationToken` resumption, `AllowBackgroundResponses`, multi-session `ConversationId` management, tool-option merging, and stop-sequence concatenation. Replicating this would either require porting all of it (ongoing maintenance liability) or omitting parts (TA-specific limitations vs. upstream behavior). Worse, owning the loop in TA locks the library out of future MAF features (Compaction, Skills, Evaluation, A2A, graph-workflow agents) — the MAF team is shipping these every quarter, and TA's polymorphic `RunStreamingAsync` dispatch path picks them up for free. Owning the loop is owning a maintenance liability, not a feature.
 
-The pragmatic posture: keep the polymorphic `RunStreamingAsync` dispatch path; document the `ChatClientAgent`-specific seams (this section); add granular dispatch (Tier 2) only when the gate criteria below are met and only for `ChatClientAgent`-shaped agents.
+The pragmatic posture in v0.3: `AddDurableAgent` is `ChatClientAgent`-shaped only, the workflow owns the tool loop, and per-tool dispatch is the default.
 
 ---
 
@@ -154,144 +154,48 @@ and its own timeout. Failure on tool 7 retries only tool 7 — not the full turn
 | `UseFunctionInvocation()` | MEAI middleware inside one activity | Turn |
 | `AddDurableTools()` (no `UseFunctionInvocation`) | Workflow across multiple activities | LLM call + each tool call |
 
-### The Agents library today: always full loop
+### The Agents library in v0.3: workflow owns the tool loop
 
-`AgentActivities.ExecuteAgentAsync` calls MAF's `RunStreamingAsync`, which owns the entire
-agentic loop internally — identical in behavior to Mode 1 above. MAF's `FunctionInvokingChatClient`
-handles all LLM rounds and tool executions before the activity returns.
+`AgentActivities.RunDurableAgentStepAsync` performs **one LLM call** per activity dispatch. The
+agent is constructed with `UseProvidedChatClientAsIs = true`, which prevents MAF from auto-wrapping
+the `IChatClient` in `FunctionInvokingChatClient`. The model returns `FunctionCallContent` items
+directly to the activity, which returns them to the workflow. `AgentWorkflow.ExecuteDurableAgentTurnAsync`
+then dispatches each pending tool call as a separate `InvokeAgentToolAsync` activity, fans them
+out via `Workflow.WhenAllAsync`, and loops back for the next LLM step. The activity owns one LLM
+call; the workflow owns the loop.
 
-There is no opt-in equivalent of Mode 2 in the Agents library today. Adding one would require the
-workflow to manage the tool loop — calling a "LLM-only" activity, dispatching tool activities,
-feeding results back — mirroring the AI library's Mode 2.
+This is the v0.3 equivalent of the AI library's Mode 2 — workflow-managed loop, per-tool
+durability, per-tool retry/timeout via `DurableToolOptions`. There is no remaining "full-loop
+inside one activity" mode for MAF agents in v0.3; the v0.2 single-activity path was removed.
 
-### The `AIContextProvider` constraint on granular dispatch
+### How v0.3 resolves the `AIContextProvider` concern
 
-MAF's `AIContextProvider.InvokingAsync` fires once per `RunStreamingAsync` call at the MAF
-orchestration level. In the current single-activity model it fires exactly once per turn — even
-if `FunctionInvokingChatClient` internally loops through many tool rounds.
+The pre-v0.3 framing of this section worried that a workflow-managed loop would call
+`AIAgent.RunStreamingAsync` multiple times per turn — once per LLM round — and trigger
+`AIContextProvider.InvokingAsync` on each call, double-writing state for stateful providers like
+`Mem0Provider`.
 
-A workflow-managed loop would call `RunStreamingAsync` multiple times per turn (once for the
-initial LLM call, once per LLM round after tool results). This would cause `AIContextProvider` to
-fire on each call, potentially:
+The v0.3 design avoids this by **not** going through `AIAgent.RunStreamingAsync` for the per-step
+LLM call. `RunDurableAgentStepAsync` calls `IChatClient.GetStreamingResponseAsync` directly on the
+cached `ChatClientAgent.ChatClient`, then runs `AIContextProvider.InvokingAsync` exactly once at
+the start of the step (and `InvokedAsync` once at the end). Within a single turn that contains N
+tool rounds, the providers fire N times — not once — but each invocation is for a distinct LLM
+call with its own request/response messages, which is the correct semantic for stateful providers
+that want to observe each round. The "fires multiple times in one MAF `RunStreamingAsync`"
+double-write hazard does not apply because there is no enclosing `RunStreamingAsync` call.
 
-- Adding duplicate context messages for providers like `Mem0Provider`
-- Double-writing state in `InvokedAsync`
+For provider authors who explicitly want once-per-turn semantics rather than once-per-step, the
+guidance is to gate side-effects on the `IsFirstStep` boundary or to read the request entry out of
+the session's `StateBag`. The library does not paper over this for them.
 
-Any granular dispatch mode in the Agents library must either: (a) document this as an
-incompatibility with stateful `AIContextProvider` implementations, or (b) use MAF's
-`ChatClientAgentRunOptions.ChatClientFactory` to inject a stripped `IChatClient` per-call rather
-than calling `RunStreamingAsync` at all for the LLM-only rounds.
+### Per-LLM-call observability is orthogonal
 
-### How `ChatClientFactory` enables granular dispatch without a second agent instance
-
-`ChatClientAgentRunOptions.ChatClientFactory` (`Func<IChatClient, IChatClient>?`) allows
-per-request replacement or decoration of the chat client. MAF applies it before each
-`RunAsync`/`RunStreamingAsync` call without permanently modifying the agent:
-
-```csharp
-private static IChatClient ApplyRunOptionsTransformations(AgentRunOptions? options, IChatClient chatClient)
-{
-    if (options is ChatClientAgentRunOptions agentChatOptions && agentChatOptions.ChatClientFactory is not null)
-    {
-        chatClient = agentChatOptions.ChatClientFactory(chatClient);
-    }
-    return chatClient;
-}
-```
-
-This is the mechanism a future granular dispatch implementation would use: for the LLM-only call,
-pass a `ChatClientFactory` that strips `FunctionInvokingChatClient` from the pipeline. The LLM
-sees full tool definitions, returns `FunctionCallContent`, and the workflow dispatches those tool
-calls as separate activities. No second agent registration required; the agent's DI key and options
-remain unchanged.
-
-### Current recommendation
-
-Do not add granular tool dispatch to the Agents library until a real production use case
-demonstrates the need. The full-loop model is correct for most workloads — it already provides
-per-turn durability via Temporal's workflow history, activity retry, and heartbeating. The granular
-model adds implementation complexity and the `AIContextProvider` constraint described above.
-
-If per-tool granularity is needed today, use `Temporalio.Extensions.AI` with `AddDurableTools()`
-(Mode 2 above) and compose with MAF-specific state via `TemporalAgentContext.GetService<T>()`.
-
-If the goal is **per-LLM-call observability** (logs, spans, metrics, custom telemetry around each
-model call) — not per-tool durability — that capability is already available today via the
-`ChatClientFactory` pattern; no library change is required. See the how-to guide at
-`docs/how-to/MAF/llm-call-interception.md`. Maintainers triaging requests for granular dispatch
-should rule out the observability case first.
-
-### Exit criteria — when would granular dispatch be added?
-
-The gate above does not say "never." It says "not yet, and not without a concrete reason." This
-section makes the bar visible so a future maintainer can evaluate a request against a checklist
-rather than re-litigating the design from scratch.
-
-**Granular dispatch becomes a candidate for implementation when at least one of the following is
-true and documented:**
-
-1. **A documented production cost or billing incident.** A real failure where a costly tool
-   error caused a full-turn replay — re-billing the LLM call plus tools 1..N-1 — at a scale that
-   has financial impact. The bar is concrete, not hypothetical:
-   - The incident is reproducible in a test harness (or has at least one customer-supplied trace)
-     showing the wasted spend.
-   - The waste exceeds either ~$100 of recoverable LLM/tool spend per failure occurrence, or
-     occurs at a frequency above ~10 full-turn replays per week on a single agent.
-   - The user has already considered narrower mitigations (smaller turns, fewer tools per turn,
-     more aggressive activity retry policy) and explained why they are insufficient.
-
-2. **A long-running tool that exceeds the activity timeout because the timeout is shared across
-   all tools in the turn.** The full-turn `StartToCloseTimeout` and `HeartbeatTimeout` apply to
-   the entire LLM-plus-tools loop. If a single tool legitimately needs hours but the turn as a
-   whole would not, the user is forced to choose between an unreasonably large turn timeout
-   (masking real failures elsewhere) and breaking the long-running work out of the agent loop.
-   Per-tool dispatch would let each tool have its own timeout.
-
-3. **An audit or compliance requirement for per-tool history with independent retry attempts
-   visible in the workflow event history.** Some regulated environments require that each tool
-   invocation produce a separate, immutable event-history entry with its own retry counter and
-   outcome. The full-loop model produces a single activity entry per turn, with internal tool
-   rounds invisible in event history. If a customer can point to a written compliance requirement
-   (SOX, HIPAA, FedRAMP, internal audit policy) that mandates per-tool granularity, that is a
-   sufficient driver.
-
-4. **A request from a user who has already adopted the constraint.** Specifically: the user has
-   migrated off stateful `AIContextProvider` implementations (no `Mem0Provider` or similar that
-   would double-fire in a workflow-managed loop), is using `ChatClientAgent` (not `A2AAgent` or
-   graph-workflow agents), and explicitly accepts the documented limitation that granular
-   dispatch is incompatible with non-`ChatClientAgent` types. This is the only criterion that
-   does not require an external incident — but it requires the user to have already done the
-   migration work, not merely to want the feature.
-
-**Negative criteria — what would NOT unlock this:**
-
-- "It feels architecturally cleaner." Architectural restlessness is the failure mode this gate
-  exists to prevent.
-- "We should be more like `Temporalio.Extensions.AI` Mode 2 (`AddDurableTools()`)." Mode 2 is
-  already reachable from MAF code via `Temporalio.Extensions.AI` directly; symmetry between
-  libraries is not, by itself, a reason to add a feature.
-- Speculative scaling concerns ("at high enough volume this could matter"). Real volume that
-  matters today qualifies under criterion 1; speculative volume does not.
-- A user who wants "more visibility into LLM calls" but has not yet tried `ChatClientFactory`
-  interception. That is criterion-zero — if interception solves the visibility problem, the user
-  did not need granular dispatch at all. See `docs/how-to/MAF/llm-call-interception.md`.
-- A user who wants per-tool retry policies but has not yet considered tool-level retry inside
-  the tool implementation (e.g., Polly inside the function body). The activity-level retry policy
-  is one knob; the tool-internal retry policy is another, and is reachable today.
-
-**What would NOT be enough on its own:**
-
-- A single user request without an incident or compliance driver.
-- A benchmark showing speed differences. Granular dispatch trades latency for durability
-  granularity; it does not improve throughput in the steady state.
-- An upstream MAF API change that hypothetically *could* be used by a granular implementation.
-  The constraint discussed above is `AIContextProvider.InvokingAsync` semantics, not API surface.
-
-**Process when the bar is met:** Open an issue documenting which criterion the request satisfies,
-quote the incident report or compliance citation, and propose a design that explicitly handles
-the `AIContextProvider` constraint (either documents the incompatibility with stateful providers,
-or uses the `ChatClientFactory` pattern to substitute a stripped client for the LLM-only rounds).
-Then revisit Tier 2 of the recommendation in the team's research log.
+Per-LLM-call observability — logs, spans, metrics, custom telemetry around each model call — is
+addressed by the `IChatClient` decorator pattern: return a decorated client from the
+`agent.ChatClient` factory and every `RunDurableAgentStepAsync` activity sees calls flow through
+it. See the how-to guide at [`docs/how-to/MAF/llm-call-interception.md`](how-to/MAF/llm-call-interception.md).
+This is a separate concern from per-tool durability — the two compose, and v0.3 supports both
+directly.
 
 ---
 
@@ -334,7 +238,7 @@ After Layers 1 through 3, the shared surface is substantially broader than it wa
 
 What remains divergent after Layer 3:
 
-- **The activity implementations themselves.** `DurableChatActivities` and `AgentActivities` have fundamentally different shapes — stateless `IChatClient.GetResponseAsync` vs. stateful `AIAgent.RunStreamingAsync` with session lifecycle, StateBag serialization, streaming, and `AIContextProvider` hooks. The subclass owns activity-input construction in its `ExecuteTurnAsync` override, which is the right seam: the activity payload (`DurableChatInput` vs. `ExecuteAgentInput`) reflects the activity shape.
+- **The activity implementations themselves.** `DurableChatActivities` and `AgentActivities` have fundamentally different shapes — stateless `IChatClient.GetResponseAsync` vs. stateful per-step `IChatClient.GetStreamingResponseAsync` with session lifecycle, StateBag serialization, streaming, `AIContextProvider` hooks, and a separate `InvokeAgentToolAsync` activity for per-tool dispatch. The subclass owns activity-input construction in its `ExecuteTurnAsync` override, which is the right seam: the activity payload (`DurableChatInput` vs. `AgentStepInput` / `InvokeAgentToolInput`) reflects the activity shape.
 - **Subclass-only workflow members on `AgentWorkflow`.** The `_currentStateBag` carry-forward, the fire-and-forget signal handler, and the `AgentName` search-attribute upsert. These are intentionally scoped to the subclass.
 
 The argument for two libraries today is the activity-layer fork plus those subclass-only workflow members — not the type system, the workflow-loop body, or the workflow-input shape, all of which have converged.
@@ -346,11 +250,11 @@ A plain `IChatReducer` in `clientFactory` gives in-pipeline LLM-context reductio
 **Forward-looking note (post-Layer-3).** Layer 3 collapsed the workflow-loop fork point. The remaining seams worth considering, in roughly increasing order of difficulty:
 
 - **Workflow-update payload type unification.** `DurableChatWorkflow` accepts `DurableChatInput` from its update; `AgentWorkflow` accepts `RunRequest`. These shapes diverge intentionally (`RunRequest` carries `OrchestrationId`, `ResponseFormat`, etc.), but a shared base or a sealed-hierarchy approach could reduce duplication on the request side. Modest payoff; modest risk.
-- **Granular tool dispatch in the Agents library.** The MEAI library already supports per-tool durability via `AddDurableTools()` (no `UseFunctionInvocation`); the Agents library does not. The blocker is `AIContextProvider.InvokingAsync` semantics under a workflow-managed loop, not the workflow loop itself. Different motivation, different design surface — defer until a real production use case surfaces.
-- **A shared activity base class.** Hardest of the three. `DurableChatActivities.GetResponseAsync` and `AgentActivities.ExecuteAgentAsync` have very different shapes (the latter manages session lifecycle, StateBag, streaming, `AIContextProvider`). Unifying them would require abstracting over significantly more behavior than the workflow loops did. Possible in principle; not obviously a win.
+- **Granular tool dispatch in the Agents library.** Shipped in v0.3 — `AddDurableAgent` dispatches each LLM call as a `RunDurableAgentStep` activity and each tool call as an `InvokeAgentTool` activity, with per-tool retry/timeout via `DurableToolOptions`. The MEAI library has the analogous opt-in via `AddDurableTools()`. No further work outstanding.
+- **A shared activity base class.** Hardest of the three. `DurableChatActivities.GetResponseAsync` and `AgentActivities.RunDurableAgentStepAsync` (plus its sibling `InvokeAgentToolAsync`) have very different shapes (the latter manages session lifecycle, StateBag, streaming, `AIContextProvider`, and a separate per-tool activity for fan-out). Unifying them would require abstracting over significantly more behavior than the workflow loops did. Possible in principle; not obviously a win.
 
 This document does not commit to any of the above. They are listed for completeness; the natural pause point after Layer 3 is to let the new shared base settle in production before extracting more.
 
 ---
 
-_Last updated: 2026-04-30 — added exit criteria for granular tool dispatch, pointer to LLM-call interception how-to, the Tier 1 #3 timeout-name harmonization (`ActivityTimeout` / `HeartbeatTimeout` are now inherited from the AI library's base record), a compatibility matrix for non-`ChatClientAgent` `AIAgent` subtypes, the deferred runtime-validation decision for that compatibility matrix, and the "Rejected directions" subsection (Abstractions-only dependency and `ChatClientAgent` reimplementation)._
+_Last updated: 2026-05-07 — refreshed for v0.3: `AgentWorkflowWrapper` removed, `AgentActivities.ExecuteAgentAsync` superseded by `RunDurableAgentStepAsync` + `InvokeAgentToolAsync`, granular tool dispatch is now the default behavior, `AIContextProvider` constraint resolved by per-step `IChatClient.GetStreamingResponseAsync` invocation. Earlier history: 2026-04-30 added exit criteria for granular tool dispatch, pointer to LLM-call interception how-to, the Tier 1 #3 timeout-name harmonization, a compatibility matrix for non-`ChatClientAgent` subtypes, and the "Rejected directions" subsection._

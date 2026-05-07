@@ -96,9 +96,9 @@ Wraps the full round-trip of sending an update to `AgentWorkflow` — from the e
 
 ### `agent.turn` (Internal kind)
 
-**Emitted by:** `AgentActivities.ExecuteAgentAsync`
+**Emitted by:** `AgentActivities.RunDurableAgentStepAsync`
 
-Wraps a single agent inference turn — the actual LLM call inside the activity. This is where token usage metrics are captured.
+Wraps a single LLM call inside the activity. With the v0.3 durable loop, one turn produces one `agent.turn` span per LLM round (one for the initial call plus one per follow-up after tool dispatch). Token usage metrics are captured per span.
 
 | Attribute | Value |
 |-----------|-------|

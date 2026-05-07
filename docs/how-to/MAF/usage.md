@@ -204,7 +204,7 @@ For long-running agent sessions the conversation history accumulated in the
 as `Temporalio.Extensions.AI`: register a stateless reducer such as
 `MessageCountingChatReducer` on the underlying `IChatClient` that backs your
 `AIAgent`. The reducer applies a sliding window at the LLM-call boundary —
-inside `AgentActivities.ExecuteAgentAsync` — so it does not need to be replay-safe.
+inside `AgentActivities.RunDurableAgentStepAsync` — so it does not need to be replay-safe.
 
 ```csharp
 var chatClient = openAiClient.GetChatClient("gpt-4o-mini")
@@ -466,7 +466,7 @@ var researcher = TemporalWorkflowExtensions.GetAgent(
 
 ## Accessing Temporal from Agent Tools
 
-Agent tools executing inside `AgentActivities.ExecuteAgentAsync` can access Temporal capabilities through
+Agent tools executing inside `AgentActivities.InvokeAgentToolAsync` can access Temporal capabilities through
 `TemporalAgentContext.Current`:
 
 ```csharp
@@ -1000,7 +1000,7 @@ A single `RunAsync` call produces a two-level span tree:
 ```
 agent.client.send          (DefaultTemporalAgentClient — before the Update reaches Temporal)
   └── StartWorkflow / RunActivity   (Temporal SDK spans via TracingInterceptor)
-        └── agent.turn     (AgentActivities.ExecuteAgentAsync — inside the activity)
+        └── agent.turn     (AgentActivities.RunDurableAgentStepAsync — inside the activity)
 ```
 
 | Span                | Source                                      | Key Attributes                                                                                                                  |
