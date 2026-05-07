@@ -222,12 +222,13 @@ internal sealed class DefaultTemporalAgentClient(
     /// <summary>
     /// Constructs the <see cref="AgentWorkflowInput"/> for a session by resolving every per-agent
     /// scalar via the inheritance rule: <c>effective = registration.X ?? options.DefaultX</c>.
+    /// When this process only declared the agent via <see cref="TemporalAgentsOptions.AddAgentProxy"/>
+    /// (split worker/client deployment), a minimal input is built from worker-level defaults plus
+    /// the proxy declaration's optional TTL — the actual workflow execution happens on the worker.
     /// </summary>
     /// <exception cref="AgentNotRegisteredException">
-    /// Thrown when no durable-agent registration exists for <paramref name="agentName"/>.
-    /// Proxy-only declarations (<see cref="TemporalAgentsOptions.AddAgentProxy"/>) cannot start
-    /// a session locally — that path runs in the worker process where the durable agent is
-    /// registered.
+    /// Thrown when no durable-agent registration and no proxy declaration exist for
+    /// <paramref name="agentName"/>.
     /// </exception>
     internal AgentWorkflowInput BuildAgentWorkflowInput(string agentName) =>
         BuildAgentWorkflowInputCore(agentName, options, taskQueue);
@@ -246,11 +247,17 @@ internal sealed class DefaultTemporalAgentClient(
 
         if (!options.DurableAgentRegistrations.TryGetValue(agentName, out var registration))
         {
-            // Proxy-only declarations don't have a registration on this side — but for proxy
-            // clients, BuildAgentWorkflowInput should never be invoked in-process; the proxy
-            // dispatches updates to the worker. Throw a clear error so that misconfiguration
-            // (e.g. running RunAgentAsync from a process that only declared AddAgentProxy)
-            // surfaces immediately.
+            // Proxy-only path: this process declared the agent via AddTemporalAgentProxies +
+            // AddAgentProxy("name", ttl) but does not host the durable agent itself (typical
+            // split worker/client deployment). The proxy still constructs an AgentWorkflowInput
+            // locally to start the workflow on the server; the workflow then runs in the worker
+            // process which has the full DurableAgentRegistration. Build a minimal input from
+            // worker-level defaults plus the proxy declaration's optional TTL.
+            if (options.ProxyDeclarations.TryGetValue(agentName, out var proxyTtl))
+            {
+                return BuildProxyOnlyAgentWorkflowInput(agentName, options, taskQueue, proxyTtl);
+            }
+
             throw new AgentNotRegisteredException(agentName);
         }
 
@@ -285,6 +292,44 @@ internal sealed class DefaultTemporalAgentClient(
             UseExternalStoreMode = hasExternalStore,
             MaxToolCallsPerTurn = registration.MaxToolCallsPerTurn,
             DurableAgentToolActivityOptions = toolActivityOptions,
+        };
+    }
+
+    /// <summary>
+    /// Builds an <see cref="AgentWorkflowInput"/> for a proxy-only declaration (this process
+    /// called <see cref="TemporalAgentsOptions.AddAgentProxy"/> but not
+    /// <see cref="TemporalAgentsOptions.AddDurableAgent"/>). The proxy client constructs the
+    /// input locally to start the workflow on the server; the actual workflow execution and
+    /// per-tool dispatch happen in the worker process which owns the
+    /// <see cref="DurableAgentRegistration"/>. Per-tool activity options and external-store mode
+    /// are intentionally left null/false here — those are resolved by the worker on its side.
+    /// </summary>
+    private static AgentWorkflowInput BuildProxyOnlyAgentWorkflowInput(
+        string agentName,
+        TemporalAgentsOptions options,
+        string taskQueue,
+        TimeSpan? proxyTtl)
+    {
+        var timeToLive = proxyTtl ?? options.DefaultTimeToLive ?? TimeSpan.FromDays(14);
+
+        return new AgentWorkflowInput
+        {
+            AgentName = agentName,
+            TaskQueue = taskQueue,
+            TimeToLive = timeToLive,
+            ActivityTimeout = options.DefaultActivityTimeout,
+            HeartbeatTimeout = options.DefaultHeartbeatTimeout,
+            ApprovalTimeout = options.DefaultApprovalTimeout,
+            RetryPolicy = options.DefaultRetryPolicy,
+            MaxEntryCount = options.DefaultMaxEntryCount,
+            HistoryReducer = options.DefaultHistoryReducer,
+            EnableSearchAttributes = options.EnableSearchAttributes,
+            // No per-tool activity options — the worker resolves these from its own
+            // DurableAgentRegistration. The proxy client doesn't know the agent's tools.
+            DurableAgentToolActivityOptions = null,
+            // No external-history flag from the client side — the worker decides based on its
+            // own HistoryStore configuration when the workflow runs.
+            UseExternalStoreMode = false,
         };
     }
 

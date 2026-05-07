@@ -523,3 +523,26 @@ After Phases 1-6 landed (last commit: `1d09c71`, MIGRATION-v0.3.md), the 11 MAF 
 
 The plan permitted either approach. Bundled because: (a) every sample touches one file (`Program.cs`) plus optional README; (b) the changes are mechanical and follow the same pattern; (c) review of "all 11 samples follow the same v0.3 shape" benefits from seeing them together; (d) reviewers checking a single commit's `git show` get the full v0.3 sample-set picture in one read.
 
+
+---
+
+## 2026-05-07 — Fix: proxy-only `BuildAgentWorkflowInput` regression (v0.3)
+
+**Symptom:** `samples/MAF/SplitWorkerClient/Client/Program.cs` against a v0.3 worker threw `AgentNotRegisteredException: No agent named 'Assistant' was registered.` Proxy-only deployments (`AddTemporalAgentProxies` + `AddAgentProxy(...)` without `AddDurableAgent`) were completely non-functional.
+
+**Root cause:** `DefaultTemporalAgentClient.BuildAgentWorkflowInputCore` was called locally on the proxy client to construct the workflow input before `StartWorkflowAsync`. It looked up `options.DurableAgentRegistrations` and unconditionally threw when the agent name wasn't there — but for a proxy-only client the registration legitimately lives on the worker side, not the client side. The previous comment ("for proxy clients, BuildAgentWorkflowInput should never be invoked in-process") was wrong: the proxy DOES call it in-process to construct the input payload that the server forwards to the worker.
+
+**Fix:** When `agentName` is in `_proxyDeclarations` but not `_durableAgentRegistrations`, build a minimal `AgentWorkflowInput` from worker-level defaults plus the proxy declaration's optional TTL. Throw `AgentNotRegisteredException` only when the name is in neither dictionary. Per-tool `DurableAgentToolActivityOptions` and `UseExternalStoreMode` are intentionally null/false on the proxy side — the worker resolves those from its own `DurableAgentRegistration` when the workflow runs.
+
+**Files:**
+- `src/Temporalio.Extensions.Agents/TemporalAgentsOptions.cs` — `ProxyDeclarations` accessor was already in place at line 270 (no edit needed).
+- `src/Temporalio.Extensions.Agents/Workflows/DefaultTemporalAgentClient.cs` — replaced the unconditional throw with a proxy-declaration lookup that calls a new `BuildProxyOnlyAgentWorkflowInput` helper; updated the misleading XML doc on `BuildAgentWorkflowInput`.
+- `tests/Temporalio.Extensions.Agents.Tests/AddDurableAgentTests.cs` — added 4 unit tests: `BuildAgentWorkflowInput_ProxyOnly_UsesWorkerDefaults`, `..._RespectsProxyDeclarationTtl`, `..._NullDefaultTtl_FallsBackToFourteenDays`, `BuildAgentWorkflowInput_NotRegisteredAtAll_Throws`.
+
+**Exit gate:**
+- `just build`: 0 warnings, 0 errors.
+- `just test-unit-all`: all pass (4 new tests included).
+- `just test-integration`: 66/66.
+- `just test-integration-ai`: 13/13.
+- Determinism guard: zero `ConfigureAwait(false)` in `AgentWorkflow.cs` / `DurableChatWorkflowBase.cs`.
+- End-to-end: started Worker in background, ran Client, four turns succeeded (capital of France → Paris; population; weather tool call; summary). No exception.

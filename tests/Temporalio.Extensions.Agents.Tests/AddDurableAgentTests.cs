@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Temporalio.Extensions.Agents.Tests.Helpers;
+using Temporalio.Extensions.Agents.Workflows;
 using Xunit;
 
 namespace Temporalio.Extensions.Agents.Tests;
@@ -184,6 +185,77 @@ public class AddDurableAgentTests
         var options = new TemporalAgentsOptions();
         var returned = options.AddDurableAgent("Chained", agent => agent.ChatClient = _ => NewChatClient());
         Assert.Same(options, returned);
+    }
+
+    [Fact]
+    public void BuildAgentWorkflowInput_ProxyOnly_UsesWorkerDefaults()
+    {
+        // Proxy-only: no AddDurableAgent call. Worker-level defaults flow through.
+        var options = new TemporalAgentsOptions
+        {
+            DefaultTimeToLive = TimeSpan.FromHours(6),
+            DefaultActivityTimeout = TimeSpan.FromMinutes(7),
+            DefaultHeartbeatTimeout = TimeSpan.FromMinutes(3),
+            DefaultApprovalTimeout = TimeSpan.FromDays(2),
+            DefaultMaxEntryCount = 250,
+            EnableSearchAttributes = true,
+        };
+        options.AddAgentProxy("Foo");
+
+        var input = DefaultTemporalAgentClient.BuildAgentWorkflowInputCore("Foo", options, "tq");
+
+        Assert.NotNull(input);
+        Assert.Equal("Foo", input.AgentName);
+        Assert.Equal("tq", input.TaskQueue);
+        Assert.Equal(TimeSpan.FromHours(6), input.TimeToLive);
+        Assert.Equal(TimeSpan.FromMinutes(7), input.ActivityTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(3), input.HeartbeatTimeout);
+        Assert.Equal(TimeSpan.FromDays(2), input.ApprovalTimeout);
+        Assert.Equal(250, input.MaxEntryCount);
+        Assert.True(input.EnableSearchAttributes);
+        Assert.Null(input.DurableAgentToolActivityOptions);
+        Assert.False(input.UseExternalStoreMode);
+    }
+
+    [Fact]
+    public void BuildAgentWorkflowInput_ProxyOnly_RespectsProxyDeclarationTtl()
+    {
+        // Per-agent TTL on the proxy declaration wins over the worker default.
+        var options = new TemporalAgentsOptions
+        {
+            DefaultTimeToLive = TimeSpan.FromHours(6),
+        };
+        options.AddAgentProxy("Foo", timeToLive: TimeSpan.FromHours(2));
+
+        var input = DefaultTemporalAgentClient.BuildAgentWorkflowInputCore("Foo", options, "tq");
+
+        Assert.Equal(TimeSpan.FromHours(2), input.TimeToLive);
+    }
+
+    [Fact]
+    public void BuildAgentWorkflowInput_ProxyOnly_NullDefaultTtl_FallsBackToFourteenDays()
+    {
+        // When neither the proxy declaration nor the worker default specify a TTL, fall back
+        // to the documented 14-day default — same rule as the durable-agent path.
+        var options = new TemporalAgentsOptions
+        {
+            DefaultTimeToLive = null,
+        };
+        options.AddAgentProxy("Foo");
+
+        var input = DefaultTemporalAgentClient.BuildAgentWorkflowInputCore("Foo", options, "tq");
+
+        Assert.Equal(TimeSpan.FromDays(14), input.TimeToLive);
+    }
+
+    [Fact]
+    public void BuildAgentWorkflowInput_NotRegisteredAtAll_Throws()
+    {
+        // Neither durable nor proxy registered — surface the misconfiguration clearly.
+        var options = new TemporalAgentsOptions();
+
+        Assert.Throws<AgentNotRegisteredException>(() =>
+            DefaultTemporalAgentClient.BuildAgentWorkflowInputCore("Missing", options, "tq"));
     }
 
     private sealed class TestChatClient : IChatClient
