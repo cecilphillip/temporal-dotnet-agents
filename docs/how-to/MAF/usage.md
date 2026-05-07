@@ -4,6 +4,91 @@ Detailed usage patterns and configuration for Temporalio.Extensions.Agents. For 
 
 ---
 
+## Durable Agents (`AddDurableAgent`)
+
+> **v0.3 preview.** `AddDurableAgent` is the recommended registration path for new code. The legacy entry points (`AddAIAgent`, `AddAIAgentFactory`, `EnablePerToolActivities`, `PerToolActivityOptions`, `UseExternalHistory`, `UseExternalAgentHistory<T>`) still work alongside it through Phase 4 of the v0.3 rollout and are removed in Phase 5. New work should target `AddDurableAgent`; existing code keeps running unchanged until you migrate it.
+
+`AddDurableAgent(string name, Action<DurableAgentBuilder> configure)` is a single registration entry point that consolidates everything an agent needs — chat client, instructions, tools (with per-tool retry overrides), context providers, per-agent timeouts, and external-history opt-in — onto one fluent builder. DI access is provided via per-slot factories on the builder, so you do not need to call `BuildServiceProvider()` to wire dependencies.
+
+### Canonical example
+
+```csharp
+builder.Services.AddSingleton<OrderService>();
+builder.Services.AddSingleton<RefundService>();
+builder.Services.AddSingleton<EmailService>();
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient()).Build();
+
+builder.Services
+    .AddHostedTemporalWorker(taskQueue)
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddDurableAgent("RefundAgent", agent =>
+        {
+            agent.Description = "Issues refunds and notifies the customer.";
+            agent.Instructions = "You are a refund specialist.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+
+            agent.AddTool(sp => AIFunctionFactory.Create(
+                sp.GetRequiredService<OrderService>().LookupOrder,
+                "lookup_order"));
+
+            // Write tools must opt out of retry — non-idempotent re-execution is the foot-gun.
+            agent.AddTool(
+                sp => AIFunctionFactory.Create(
+                    sp.GetRequiredService<RefundService>().ApplyRefund,
+                    "apply_refund"),
+                opts => opts.NoRetry());
+
+            agent.AddTool(
+                sp => AIFunctionFactory.Create(
+                    sp.GetRequiredService<EmailService>().SendEmail,
+                    "send_email"),
+                opts => opts.NoRetry());
+
+            agent.MaxToolCallsPerTurn = 10;
+        });
+    })
+    .AddWorkflow<RefundWorkflow>();
+```
+
+### `DurableAgentBuilder` reference
+
+| Property / Method | Purpose |
+|-------------------|---------|
+| `Name` (read-only) | Case-insensitive agent name passed in to `AddDurableAgent`. |
+| `Description` | Used in `GetAgentDescriptors()` for routing prompts. Optional. |
+| `Instructions` | Agent system prompt. Library stamps onto every LLM call's `ChatOptions.Instructions`. Optional. |
+| `ChatClient` | **Required.** `Func<IServiceProvider, IChatClient>` invoked once at first dispatch. |
+| `ChatOptions` | LLM-call template (Temperature, ResponseFormat, MaxOutputTokens, etc.). `Tools` and `Instructions` set on this property are ignored. |
+| `AddTool(AIFunction tool, Action<DurableToolOptions>? configure = null)` | Registers a concrete `AIFunction`. Per-tool retry / timeout via `configure`. |
+| `AddTool(string name, Func<IServiceProvider, AIFunction> factory, Action<DurableToolOptions>? configure = null)` | DI-resolving tool factory. |
+| `AddTools(params AIFunction[] tools)` | Bulk registration of concrete tools. |
+| `AddContextProvider(AIContextProvider provider)` / `AddContextProvider(Func<IServiceProvider, AIContextProvider>)` | Wires a provider into the chat pipeline. `Invoking/InvokedAsync` fire once per LLM call. |
+| `TimeToLive`, `ApprovalTimeout`, `ActivityTimeout`, `HeartbeatTimeout` | Per-agent overrides. `null` inherits the worker-level default on `TemporalAgentsOptions`. |
+| `RetryPolicy` | Retry policy for the agent's `RunAgentStep` activity (the LLM call). Per-tool retry is configured separately via `DurableToolOptions`. |
+| `MaxEntryCount`, `HistoryReducer` | Per-agent continue-as-new bounds and reducer. Inherit worker defaults when unset. |
+| `MaxToolCallsPerTurn` | Cap on LLM-step iterations per agent turn (default `20`). No worker-level fallback. |
+| `HistoryStore` | Per-agent `IAgentHistoryStore` factory. `null` inherits `opts.HistoryStore`; if both are `null`, history is carried in workflow state. |
+
+### `DurableToolOptions` reference
+
+| Property / Method | Purpose |
+|-------------------|---------|
+| `StartToCloseTimeout`, `HeartbeatTimeout`, `RetryPolicy` | Standard Temporal activity overrides. `null` inherits worker default. |
+| `NoRetry()` | Sets `RetryPolicy = new() { MaximumAttempts = 1 }`. Use on write tools. |
+| `WithMaxAttempts(int n)` | Sets a fixed-retry policy. |
+| `WithTimeout(TimeSpan t)` | Sets `StartToCloseTimeout`. |
+
+### Lifecycle and composition
+
+The chat client, tool factories, and context providers run lazily on first activity dispatch and are cached for the lifetime of the worker process. Concurrent first-dispatches for the same agent compose at most once.
+
+The library composes the chat pipeline internally and passes `UseProvidedChatClientAsIs = true` to MAF so that `FunctionInvokingChatClient` is **not** auto-injected — the workflow owns the tool-dispatch loop. Register a bare `IChatClient` in DI (do not call `.UseFunctionInvocation()`).
+
+For the workflow-loop semantics (per-tool fan-out, crash safety, continue-as-new) see [`docs/architecture/MAF/agent-sessions-and-workflow-loop.md`](../../architecture/MAF/agent-sessions-and-workflow-loop.md).
+
+---
+
 ## Library Dependencies
 
 `Temporalio.Extensions.Agents` depends on `Temporalio.Extensions.AI`. Installing the Agents NuGet package pulls in the AI package automatically — no separate `<PackageReference>` for `Temporalio.Extensions.AI` is needed.

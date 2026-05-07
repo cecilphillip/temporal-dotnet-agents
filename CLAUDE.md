@@ -83,6 +83,8 @@ For full API surface, see `docs/how-to/MEAI/usage.md`.
 - `services.AddHostedTemporalWorker(...).AddTemporalAgents(opts => { opts.AddAIAgent(agent); opts.EnableSearchAttributes = true; })`
 - `services.AddHostedTemporalWorker(...).AddWorkerPlugin(new TemporalAgentsPlugin(opts => ...))` — `[Experimental("TA001")]`. Idempotent if mixed with `AddTemporalAgents()`.
 
+**v0.3 preview — `AddDurableAgent` (recommended for new code)**: a single fluent registration entry point that consolidates chat client, tools (with per-tool retry overrides), context providers, per-agent timeouts, and external history onto one `DurableAgentBuilder`. DI access via per-slot factories on the builder — no `BuildServiceProvider()` bootstrap, no string-key dictionaries. Activity dispatch goes through the new `Temporalio.Extensions.Agents.InvokeAgentTool` activity (per-agent local tool registry, distinct from MEAI's flat `InvokeFunction`). Legacy `AddAIAgent` / `AddAIAgentFactory` / `EnablePerToolActivities` / `PerToolActivityOptions` / `UseExternalHistory` still works alongside it through Phase 4 of the v0.3 rollout and is removed in Phase 5. See `docs/how-to/MAF/usage.md` "Durable Agents (`AddDurableAgent`)" section for the canonical example and full reference.
+
 **Configuration**: see `docs/how-to/MAF/usage.md` for the full `TemporalAgentsOptions` reference (`EnableSearchAttributes`, `MaxEntryCount`, `HistoryReducer`, `RetryPolicy`, etc.). Names worth knowing for migration: `MaxHistorySize` → `MaxEntryCount` in 0.2.0; `HistoryReducer` is `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` since 0.3.0 (operates on entries, not flat messages).
 
 **Two agent types** (use the right one for context):

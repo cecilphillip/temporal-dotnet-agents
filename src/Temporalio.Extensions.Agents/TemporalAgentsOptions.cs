@@ -5,6 +5,7 @@ using Microsoft.Extensions.AI;
 using Temporalio.Client.Schedules;
 using Temporalio.Common;
 using Temporalio.Extensions.AI;
+using Temporalio.Extensions.Agents.HistoryStore;
 using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.Agents.Workflows;
 
@@ -30,6 +31,13 @@ public sealed class TemporalAgentsOptions
     // (see Microsoft.Agents.AI 1.0.0-preview), so we extract it via reflection at AddAIAgent
     // time rather than at activity dispatch time. Only populated for ChatClientAgent instances.
     private readonly Dictionary<string, ChatOptions> _agentChatOptions =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // Phase 2 (v0.3.0 API redesign): durable-agent registrations created via AddDurableAgent.
+    // Shares the agent-name namespace with _agentFactories so the legacy and new paths cannot
+    // collide. Phase 3 will branch the workflow on presence here; until then the legacy path
+    // continues to drive everything.
+    private readonly Dictionary<string, DurableAgentRegistration> _durableAgentRegistrations =
         new(StringComparer.OrdinalIgnoreCase);
 
     // Cached PropertyInfo for ChatClientAgent.ChatOptions (internal getter). Reflection lookup
@@ -94,6 +102,20 @@ public sealed class TemporalAgentsOptions
     /// </para>
     /// </remarks>
     public bool EnableSearchAttributes { get; set; }
+
+    /// <summary>
+    /// Worker-level default <see cref="IAgentHistoryStore"/> factory for durable agents registered
+    /// via <see cref="AddDurableAgent"/>. When a per-agent <c>HistoryStore</c> is unset on the
+    /// builder, the agent inherits this value. Setting this to a non-null factory is the v0.3
+    /// equivalent of the legacy <see cref="UseExternalHistory"/> opt-in.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Phase 2 only stores the property. Workflow integration that resolves and invokes the factory
+    /// at first activity dispatch is wired up in Phase 4 alongside the per-agent settings flow.
+    /// </para>
+    /// </remarks>
+    public Func<IServiceProvider, IAgentHistoryStore>? HistoryStore { get; set; }
 
     /// <summary>
     /// Maximum number of history entries before triggering continue-as-new.
@@ -191,6 +213,96 @@ public sealed class TemporalAgentsOptions
     /// inputs.
     /// </remarks>
     public int MaxToolCallsPerTurn { get; set; } = 20;
+
+    /// <summary>
+    /// Registers a durable agent and returns this options instance for chaining. The configure
+    /// delegate populates a <see cref="DurableAgentBuilder"/> whose <c>ChatClient</c>, tools, and
+    /// context providers are evaluated lazily at first activity dispatch (cached for the lifetime
+    /// of the worker process).
+    /// </summary>
+    /// <param name="name">
+    /// Case-insensitive agent name. Must be unique across <em>all</em> registration paths
+    /// (<see cref="AddAIAgent(AIAgent, TimeSpan?)"/>, <see cref="AddAIAgentFactory(string, Func{IServiceProvider, AIAgent}, TimeSpan?, string?)"/>,
+    /// <see cref="AddAgentProxy"/>, and other <c>AddDurableAgent</c> calls share one namespace).
+    /// </param>
+    /// <param name="configure">
+    /// Builder callback invoked synchronously during this method. Must assign
+    /// <see cref="DurableAgentBuilder.ChatClient"/> before returning, otherwise this method throws
+    /// <see cref="InvalidOperationException"/>.
+    /// </param>
+    /// <returns>This options instance, for fluent chaining.</returns>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="name"/> is null/empty.
+    /// </exception>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="configure"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <paramref name="name"/> is already registered (durable, legacy, or proxy), or
+    /// when the configure delegate completed without assigning <see cref="DurableAgentBuilder.ChatClient"/>.
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// Phase 2 of the v0.3 API redesign: Phase 3 wires the workflow loop to consume the durable
+    /// registration. Until then, durable agents register their name and description for
+    /// introspection (<see cref="GetRegisteredAgentNames"/> / <see cref="GetAgentDescriptors"/>) but
+    /// the workflow continues to use the legacy dispatch path.
+    /// </para>
+    /// <para>
+    /// To allow downstream introspection APIs to surface the durable agent without leaking the
+    /// builder's resolution lifecycle, a synthetic factory is wired into the legacy
+    /// <c>_agentFactories</c> map. The synthetic factory throws on invocation — Phase 3's workflow
+    /// branches on durable registration before reaching that path, so the throw is defensive and
+    /// only fires if a durable agent is dispatched through the legacy code path (which would be a
+    /// wiring bug).
+    /// </para>
+    /// </remarks>
+    public TemporalAgentsOptions AddDurableAgent(string name, Action<DurableAgentBuilder> configure)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        // Q9b: throw immediately at the second call site, regardless of whether the existing
+        // entry came from AddDurableAgent, AddAIAgent, AddAIAgentFactory, or AddAgentProxy.
+        // _durableAgentRegistrations and _agentFactories are kept in lockstep — the synthetic
+        // factory below ensures introspection sees durable agents — so checking either is
+        // equivalent in practice. We check both for defense in depth.
+        if (_agentFactories.ContainsKey(name) || _durableAgentRegistrations.ContainsKey(name))
+        {
+            throw new InvalidOperationException(
+                $"An agent with name '{name}' has already been registered. Agent names must be unique " +
+                "across AddDurableAgent, AddAIAgent, AddAIAgentFactory, and AddAgentProxy.");
+        }
+
+        var builder = new DurableAgentBuilder(name);
+        configure(builder);
+
+        // Q9 end-of-delegate validation: ChatClient is required. Surfaces the most common wiring
+        // mistake (forgetting to set ChatClient) at the call site instead of at first dispatch.
+        if (builder.ChatClient is null)
+        {
+            throw new InvalidOperationException(
+                $"DurableAgent '{name}' requires ChatClient. Set agent.ChatClient = sp => sp.GetRequiredService<IChatClient>() in the configure delegate.");
+        }
+
+        var registration = builder.ToRegistration();
+        _durableAgentRegistrations.Add(name, registration);
+
+        // Synthetic legacy factory: lets GetRegisteredAgentNames / IsAgentRegistered /
+        // GetAgentDescriptors see durable agents through the existing introspection API. The
+        // throw is a safety net — Phase 3's workflow branches on _durableAgentRegistrations
+        // before reaching this factory.
+        _agentFactories.Add(name, _ => throw new InvalidOperationException(
+            $"Durable agents must be invoked via the AddDurableAgent path, not the legacy factory path. " +
+            $"Agent '{name}' was registered via AddDurableAgent — this indicates a wiring mistake."));
+
+        if (!string.IsNullOrWhiteSpace(registration.Description))
+        {
+            _agentDescriptions[name] = registration.Description!;
+        }
+
+        return this;
+    }
 
     /// <summary>Adds an agent factory with an optional per-agent TTL.</summary>
     /// <param name="name">
@@ -491,6 +603,14 @@ public sealed class TemporalAgentsOptions
     /// <summary>Gets all registered agent factories.</summary>
     internal IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>> GetAgentFactories() =>
         _agentFactories.AsReadOnly();
+
+    /// <summary>
+    /// Gets the durable-agent registrations (Phase 2 of v0.3 API redesign). Phase 3 reads this
+    /// dictionary from the workflow loop to dispatch the new per-tool path. Empty when no
+    /// <see cref="AddDurableAgent"/> calls have been made.
+    /// </summary>
+    internal IReadOnlyDictionary<string, DurableAgentRegistration> DurableAgentRegistrations =>
+        _durableAgentRegistrations;
 
     /// <summary>
     /// Returns the <see cref="ChatOptions"/> captured at registration time for the named agent,

@@ -151,4 +151,21 @@ internal static partial class Logs
         Message = "[{AgentName}/{WorkflowId}] Dispatching delayed request to agent session (Delay: {Delay})")]
     public static partial void LogProxyDispatchingDelayedRequest(
         this ILogger logger, string agentName, string workflowId, TimeSpan delay);
+
+    // ── Durable agent per-tool invocation logs (v0.3 API) ─────────────────────
+
+    [LoggerMessage(EventId = 26, Level = LogLevel.Information,
+        Message = "[{AgentName}] Invoking tool '{ToolName}' as Temporal activity")]
+    public static partial void LogAgentToolInvocationStarted(
+        this ILogger logger, string agentName, string toolName);
+
+    [LoggerMessage(EventId = 27, Level = LogLevel.Information,
+        Message = "[{AgentName}] Tool '{ToolName}' completed")]
+    public static partial void LogAgentToolInvocationCompleted(
+        this ILogger logger, string agentName, string toolName);
+
+    [LoggerMessage(EventId = 28, Level = LogLevel.Error,
+        Message = "[{AgentName}] Tool '{ToolName}' failed")]
+    public static partial void LogAgentToolInvocationFailed(
+        this ILogger logger, string agentName, string toolName, Exception ex);
 }

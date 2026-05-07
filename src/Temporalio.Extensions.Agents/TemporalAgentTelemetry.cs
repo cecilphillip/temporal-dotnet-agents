@@ -48,6 +48,15 @@ public static class TemporalAgentTelemetry
     /// <summary>Span emitted by <c>AgentActivities.ExecuteAgentAsync</c> for each agent turn.</summary>
     public const string AgentTurnSpanName = "agent.turn";
 
+    /// <summary>Span emitted by <c>AgentActivities.InvokeAgentToolAsync</c> for each per-tool activity dispatch.</summary>
+    public const string AgentToolInvokeSpanName = "agent.tool.invoke";
+
+    /// <summary>The name of the tool being invoked. Tagged on <see cref="AgentToolInvokeSpanName"/> spans.</summary>
+    public const string AgentToolNameAttribute = "agent.tool.name";
+
+    /// <summary>The originating <c>FunctionCallContent.CallId</c>. Tagged on <see cref="AgentToolInvokeSpanName"/> spans.</summary>
+    public const string AgentToolCallIdAttribute = "agent.tool.call_id";
+
     /// <summary>Span emitted by <c>DefaultTemporalAgentClient.RunAgentAsync</c> when sending an update.</summary>
     public const string AgentClientSendSpanName = "agent.client.send";
 

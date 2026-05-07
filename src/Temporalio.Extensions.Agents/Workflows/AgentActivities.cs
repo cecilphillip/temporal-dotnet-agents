@@ -14,6 +14,18 @@ using Temporalio.Extensions.AI;
 namespace Temporalio.Extensions.Agents.Workflows;
 
 /// <summary>
+/// Cached state for a durable agent registered via <c>TemporalAgentsOptions.AddDurableAgent</c>.
+/// Composed once at first activity dispatch (lazy) and reused for the lifetime of the worker.
+/// Holds the constructed <see cref="AIAgent"/>, the resolved per-agent tool registry (used by
+/// <see cref="AgentActivities.InvokeAgentToolAsync"/>), and the immutable
+/// <see cref="DurableAgentRegistration"/> snapshot the workflow was registered with.
+/// </summary>
+internal sealed record CachedDurableAgent(
+    AIAgent Agent,
+    IReadOnlyDictionary<string, AIFunction> Tools,
+    DurableAgentRegistration Registration);
+
+/// <summary>
 /// Temporal activities that perform the actual AI inference for agent sessions.
 /// All AI inference must run inside an activity to preserve workflow determinism.
 /// </summary>
@@ -26,6 +38,12 @@ internal sealed class AgentActivities(
 {
     private readonly ILogger _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<AgentActivities>();
     private readonly ConcurrentDictionary<string, AIAgent> _agentCache = new(StringComparer.OrdinalIgnoreCase);
+
+    // Phase 2 (v0.3): per-durable-agent cache. Composed lazily at first dispatch and reused for
+    // the lifetime of the worker. Distinct from _agentCache so the legacy and durable paths can
+    // coexist; Phase 5 collapses them.
+    private readonly ConcurrentDictionary<string, CachedDurableAgent> _durableAgentCache =
+        new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Builds the activity summary value (visible in the Temporal Web UI activity list).
@@ -390,6 +408,177 @@ internal sealed class AgentActivities(
 
         var trimmed = prior.Skip(prior.Count - input.MaxEntryCount).ToList();
         await historyStore.ReplaceAsync(input.SessionId, trimmed, ct).ConfigureAwait(false);
+    }
+
+    // ── Phase 2 (v0.3): durable-agent dispatch ────────────────────────────────
+    //
+    // The InvokeAgentToolAsync activity is the per-tool dispatch path used by durable agents
+    // (registered via TemporalAgentsOptions.AddDurableAgent). It is intentionally distinct from
+    // MEAI's flat InvokeFunction activity so two agents on the same worker can register tools
+    // with the same name without collision and operators can tell from the Web UI which path
+    // is in play.
+
+    /// <summary>
+    /// Resolves (and lazily composes) a durable agent's cached state. The chat client, tool
+    /// factories, and context-provider factories run at first call only; subsequent calls return
+    /// the cached state. Concurrent first-dispatches for the same agent compose at most once
+    /// thanks to <see cref="ConcurrentDictionary{TKey, TValue}.GetOrAdd(TKey, Func{TKey, TValue})"/>.
+    /// </summary>
+    /// <param name="name">The agent name as registered via <c>AddDurableAgent</c>.</param>
+    /// <returns>The cached agent state, including its local tool registry.</returns>
+    /// <exception cref="AgentNotRegisteredException">
+    /// Thrown when no durable agent with this name is registered.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when a tool factory returns an <see cref="AIFunction"/> whose <see cref="AIFunction.Name"/>
+    /// does not match the name declared on the builder.
+    /// </exception>
+    internal CachedDurableAgent ResolveDurableAgent(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        return _durableAgentCache.GetOrAdd(name, static (n, ctx) =>
+        {
+            var (self, providerServices) = ctx;
+            return self.ComposeDurableAgent(n, providerServices);
+        }, (this, services));
+    }
+
+    private CachedDurableAgent ComposeDurableAgent(string name, IServiceProvider providerServices)
+    {
+        var agentsOptions = providerServices.GetService<TemporalAgentsOptions>()
+            ?? throw new InvalidOperationException(
+                "TemporalAgentsOptions is not registered in DI. Call AddTemporalAgents on the worker " +
+                "builder before invoking the durable-agent dispatch path.");
+
+        if (!agentsOptions.DurableAgentRegistrations.TryGetValue(name, out var registration))
+        {
+            throw new AgentNotRegisteredException(name);
+        }
+
+        // Compose the chat-client pipeline. Providers are wired via UseAIContextProviders so that
+        // MAF's AIContextProviderChatClient handles the per-step lifecycle (Q10 / CP1):
+        // Invoking/InvokedAsync fire once per LLM call, not once per turn.
+        var userClient = registration.ChatClient(providerServices);
+        var providers = registration.ContextProviderFactories.Count == 0
+            ? Array.Empty<AIContextProvider>()
+            : registration.ContextProviderFactories.Select(f => f(providerServices)).ToArray();
+
+        IChatClient chatClient = providers.Length == 0
+            ? userClient
+            : userClient.AsBuilder().UseAIContextProviders(providers).Build();
+
+        // Resolve tools. The factory's resolved AIFunction.Name must match the name declared
+        // on the builder (registration.Tools[i].Name) — otherwise dispatch by string key from
+        // the workflow would silently fall through to the unknown-tool path. Validate eagerly
+        // so the wiring mistake is reported on first dispatch rather than on first tool call.
+        var resolvedTools = new Dictionary<string, AIFunction>(StringComparer.OrdinalIgnoreCase);
+        var toolList = new List<AIFunction>(registration.Tools.Count);
+        foreach (var tool in registration.Tools)
+        {
+            var resolved = tool.Factory(providerServices);
+            if (resolved is null)
+            {
+                throw new InvalidOperationException(
+                    $"Tool factory for '{tool.Name}' on agent '{name}' returned null.");
+            }
+
+            if (!string.Equals(resolved.Name, tool.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Tool factory for '{tool.Name}' on agent '{name}' returned an AIFunction with " +
+                    $"name '{resolved.Name}'. The factory's resolved name must match the name declared " +
+                    "on AddTool.");
+            }
+
+            resolvedTools[tool.Name] = resolved;
+            toolList.Add(resolved);
+        }
+
+        // Build the agent's per-call ChatOptions template. Library always stamps Instructions
+        // and Tools (per Q8); the user's values for those properties on registration.ChatOptions
+        // are deliberately overwritten.
+        var chatOptions = registration.ChatOptions?.Clone() ?? new ChatOptions();
+        chatOptions.Instructions = registration.Instructions;
+        chatOptions.Tools = toolList.Count > 0 ? toolList.Cast<AITool>().ToList() : null;
+
+        var agentOptions = new ChatClientAgentOptions
+        {
+            Name = registration.Name,
+            Description = registration.Description,
+            ChatOptions = chatOptions,
+            // Provider list flows through ChatClientAgentOptions.AIContextProviders too so that
+            // MAF wires the AgentRunContext correctly. The chat-pipeline-decorator path
+            // (UseAIContextProviders above) is what actually runs the lifecycle.
+            AIContextProviders = providers.Length == 0 ? null : providers.ToList(),
+            UseProvidedChatClientAsIs = true,
+        };
+
+        var agent = new ChatClientAgent(chatClient, agentOptions);
+
+        return new CachedDurableAgent(agent, resolvedTools, registration);
+    }
+
+    /// <summary>
+    /// Per-tool activity used by durable agents. Looks up the named agent's local tool registry,
+    /// invokes the tool with the supplied arguments, and returns the result. Tool exceptions
+    /// propagate to the workflow as activity failures (subject to the per-tool retry policy).
+    /// </summary>
+    [Activity("Temporalio.Extensions.Agents.InvokeAgentTool")]
+    public async Task<InvokeAgentToolResult> InvokeAgentToolAsync(InvokeAgentToolInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var ctx = ActivityExecutionContext.Current;
+        var ct = ctx.CancellationToken;
+
+        var cached = ResolveDurableAgent(input.AgentName);
+
+        if (!cached.Tools.TryGetValue(input.ToolName, out var fn))
+        {
+            throw new InvalidOperationException(
+                $"Tool '{input.ToolName}' is not registered on agent '{input.AgentName}'.");
+        }
+
+        // Pre-call heartbeat: surfaces the tool name in the Web UI before the tool runs. For
+        // long-running tools, callers can heartbeat from inside InvokeAsync if needed; the
+        // activity's HeartbeatTimeout (set per-tool via DurableToolOptions) bounds the wait.
+        ctx.Heartbeat($"invoking tool '{input.ToolName}'");
+
+        using var span = TemporalAgentTelemetry.ActivitySource.StartActivity(
+            TemporalAgentTelemetry.AgentToolInvokeSpanName,
+            ActivityKind.Internal);
+        span?.SetTag(TemporalAgentTelemetry.AgentNameAttribute, input.AgentName);
+        span?.SetTag(TemporalAgentTelemetry.AgentToolNameAttribute, input.ToolName);
+        if (!string.IsNullOrEmpty(input.CallId))
+        {
+            span?.SetTag(TemporalAgentTelemetry.AgentToolCallIdAttribute, input.CallId);
+        }
+
+        try
+        {
+            _logger.LogAgentToolInvocationStarted(input.AgentName, input.ToolName);
+
+            var arguments = input.Arguments is null
+                ? new AIFunctionArguments()
+                : new AIFunctionArguments(input.Arguments);
+
+            var result = await fn.InvokeAsync(arguments, ct).ConfigureAwait(false);
+
+            _logger.LogAgentToolInvocationCompleted(input.AgentName, input.ToolName);
+
+            return new InvokeAgentToolResult
+            {
+                Result = result,
+                CallId = input.CallId,
+            };
+        }
+        catch (Exception ex)
+        {
+            span?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            _logger.LogAgentToolInvocationFailed(input.AgentName, input.ToolName, ex);
+            throw;
+        }
     }
 }
 
