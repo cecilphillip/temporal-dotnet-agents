@@ -197,6 +197,10 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             EnablePerToolActivities = _input.EnablePerToolActivities,
             PerToolActivityOptions = _input.PerToolActivityOptions,
             MaxToolCallsPerTurn = _input.MaxToolCallsPerTurn,
+            // Phase 3 (v0.3): durable-agent path settings travel forward across continue-as-new
+            // so retry constraints (especially MaximumAttempts=1 on write tools) survive CAN.
+            IsDurable = _input.IsDurable,
+            DurableAgentToolActivityOptions = _input.DurableAgentToolActivityOptions,
 
             // Inherited fields — sourced from the base's freshly constructed `input` so the
             // reduced CarriedHistory, OriginalCreatedAt, and other CAN-time decisions are honored.
@@ -317,6 +321,19 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             RetryPolicy = _input!.RetryPolicy,
         };
 
+        // Phase 3: durable agents (registered via AddDurableAgent) take precedence over the legacy
+        // step-mode + single-activity paths. The durable loop runs the LLM/tool dispatch entirely
+        // in workflow code, dispatching RunDurableAgentStep + InvokeAgentTool activities.
+        if (_input!.IsDurable)
+        {
+            // Do NOT use the ConfigureAwait-false escape hatch here: this runs inside a
+            // Temporal workflow and the continuation must remain on the workflow scheduler.
+            // Skipping the workflow scheduler's SynchronizationContext would put the
+            // continuation on the ThreadPool, leaving the workflow unable to register
+            // CompleteWorkflowExecution and causing it to hang at WorkflowTaskCompleted.
+            return await ExecuteDurableAgentTurnAsync(runRequest, activityOptions).ConfigureAwait(true);
+        }
+
         // Branch: step mode (per-tool activities) runs the LLM/tool loop in workflow code so
         // each tool call is a separately retryable / observable activity. Default mode wraps
         // the entire turn in one ExecuteAgentAsync activity (existing behavior unchanged).
@@ -356,6 +373,172 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         // GAP 6: persist the updated StateBag for the next turn.
         _currentStateBag = result.SerializedStateBag;
         return result.Response;
+    }
+
+    /// <summary>
+    /// Phase 3 durable-agent dispatch loop. Drives the alternation between
+    /// <c>RunDurableAgentStepAsync</c> (one LLM call) and
+    /// <c>InvokeAgentToolAsync</c> per tool call. Tool calls within a single LLM response
+    /// fan out via <see cref="Workflow.WhenAllAsync{TResult}(IEnumerable{Task{TResult}})"/>;
+    /// the loop terminates when the LLM returns a final assistant message or when
+    /// <see cref="DurableAgentBuilder.MaxToolCallsPerTurn"/> iterations are exceeded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Architectural difference from <see cref="ExecuteStepModeTurnAsync"/> (legacy): the durable
+    /// path dispatches tools to <c>InvokeAgentToolAsync</c> (per-agent registry) rather than
+    /// MEAI's flat <c>InvokeFunctionAsync</c>. Two agents on one worker can register tools with
+    /// the same name without collision, and the Web UI shows a distinct activity type so
+    /// operators can tell which dispatch path is in play.
+    /// </para>
+    /// </remarks>
+    private async Task<AgentResponse> ExecuteDurableAgentTurnAsync(
+        RunRequest runRequest,
+        ActivityOptions stepActivityOptions)
+    {
+        Workflow.Logger.LogDurableAgentTurnStarted(_input!.AgentName, Workflow.Info.WorkflowId);
+
+        // Accumulated messages threaded through the step loop. Initial set is the request
+        // messages — note: the request entry was already appended to history by the base.
+        var accumulated = new List<ChatMessage>(runRequest.Messages);
+
+        // Track every assistant + function-result message produced across the loop so the
+        // final AgentResponse exposes the full multi-step transcript.
+        var allTurnMessages = new List<ChatMessage>();
+        UsageDetails? totalUsage = null;
+
+        var maxIterations = _input!.MaxToolCallsPerTurn;
+
+        for (var iteration = 0; iteration < maxIterations; iteration++)
+        {
+            var stepInput = new AgentStepInput
+            {
+                AgentName = _input!.AgentName,
+                Request = runRequest,
+                AccumulatedMessages = accumulated,
+                SerializedStateBag = _currentStateBag,
+                SessionId = null,
+            };
+
+            // Do NOT use the ConfigureAwait-false escape hatch here: this runs inside a
+            // Temporal workflow and the continuation must remain on the workflow scheduler.
+            // Skipping the workflow scheduler's SynchronizationContext would put the
+            // continuation on the ThreadPool, leaving the workflow unable to register
+            // CompleteWorkflowExecution and causing it to hang at WorkflowTaskCompleted.
+            var stepResult = await Workflow.ExecuteActivityAsync(
+                (AgentActivities a) => a.RunDurableAgentStepAsync(stepInput),
+                stepActivityOptions).ConfigureAwait(true);
+
+            _currentStateBag = stepResult.UpdatedStateBag;
+
+            if (stepResult.Usage is not null)
+            {
+                totalUsage ??= new UsageDetails();
+                totalUsage.InputTokenCount = (totalUsage.InputTokenCount ?? 0) + (stepResult.Usage.InputTokenCount ?? 0);
+                totalUsage.OutputTokenCount = (totalUsage.OutputTokenCount ?? 0) + (stepResult.Usage.OutputTokenCount ?? 0);
+                totalUsage.TotalTokenCount = (totalUsage.TotalTokenCount ?? 0) + (stepResult.Usage.TotalTokenCount ?? 0);
+            }
+
+            accumulated.Add(stepResult.AssistantMessage);
+            allTurnMessages.Add(stepResult.AssistantMessage);
+
+            if (stepResult.IsFinal || stepResult.ToolCalls is null || stepResult.ToolCalls.Count == 0)
+            {
+                Workflow.Logger.LogDurableAgentTurnCompleted(_input!.AgentName, iteration + 1);
+                return new AgentResponse
+                {
+                    Messages = allTurnMessages,
+                    Usage = totalUsage,
+                    CreatedAt = Workflow.UtcNow,
+                };
+            }
+
+            var toolCalls = stepResult.ToolCalls;
+
+            Workflow.Logger.LogDurableAgentTurnIteration(_input!.AgentName, iteration + 1, toolCalls.Count);
+
+            // Fan out: dispatch one InvokeAgentToolAsync activity per tool call. Use
+            // Workflow.WhenAllAsync (the SDK-provided workflow-safe combinator) — never
+            // Task.WhenAll inside [Workflow] code.
+            var toolTasks = new List<Task<InvokeAgentToolResult>>(toolCalls.Count);
+            foreach (var tc in toolCalls)
+            {
+                var toolOptions = ResolveDurableToolActivityOptions(tc.Name);
+
+                var toolInput = new InvokeAgentToolInput
+                {
+                    AgentName = _input!.AgentName,
+                    ToolName = tc.Name,
+                    Arguments = tc.Arguments is null
+                        ? null
+                        : new Dictionary<string, object?>(tc.Arguments),
+                    CallId = tc.CallId,
+                };
+
+                // The awaited WhenAllAsync below stays on the workflow scheduler.
+                toolTasks.Add(Workflow.ExecuteActivityAsync(
+                    (AgentActivities a) => a.InvokeAgentToolAsync(toolInput),
+                    toolOptions));
+            }
+
+            // Do NOT use the ConfigureAwait-false escape hatch here — this stays on the
+            // workflow scheduler. See comment block on the step await above for the rationale.
+            var toolResults = await Workflow.WhenAllAsync(toolTasks).ConfigureAwait(true);
+
+            // Build a FunctionResultContent message for each completed tool. Order matches
+            // the order of toolCalls (Workflow.WhenAllAsync preserves input order).
+            var functionResultContents = new List<AIContent>(toolCalls.Count);
+            for (var i = 0; i < toolCalls.Count; i++)
+            {
+                functionResultContents.Add(new FunctionResultContent(
+                    callId: toolCalls[i].CallId,
+                    result: toolResults[i].Result));
+            }
+
+            var toolResultMessage = new ChatMessage(ChatRole.Tool, functionResultContents);
+            accumulated.Add(toolResultMessage);
+            allTurnMessages.Add(toolResultMessage);
+        }
+
+        // Iteration cap exceeded — return a structured error response rather than letting
+        // workflow history grow without bound (runaway tool-calling guard).
+        Workflow.Logger.LogDurableAgentTurnAborted(_input!.AgentName, maxIterations);
+
+        var errorMessage = new ChatMessage(
+            ChatRole.Assistant,
+            $"Maximum tool-call iterations ({maxIterations}) exceeded for agent '{_input!.AgentName}'. " +
+            "The agent did not converge on a final answer.");
+        allTurnMessages.Add(errorMessage);
+
+        return new AgentResponse
+        {
+            Messages = allTurnMessages,
+            Usage = totalUsage,
+            CreatedAt = Workflow.UtcNow,
+        };
+    }
+
+    /// <summary>
+    /// Resolves <see cref="ActivityOptions"/> for a single durable-agent per-tool dispatch.
+    /// Looks up the tool name in <see cref="AgentWorkflowInput.DurableAgentToolActivityOptions"/>
+    /// first; falls back to a default built from the workflow's standard activity timeouts and
+    /// retry policy when no per-tool entry exists.
+    /// </summary>
+    private ActivityOptions ResolveDurableToolActivityOptions(string toolName)
+    {
+        if (_input!.DurableAgentToolActivityOptions is not null
+            && _input!.DurableAgentToolActivityOptions.TryGetValue(toolName, out var perTool))
+        {
+            return perTool;
+        }
+
+        return new ActivityOptions
+        {
+            StartToCloseTimeout = _input!.ActivityTimeout,
+            HeartbeatTimeout = _input!.HeartbeatTimeout,
+            Summary = toolName,
+            RetryPolicy = _input!.RetryPolicy,
+        };
     }
 
     /// <summary>

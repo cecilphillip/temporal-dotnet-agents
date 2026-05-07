@@ -168,4 +168,26 @@ internal static partial class Logs
         Message = "[{AgentName}] Tool '{ToolName}' failed")]
     public static partial void LogAgentToolInvocationFailed(
         this ILogger logger, string agentName, string toolName, Exception ex);
+
+    // ── Durable-agent workflow loop (Phase 3, v0.3 API) ──────────────────────
+
+    [LoggerMessage(EventId = 29, Level = LogLevel.Information,
+        Message = "[{AgentName}/{WorkflowId}] Durable agent turn started")]
+    public static partial void LogDurableAgentTurnStarted(
+        this ILogger logger, string agentName, string workflowId);
+
+    [LoggerMessage(EventId = 30, Level = LogLevel.Debug,
+        Message = "[{AgentName}] Durable agent iteration {Iteration} dispatched {ToolCallCount} tool call(s)")]
+    public static partial void LogDurableAgentTurnIteration(
+        this ILogger logger, string agentName, int iteration, int toolCallCount);
+
+    [LoggerMessage(EventId = 31, Level = LogLevel.Information,
+        Message = "[{AgentName}] Durable agent turn completed in {TotalIterations} iteration(s)")]
+    public static partial void LogDurableAgentTurnCompleted(
+        this ILogger logger, string agentName, int totalIterations);
+
+    [LoggerMessage(EventId = 32, Level = LogLevel.Warning,
+        Message = "[{AgentName}] Durable agent turn aborted after exceeding iteration cap ({IterationLimit}); returning structured error")]
+    public static partial void LogDurableAgentTurnAborted(
+        this ILogger logger, string agentName, int iterationLimit);
 }

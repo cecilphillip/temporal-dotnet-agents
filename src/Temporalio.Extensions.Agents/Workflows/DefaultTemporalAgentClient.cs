@@ -5,9 +5,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Temporalio.Api.Enums.V1;
 using Temporalio.Client;
 using Temporalio.Client.Schedules;
+using Temporalio.Common;
 using Temporalio.Extensions.Agents.Session;
 using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.AI;
+using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
@@ -50,24 +52,7 @@ internal sealed class DefaultTemporalAgentClient(
 
         workflowOptions.Rpc = new RpcOptions { CancellationToken = cancellationToken };
         await client.StartWorkflowAsync(
-            (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput
-            {
-                AgentName = sessionId.AgentName,
-                TaskQueue = taskQueue,
-                TimeToLive = options.GetTimeToLive(sessionId.AgentName) ?? TimeSpan.FromDays(14),
-                ActivityTimeout = options.ActivityTimeout,
-                HeartbeatTimeout = options.HeartbeatTimeout,
-                ApprovalTimeout = options.ApprovalTimeout,
-                RetryPolicy = options.RetryPolicy,
-                MaxEntryCount = options.MaxEntryCount,
-                HistoryReducer = options.HistoryReducer,
-                EnableSearchAttributes = options.EnableSearchAttributes,
-                UseExternalStore = options.UseExternalHistory,
-                EnablePerToolActivities = options.EnablePerToolActivities,
-                PerToolActivityOptions = options.PerToolActivityOptions,
-                MaxToolCallsPerTurn = options.MaxToolCallsPerTurn,
-                // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
-            }),
+            (AgentWorkflow wf) => wf.RunAsync(BuildAgentWorkflowInput(sessionId.AgentName)),
             workflowOptions).ConfigureAwait(false);
 
         // Use a handle WITHOUT a pinned RunId so updates follow the continue-as-new chain.
@@ -100,24 +85,7 @@ internal sealed class DefaultTemporalAgentClient(
 
         workflowOptions.Rpc = new RpcOptions { CancellationToken = cancellationToken };
         await client.StartWorkflowAsync(
-            (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput
-            {
-                AgentName = sessionId.AgentName,
-                TaskQueue = taskQueue,
-                TimeToLive = options.GetTimeToLive(sessionId.AgentName) ?? TimeSpan.FromDays(14),
-                ActivityTimeout = options.ActivityTimeout,
-                HeartbeatTimeout = options.HeartbeatTimeout,
-                ApprovalTimeout = options.ApprovalTimeout,
-                RetryPolicy = options.RetryPolicy,
-                MaxEntryCount = options.MaxEntryCount,
-                HistoryReducer = options.HistoryReducer,
-                EnableSearchAttributes = options.EnableSearchAttributes,
-                UseExternalStore = options.UseExternalHistory,
-                EnablePerToolActivities = options.EnablePerToolActivities,
-                PerToolActivityOptions = options.PerToolActivityOptions,
-                MaxToolCallsPerTurn = options.MaxToolCallsPerTurn,
-                // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
-            }),
+            (AgentWorkflow wf) => wf.RunAsync(BuildAgentWorkflowInput(sessionId.AgentName)),
             workflowOptions).ConfigureAwait(false);
 
         var handle = client.GetWorkflowHandle<AgentWorkflow>(sessionId.WorkflowId);
@@ -190,24 +158,7 @@ internal sealed class DefaultTemporalAgentClient(
         try
         {
             await client.StartWorkflowAsync(
-                (AgentWorkflow wf) => wf.RunAsync(new AgentWorkflowInput
-                {
-                    AgentName = sessionId.AgentName,
-                    TaskQueue = taskQueue,
-                    TimeToLive = options.GetTimeToLive(sessionId.AgentName) ?? TimeSpan.FromDays(14),
-                    ActivityTimeout = options.ActivityTimeout,
-                    HeartbeatTimeout = options.HeartbeatTimeout,
-                    ApprovalTimeout = options.ApprovalTimeout,
-                    RetryPolicy = options.RetryPolicy,
-                    MaxEntryCount = options.MaxEntryCount,
-                    HistoryReducer = options.HistoryReducer,
-                    EnableSearchAttributes = options.EnableSearchAttributes,
-                    UseExternalStore = options.UseExternalHistory,
-                    EnablePerToolActivities = options.EnablePerToolActivities,
-                    PerToolActivityOptions = options.PerToolActivityOptions,
-                    MaxToolCallsPerTurn = options.MaxToolCallsPerTurn,
-                    // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
-                }),
+                (AgentWorkflow wf) => wf.RunAsync(BuildAgentWorkflowInput(sessionId.AgentName)),
                 workflowOptions).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -275,5 +226,82 @@ internal sealed class DefaultTemporalAgentClient(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scheduleId);
         return client.GetScheduleHandle(scheduleId);
+    }
+
+    /// <summary>
+    /// Constructs the <see cref="AgentWorkflowInput"/> for a session, applying the v0.3
+    /// settings-inheritance rule: when the agent name resolves to a
+    /// <see cref="DurableAgentRegistration"/>, per-agent overrides take precedence over the
+    /// worker-level <see cref="TemporalAgentsOptions"/> values; legacy registrations continue to
+    /// use the worker-level values verbatim.
+    /// </summary>
+    /// <remarks>
+    /// Phase 3 wires the durability flag (<see cref="AgentWorkflowInput.IsDurable"/>) and the
+    /// per-tool activity options dictionary
+    /// (<see cref="AgentWorkflowInput.DurableAgentToolActivityOptions"/>). Phase 4 broadens the
+    /// inheritance to include all per-agent scalars (timeouts, retry policy, max entry count,
+    /// history reducer, etc.). Until then, scalars continue to flow from the worker-level options
+    /// unchanged.
+    /// </remarks>
+    private AgentWorkflowInput BuildAgentWorkflowInput(string agentName)
+    {
+        var registration = options.DurableAgentRegistrations.GetValueOrDefault(agentName);
+
+        Dictionary<string, ActivityOptions>? toolActivityOptions = null;
+        if (registration is not null)
+        {
+            toolActivityOptions = BuildDurableAgentToolActivityOptions(registration);
+        }
+
+        return new AgentWorkflowInput
+        {
+            AgentName = agentName,
+            TaskQueue = taskQueue,
+            TimeToLive = options.GetTimeToLive(agentName) ?? TimeSpan.FromDays(14),
+            ActivityTimeout = options.ActivityTimeout,
+            HeartbeatTimeout = options.HeartbeatTimeout,
+            ApprovalTimeout = options.ApprovalTimeout,
+            RetryPolicy = options.RetryPolicy,
+            MaxEntryCount = options.MaxEntryCount,
+            HistoryReducer = options.HistoryReducer,
+            EnableSearchAttributes = options.EnableSearchAttributes,
+            UseExternalStore = options.UseExternalHistory,
+            EnablePerToolActivities = options.EnablePerToolActivities,
+            PerToolActivityOptions = options.PerToolActivityOptions,
+            MaxToolCallsPerTurn = registration?.MaxToolCallsPerTurn ?? options.MaxToolCallsPerTurn,
+            IsDurable = registration is not null,
+            DurableAgentToolActivityOptions = toolActivityOptions,
+            // OriginalCreatedAt intentionally omitted — null on first run, set by the workflow on CAN
+        };
+    }
+
+    /// <summary>
+    /// Pre-computes the per-tool <see cref="ActivityOptions"/> dictionary from a durable agent's
+    /// tool registrations. Each entry uses the per-tool overrides where set, falling back to the
+    /// worker-level defaults for unset fields. Built at workflow start so retry constraints are
+    /// pinned at the time the workflow began running and survive across continue-as-new
+    /// transitions (the dictionary travels with <see cref="AgentWorkflowInput"/>).
+    /// </summary>
+    private Dictionary<string, ActivityOptions> BuildDurableAgentToolActivityOptions(
+        DurableAgentRegistration registration)
+    {
+        var result = new Dictionary<string, ActivityOptions>(StringComparer.OrdinalIgnoreCase);
+        var workerActivityTimeout = options.ActivityTimeout;
+        var workerHeartbeatTimeout = options.HeartbeatTimeout;
+        RetryPolicy? workerRetryPolicy = options.RetryPolicy;
+
+        foreach (var tool in registration.Tools)
+        {
+            var toolOpts = tool.Options;
+            result[tool.Name] = new ActivityOptions
+            {
+                StartToCloseTimeout = toolOpts.StartToCloseTimeout ?? workerActivityTimeout,
+                HeartbeatTimeout = toolOpts.HeartbeatTimeout ?? workerHeartbeatTimeout,
+                RetryPolicy = toolOpts.RetryPolicy ?? workerRetryPolicy,
+                Summary = tool.Name,
+            };
+        }
+
+        return result;
     }
 }

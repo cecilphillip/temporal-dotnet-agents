@@ -6,6 +6,36 @@ Hired: 2026-04-05
 
 Agent hired and assigned to Temporal Agents Dev.
 
+### 2026-05-06 — Phase 3 of v0.3 API redesign (durable agent workflow loop)
+
+Executed Phase 3 of `src-temporalio-extensions-ai-readme-md-vivid-meteor.md`. Wires `AddDurableAgent` registrations into the workflow loop — Phase 1 added the types, Phase 2 added the registration + `InvokeAgentTool` activity + lazy composition, this phase adds the workflow side so end-to-end durable execution works.
+
+**Code changes:**
+- `Workflows/AgentWorkflowInput.cs`: added `IsDurable` flag and `DurableAgentToolActivityOptions` dictionary fields. Both default to false/null so the legacy path is unaffected.
+- `Workflows/AgentActivities.cs`: added `RunDurableAgentStepAsync` activity (`Temporalio.Extensions.Agents.RunDurableAgentStep`). Resolves the agent via Phase 2's `ResolveDurableAgent` (uses the composed pipeline with `UseAIContextProviders`) and pulls `IChatClient` off the cached `ChatClientAgent.ChatClient` property — the architectural difference from legacy `RunAgentStepAsync` (which goes straight to DI). Mirrors the streaming + heartbeat + tool-call detection logic of the legacy step activity. Did NOT touch `RunAgentStepAsync` or `ExecuteAgentAsync` per the plan (Phase 5 deletes them).
+- `Workflows/AgentWorkflow.cs`: branched `ExecuteAgentTurnAsync` on `_input.IsDurable` (precedes legacy step-mode branch). New `ExecuteDurableAgentTurnAsync` runs the same step-loop shape as legacy step mode (cap-bounded, `Workflow.WhenAllAsync` fan-out for tool calls, structured error message on cap exceeded) but dispatches to the new `RunDurableAgentStepAsync` + `InvokeAgentToolAsync` activities. Added `ResolveDurableToolActivityOptions` helper that looks up the per-tool dict on the input. Updated `CreateContinueAsNewException` to carry `IsDurable` and `DurableAgentToolActivityOptions` forward across CAN.
+- `Workflows/DefaultTemporalAgentClient.cs`: centralized `AgentWorkflowInput` construction in a `BuildAgentWorkflowInput(name)` helper called by `RunAgentAsync`, `RunAgentFireAndForgetAsync`, `RunAgentDelayedAsync`. Helper looks up the agent in `options.DurableAgentRegistrations` and sets `IsDurable = true` when found, plus pre-computes `DurableAgentToolActivityOptions` from the tool registrations using the `effective = perTool ?? worker` inheritance pattern. Phase 4 expands this to all per-agent scalars; Phase 3 only wires what the durable loop needs.
+- `Logs.cs`: added `LogDurableAgentTurnStarted/Iteration/Completed/Aborted` (event IDs 29-32).
+
+**Tests:**
+- New `tests/Temporalio.Extensions.Agents.IntegrationTests/DurableAgentIntegrationTests.cs` — 6 end-to-end tests via the embedded server: single turn no tools; single tool call; 3 parallel tool calls (asserts all 3 schedules precede first complete in workflow history); iteration cap returns structured error; write tool with `opts.NoRetry()` does not retry on activity failure; legacy `AddAIAgent` path still uses single-activity `ExecuteAgent` (no `RunDurableAgentStep`).
+- New `tests/Temporalio.Extensions.Agents.IntegrationTests/DurableAgentCrashSafetyTests.cs` — 2 cross-host tests: write tool `NoRetry` does not double-fire across worker restart; transient read-tool failure retries independently while a parallel `NoRetry`-registered write tool fires exactly once.
+- Reuses `ScriptedChatClient` and `RecordingTool` linked from the unit-test project via the existing `<Compile Include>` items in the integration tests csproj — no new scaffolding needed.
+
+**Docs:** added "Durable Agent Workflow Loop (v0.3 `AddDurableAgent`)" section to `docs/architecture/MAF/agent-sessions-and-workflow-loop.md` after the existing step-mode section. Includes the data-flow diagram, the two-activity-types table (`RunDurableAgentStep` + `InvokeAgentTool`), the iteration cap, the determinism cross-reference, and the CAN-carry-forward note. Added the new section to the table of contents.
+
+**Verification:**
+- `just build` clean (0/0).
+- Unit tests: 524 pass (190 AI + 334 Agents).
+- Agents integration tests: 71 pass (was 53; +6 DurableAgentIntegrationTests + 2 DurableAgentCrashSafetyTests + 10 from earlier phases).
+- AI integration tests: 13 pass.
+- Determinism guard `grep -rn "ConfigureAwait(false)" src/Temporalio.Extensions.Agents/Workflows/AgentWorkflow.cs src/Temporalio.Extensions.AI/DurableChatWorkflowBase.cs` returns zero matches.
+- `Task.WhenAll` only appears in workflow comments (don't-do warnings), never in real code.
+
+**Deviations from the plan:** none significant. The plan suggested using `cached.Agent.ChatClient` "if exposed, or extracting it from the cached pipeline"; `ChatClientAgent` exposes `ChatClient` as a public property in MAF 1.0, so the cast is straightforward. The plan also suggested `BuildResponseEntry` style for assembling the final `AgentResponse`; I mirrored the legacy `ExecuteStepModeTurnAsync` pattern (build directly from accumulated `allTurnMessages` + `totalUsage` + `Workflow.UtcNow`) which is what `BuildResponseEntry` would have produced anyway. The new test for `WriteToolWithNoRetry` initially attempted to use a `tools` parameter to BuildHost but had to switch to a `registerToolsViaBuilder` callback because options on tools must be set at `AddTool` time — small ergonomic adjustment to the helper.
+
+Did NOT proceed to Phase 4 — chief will dispatch after review.
+
 ### 2026-05-05 — Sample 1: ExternalHistoryStore (MAF)
 
 Implemented `samples/MAF/ExternalHistoryStore/` per the plan at `src-temporalio-extensions-ai-readme-md-vivid-meteor.md`. The sample bundles three concerns into one runnable demo:

@@ -82,4 +82,37 @@ internal sealed class AgentWorkflowInput : DurableChatWorkflowInput
     /// input so the cap is honored across continue-as-new transitions.
     /// </summary>
     public int MaxToolCallsPerTurn { get; init; } = 20;
+
+    /// <summary>
+    /// When <see langword="true"/>, the workflow runs the v0.3 durable-agent loop:
+    /// each LLM call is a separate <c>Temporalio.Extensions.Agents.RunDurableAgentStep</c> activity,
+    /// and each tool call is a separate <c>Temporalio.Extensions.Agents.InvokeAgentTool</c> activity
+    /// dispatched by the workflow. Set by <c>DefaultTemporalAgentClient</c> when the agent name
+    /// resolves to a <see cref="DurableAgentRegistration"/> in
+    /// <see cref="TemporalAgentsOptions.DurableAgentRegistrations"/>.
+    /// </summary>
+    /// <remarks>
+    /// Travels with the workflow input so the dispatch path is preserved across continue-as-new
+    /// transitions. Mutually exclusive with <see cref="EnablePerToolActivities"/> in practice —
+    /// the durable-agent path supersedes the legacy step-mode path. Phase 5 removes both
+    /// <see cref="EnablePerToolActivities"/> and the single-activity <c>ExecuteAgent</c> path.
+    /// </remarks>
+    public bool IsDurable { get; init; }
+
+    /// <summary>
+    /// Pre-computed per-tool <see cref="ActivityOptions"/> indexed by tool name (case-insensitive).
+    /// Populated by <c>DefaultTemporalAgentClient</c> from the agent's
+    /// <see cref="DurableAgentRegistration.Tools"/> at workflow start. When non-null and the tool
+    /// name is present, the workflow uses these options for the per-tool activity dispatch
+    /// (<c>Temporalio.Extensions.Agents.InvokeAgentTool</c>); otherwise it falls back to a default
+    /// built from <see cref="DurableChatWorkflowInput.ActivityTimeout"/> and <see cref="RetryPolicy"/>.
+    /// </summary>
+    /// <remarks>
+    /// The dictionary is built at workflow start (not at first activity dispatch) so retry
+    /// constraints — especially <c>MaximumAttempts = 1</c> on write tools — are pinned at the
+    /// time the workflow began running. Continue-as-new carries the same dictionary forward so
+    /// retry semantics survive across CAN transitions.
+    /// </remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, ActivityOptions>? DurableAgentToolActivityOptions { get; init; }
 }

@@ -410,6 +410,144 @@ internal sealed class AgentActivities(
         await historyStore.ReplaceAsync(input.SessionId, trimmed, ct).ConfigureAwait(false);
     }
 
+    // ── Phase 3 (v0.3): durable-agent step activity ──────────────────────────
+    //
+    // RunDurableAgentStepAsync is the LLM-call activity for durable agents. It mirrors the
+    // legacy step-mode RunAgentStepAsync at the level of "one LLM call per activity, returning
+    // either a final assistant message or a list of FunctionCallContent for the workflow to
+    // dispatch as separate per-tool activities". The architectural difference: this activity
+    // resolves the agent through ResolveDurableAgent (Phase 2 lazy composition) so the call
+    // routes through the agent's full composed pipeline — UseAIContextProviders is included,
+    // and the user's registration-time ChatOptions (Temperature, ResponseFormat, etc.) are
+    // applied. The legacy RunAgentStepAsync resolved IChatClient directly from DI; the durable
+    // path uses the agent's wrapped client so providers and per-agent configuration take effect.
+
+    /// <summary>
+    /// Step activity used by durable agents (registered via <c>TemporalAgentsOptions.AddDurableAgent</c>).
+    /// Performs ONE LLM call without invoking any tools. Returns either a final assistant message or
+    /// the assistant message containing one or more <see cref="FunctionCallContent"/> items that the
+    /// workflow then dispatches in parallel as separate <c>Temporalio.Extensions.Agents.InvokeAgentTool</c>
+    /// activities.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Resolves the agent via <see cref="ResolveDurableAgent"/> so the call passes through the
+    /// agent's composed <see cref="IChatClient"/> pipeline (with <c>UseAIContextProviders</c>
+    /// applied per Phase 2). The agent's <c>ChatOptions</c> template is cloned and the workflow
+    /// stamps Instructions, Tools, and the request-scoped <c>ResponseFormat</c> over the user's
+    /// values (the per-call invariants the workflow owns).
+    /// </para>
+    /// </remarks>
+    [Activity("Temporalio.Extensions.Agents.RunDurableAgentStep")]
+    public async Task<AgentStepResult> RunDurableAgentStepAsync(AgentStepInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var ctx = ActivityExecutionContext.Current;
+        var ct = ctx.CancellationToken;
+
+        var cached = ResolveDurableAgent(input.AgentName);
+        var sessionId = input.SessionId ?? TemporalAgentSessionId.Parse(ctx.Info.WorkflowId!);
+
+        // Restore the StateBag so AIContextProvider state survives across step iterations.
+        var session = TemporalAgentSession.FromStateBag(sessionId, input.SerializedStateBag);
+
+        // Build the per-call ChatOptions: clone the agent's registration-time template, then
+        // stamp Instructions / Tools / ResponseFormat — the three values that are owned per-call
+        // by the workflow + request rather than by the agent's static configuration.
+        var registration = cached.Registration;
+        var chatOptions = registration.ChatOptions?.Clone() ?? new ChatOptions();
+        chatOptions.Instructions = registration.Instructions;
+        var tools = cached.Tools.Values.Cast<AITool>().ToList();
+        chatOptions.Tools = tools.Count > 0 ? tools : null;
+        chatOptions.ResponseFormat = input.Request.ResponseFormat;
+
+        // Apply request-scoped tool filtering (mirrors AgentWorkflowWrapper / RunAgentStepAsync).
+        if (!input.Request.EnableToolCalls)
+        {
+            chatOptions.Tools = null;
+        }
+        else if (input.Request.EnableToolNames is { Count: > 0 } enabledNames && chatOptions.Tools is not null)
+        {
+            chatOptions.Tools = [.. chatOptions.Tools.Where(t => enabledNames.Contains(t.Name))];
+        }
+
+        // Use the agent's composed IChatClient so the AIContextProvider pipeline fires.
+        // ChatClientAgent exposes its constructor-supplied IChatClient via the public ChatClient
+        // property (MAF 1.0 surface), which is the wrapped pipeline we built in ComposeDurableAgent.
+        var chatClient = (cached.Agent as ChatClientAgent)?.ChatClient
+            ?? throw new InvalidOperationException(
+                $"Durable agent '{input.AgentName}' is not a ChatClientAgent; cannot resolve its IChatClient pipeline.");
+
+        var temporalContext = new TemporalAgentContext(ctx.TemporalClient, session, services);
+        TemporalAgentContext.SetCurrent(temporalContext);
+
+        using var span = TemporalAgentTelemetry.ActivitySource.StartActivity(
+            TemporalAgentTelemetry.AgentTurnSpanName,
+            ActivityKind.Client);
+
+        span?.SetTag(TemporalAgentTelemetry.AgentNameAttribute, input.AgentName);
+        span?.SetTag(TemporalAgentTelemetry.AgentSessionIdAttribute, sessionId.WorkflowId);
+        span?.SetTag(TemporalAgentTelemetry.AgentCorrelationIdAttribute, input.Request.CorrelationId);
+
+        try
+        {
+            _logger.LogAgentActivityStarted(input.AgentName, sessionId.WorkflowId);
+
+            // Heartbeat on each streamed chunk so long LLM calls don't exceed the heartbeat
+            // timeout. Mirrors RunAgentStepAsync exactly.
+            var collected = new List<ChatResponseUpdate>();
+            await foreach (var update in chatClient.GetStreamingResponseAsync(
+                    input.AccumulatedMessages, chatOptions, ct).WithCancellation(ct).ConfigureAwait(false))
+            {
+                collected.Add(update);
+                ctx.Heartbeat(update.Text);
+            }
+
+            var response = collected.ToChatResponse();
+            var assistantMessage = response.Messages.Count > 0
+                ? response.Messages[response.Messages.Count - 1]
+                : new ChatMessage(ChatRole.Assistant, string.Empty);
+
+            // Detect FunctionCallContent items: when present, the LLM is requesting tool
+            // invocation and the workflow will fan out per-tool activities.
+            var toolCalls = assistantMessage.Contents
+                .OfType<FunctionCallContent>()
+                .ToList();
+
+            if (span?.IsAllDataRequested == true)
+            {
+                span.SetTag(TemporalAgentTelemetry.InputTokensAttribute, response.Usage?.InputTokenCount);
+                span.SetTag(TemporalAgentTelemetry.OutputTokensAttribute, response.Usage?.OutputTokenCount);
+                span.SetTag(TemporalAgentTelemetry.TotalTokensAttribute, response.Usage?.TotalTokenCount);
+            }
+
+            _logger.LogAgentActivityCompleted(input.AgentName, sessionId.WorkflowId,
+                response.Usage?.InputTokenCount, response.Usage?.OutputTokenCount, response.Usage?.TotalTokenCount);
+
+            var serializedStateBag = session.SerializeStateBag();
+
+            return new AgentStepResult
+            {
+                IsFinal = toolCalls.Count == 0,
+                AssistantMessage = assistantMessage,
+                ToolCalls = toolCalls.Count == 0 ? null : toolCalls,
+                UpdatedStateBag = serializedStateBag,
+                Usage = response.Usage,
+            };
+        }
+        catch (Exception ex)
+        {
+            span?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            _logger.LogAgentActivityFailed(input.AgentName, sessionId.WorkflowId, ex);
+            throw;
+        }
+        finally
+        {
+            TemporalAgentContext.SetCurrent(null);
+        }
+    }
+
     // ── Phase 2 (v0.3): durable-agent dispatch ────────────────────────────────
     //
     // The InvokeAgentToolAsync activity is the per-tool dispatch path used by durable agents
