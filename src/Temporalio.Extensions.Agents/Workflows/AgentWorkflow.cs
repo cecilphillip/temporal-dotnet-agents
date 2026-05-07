@@ -12,18 +12,10 @@ namespace Temporalio.Extensions.Agents.Workflows;
 
 /// <summary>
 /// Long-lived Temporal workflow that acts as the durable backing store for an agent session.
-/// Equivalent to <c>AgentEntity</c> in the DurableTask integration.
+/// Drives the durable-agent dispatch loop: each LLM call is a separate <c>RunDurableAgentStep</c>
+/// activity, and each tool call is a separate <c>InvokeAgentTool</c> activity dispatched in
+/// parallel via <see cref="Workflow.WhenAllAsync{TResult}(IEnumerable{Task{TResult}})"/>.
 /// </summary>
-/// <remarks>
-/// <para>
-/// As of Layer 3, <see cref="AgentWorkflow"/> inherits the shared session loop, history
-/// management, HITL approval handlers, <c>[WorkflowQuery("GetHistory")]</c>, and
-/// <c>[WorkflowSignal("Shutdown")]</c> from <see cref="DurableChatWorkflowBase{TOutput}"/>.
-/// MAF-only concerns that remain on this subclass: the fire-and-forget signal handler,
-/// the <see cref="AgentSessionStateBag"/> carry-forward, the <c>AgentName</c> search
-/// attribute upsert, and the agent-name-aware structured logging.
-/// </para>
-/// </remarks>
 [Workflow("Temporalio.Extensions.Agents.AgentWorkflow")]
 internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
 {
@@ -39,23 +31,19 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
     [WorkflowRun]
     public async Task RunAsync(AgentWorkflowInput input)
     {
-        // The base also exposes a `RunAsync(DurableChatWorkflowInput)` (protected virtual);
-        // because they have different parameter types they're overloads, not a `new`-style
-        // hide. Set the typed `_input` before delegating into the base so subclass-only
-        // hooks (UpsertCustomSearchAttributes, ExecuteTurnAsync, CreateContinueAsNewException)
-        // can read agent-specific fields.
         ArgumentNullException.ThrowIfNull(input);
         _input = input;
-        // Restore StateBag carried across continue-as-new before the base session loop runs,
-        // so the first turn's activity dispatch can include the carried bag.
         _currentStateBag = input.CarriedStateBag;
 
         Workflow.Logger.LogWorkflowStarted(input.AgentName, Workflow.Info.WorkflowId, input.TimeToLive);
 
-        // Delegate to the shared session loop (history restore, search-attribute upsert, mutex,
-        // continue-as-new trigger). Decision #1 makes AgentWorkflowInput inherit from
-        // DurableChatWorkflowInput, so passing through is type-safe.
-        //
+        // Detect "external history mode" from the resolved agent input — when ANY history
+        // store is configured (worker default or per-agent override), the workflow strips
+        // message payloads from history entries before adding them, and the activity is
+        // responsible for loading/appending via IAgentHistoryStore.
+        // The `useExternalStore` flag below is computed from a workflow-only signal we set
+        // when reducing history for continue-as-new (see CreateContinueAsNewException).
+
         // External-store mode + HistoryReducer: the base throws ContinueAsNewException after
         // calling our CreateContinueAsNewException hook (which is synchronous, so it cannot
         // dispatch activities). Intercept the throw here to fire the ReduceHistoryInStoreAsync
@@ -64,10 +52,11 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         {
             await base.RunAsync(input).ConfigureAwait(true);
         }
-        catch (ContinueAsNewException can) when (input.UseExternalStore && input.HistoryReducer is not null)
+        catch (ContinueAsNewException can) when (UseExternalStoreMode && input.HistoryReducer is not null)
         {
             var reduceInput = new ReduceHistoryInStoreInput
             {
+                AgentName = input.AgentName,
                 SessionId = Workflow.Info.WorkflowId,
                 MaxEntryCount = input.MaxEntryCount,
             };
@@ -80,12 +69,19 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
                     Summary = AgentActivities.BuildActivitySummary(input.AgentName),
                     RetryPolicy = input.RetryPolicy,
                 }).ConfigureAwait(true);
-            // Re-throw the original CAN — its parameters carry the carry-forward state the
-            // base produced for us, including the (now externally reduced) input.
             _ = can;
             throw;
         }
     }
+
+    /// <summary>
+    /// Indicates whether this workflow is operating in external-history mode. The workflow side
+    /// reads this from the resolved cached state on first dispatch. Until then it cannot be known
+    /// (the activity composes the cache lazily); we therefore compute it from the activity's
+    /// echoed value via the workflow input. The agent client populates this via
+    /// <see cref="AgentWorkflowInput.UseExternalStoreMode"/> when starting the workflow.
+    /// </summary>
+    private bool UseExternalStoreMode => _input?.UseExternalStoreMode == true;
 
     /// <summary>
     /// Validates that a <see cref="RunAgentAsync"/> request is well-formed before it enters history.
@@ -106,15 +102,8 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
     [WorkflowUpdate("Run")]
     public async Task<AgentResponse> RunAgentAsync(RunRequest request)
     {
-        // Construct the request entry first — does not depend on `_input` and works even
-        // when the [WorkflowRun] body has not yet executed (modern Temporal event-loop
-        // dispatches DoUpdate jobs before InitializeWorkflow within an activation).
         var requestEntry = AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow);
 
-        // RunTurnAsync awaits Workflow.WaitConditionAsync(() => !_isProcessing) on entry —
-        // by the time that yield resumes, the workflow run loop has had a chance to run
-        // and `_input` has been populated. Logging that depends on `_input.AgentName`
-        // therefore moves to after the await.
         var (output, _) = await RunTurnAsync(requestEntry, chatOptions: null);
 
         Workflow.Logger.LogWorkflowUpdateCompleted(
@@ -125,11 +114,6 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
     /// <summary>
     /// Queues a fire-and-forget run. The workflow does not wait for this to complete.
     /// </summary>
-    /// <remarks>
-    /// <b>Limitation:</b> If the workflow hits continue-as-new or shuts down before the
-    /// fire-and-forget task completes, the in-flight request and its history entry may be lost.
-    /// Use <see cref="RunAgentAsync"/> for requests that must not be dropped.
-    /// </remarks>
     [WorkflowSignal("RunFireAndForget")]
     public Task RunAgentFireAndForgetAsync(RunRequest request)
     {
@@ -152,13 +136,6 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         DurableSessionRequest requestEntry,
         ChatOptions? chatOptions)
     {
-        // The base appended `requestEntry` to History before calling us. The Agent activity
-        // input already carries the originating RunRequest separately (it embeds tools,
-        // response format, orchestration ID, etc.); reconstruct the RunRequest from the
-        // typed agent request entry so callers do not have to thread it through.
-        // The `activityOptions` argument from the base carries StartToClose/Heartbeat values;
-        // build MAF-flavored ActivityOptions inside ExecuteAgentTurnAsync to add the agent
-        // Summary and RetryPolicy on top.
         _ = activityOptions;
         var agentRequestEntry = (AgentSessionRequest)requestEntry;
         var runRequest = ToRunRequest(agentRequestEntry);
@@ -170,43 +147,20 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
     protected override ContinueAsNewException CreateContinueAsNewException(
         DurableChatWorkflowInput input)
     {
-        // The base passes a freshly constructed DurableChatWorkflowInput carrying the reduced
-        // history and the shared session-loop fields (TimeToLive, MaxEntryCount, HistoryReducer,
-        // OriginalCreatedAt, EnableSearchAttributes, ApprovalTimeout, ActivityTimeout,
-        // HeartbeatTimeout) — NOT a downcast AgentWorkflowInput. Pull MAF-specific fields
-        // from `_input` (the original AgentWorkflowInput stored on first run) and merge in the
-        // base's freshly produced carry-forward state.
         ArgumentNullException.ThrowIfNull(_input);
 
-        // External-store mode: do NOT carry history forward in the workflow input — the
-        // store is the source of truth. The reduce-store dispatch happens in RunAsync's
-        // CAN-handling block (it must be awaited, and this hook is synchronous).
-        var useExternalStore = _input.UseExternalStore;
+        var useExternalStore = _input.UseExternalStoreMode;
 
         var carriedInput = new AgentWorkflowInput
         {
-            // MAF-specific state — sourced from the original input + per-turn _currentStateBag.
             AgentName = _input.AgentName,
             TaskQueue = _input.TaskQueue,
             CarriedStateBag = _currentStateBag,
             RetryPolicy = _input.RetryPolicy,
-            // Carry the external-store flag forward so the next run keeps using the store.
-            UseExternalStore = useExternalStore,
-            // Carry step-mode configuration forward so successive runs preserve per-tool
-            // retry constraints and the iteration cap across continue-as-new transitions.
-            EnablePerToolActivities = _input.EnablePerToolActivities,
-            PerToolActivityOptions = _input.PerToolActivityOptions,
+            UseExternalStoreMode = useExternalStore,
             MaxToolCallsPerTurn = _input.MaxToolCallsPerTurn,
-            // Phase 3 (v0.3): durable-agent path settings travel forward across continue-as-new
-            // so retry constraints (especially MaximumAttempts=1 on write tools) survive CAN.
-            IsDurable = _input.IsDurable,
             DurableAgentToolActivityOptions = _input.DurableAgentToolActivityOptions,
 
-            // Inherited fields — sourced from the base's freshly constructed `input` so the
-            // reduced CarriedHistory, OriginalCreatedAt, and other CAN-time decisions are honored.
-            // When external-store mode is on we explicitly null out CarriedHistory: the store
-            // owns history and re-carrying it inside the workflow input would defeat the
-            // PII / O(n²) protection.
             TimeToLive = input.TimeToLive,
             CarriedHistory = useExternalStore ? null : input.CarriedHistory,
             ApprovalTimeout = input.ApprovalTimeout,
@@ -214,8 +168,6 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             MaxEntryCount = input.MaxEntryCount,
             HistoryReducer = input.HistoryReducer,
             OriginalCreatedAt = input.OriginalCreatedAt,
-
-            // Activity timeouts are now inherited from DurableChatWorkflowInput — carry forward.
             ActivityTimeout = input.ActivityTimeout,
             HeartbeatTimeout = input.HeartbeatTimeout,
         };
@@ -239,16 +191,12 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
     }
 
     /// <inheritdoc/>
-    protected override bool ShouldStripMessagesFromHistoryEntry() =>
-        _input?.UseExternalStore == true;
+    protected override bool ShouldStripMessagesFromHistoryEntry() => UseExternalStoreMode;
 
     /// <inheritdoc/>
     protected override DurableSessionEntry StripMessagesFromEntry(DurableSessionEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        // Preserve MAF-specific subclass fields (OrchestrationId, ResponseType, ResponseSchema)
-        // when stripping the message payload. Falls back to the base implementation for the
-        // AI-library concrete types and for any unexpected subtype.
         return entry switch
         {
             AgentSessionRequest agentReq => new AgentSessionRequest
@@ -273,23 +221,11 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         };
     }
 
-    // ── HITL hooks (delegate to the inherited handlers) ─────────────────────
-    // The inherited [WorkflowUpdate("RequestApproval")], [WorkflowUpdate("SubmitApproval")],
-    // and [WorkflowQuery("GetPendingApproval")] handlers from DurableChatWorkflowBase are
-    // exposed verbatim here — no MAF-specific overrides are required because the approval
-    // mixin's logging is generic. Agent-name-specific approval logging was previously emitted
-    // via Logs.LogWorkflowApprovalRequested / LogWorkflowApprovalResolved; the inherited
-    // base uses ILogger.LogInformation directly. Future work could re-introduce the typed
-    // logger via a virtual hook on the base if dashboards depend on the structured fields.
-
     // ── Internals ───────────────────────────────────────────────────────────
 
     /// <summary>
     /// Reconstructs the original <see cref="RunRequest"/> from a stored
-    /// <see cref="AgentSessionRequest"/>. Loses the full <c>RunOptions</c> (which is not
-    /// serialized into history); the activity only needs <c>Messages</c>,
-    /// <c>CorrelationId</c>, <c>OrchestrationId</c>, and <c>ResponseFormat</c> to produce
-    /// the same output as the original call site.
+    /// <see cref="AgentSessionRequest"/>.
     /// </summary>
     private static RunRequest ToRunRequest(AgentSessionRequest entry)
     {
@@ -310,10 +246,7 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
 
     private async Task<AgentResponse> ExecuteAgentTurnAsync(RunRequest runRequest)
     {
-        // Build MAF-shaped activity options from the typed `_input`. Activity timeouts come from
-        // the base DurableChatWorkflowInput; MAF-specific extras (Summary, RetryPolicy) are
-        // layered on here.
-        var activityOptions = new ActivityOptions
+        var stepActivityOptions = new ActivityOptions
         {
             StartToCloseTimeout = _input!.ActivityTimeout,
             HeartbeatTimeout = _input!.HeartbeatTimeout,
@@ -321,95 +254,31 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             RetryPolicy = _input!.RetryPolicy,
         };
 
-        // Phase 3: durable agents (registered via AddDurableAgent) take precedence over the legacy
-        // step-mode + single-activity paths. The durable loop runs the LLM/tool dispatch entirely
-        // in workflow code, dispatching RunDurableAgentStep + InvokeAgentTool activities.
-        if (_input!.IsDurable)
-        {
-            // Do NOT use the ConfigureAwait-false escape hatch here: this runs inside a
-            // Temporal workflow and the continuation must remain on the workflow scheduler.
-            // Skipping the workflow scheduler's SynchronizationContext would put the
-            // continuation on the ThreadPool, leaving the workflow unable to register
-            // CompleteWorkflowExecution and causing it to hang at WorkflowTaskCompleted.
-            return await ExecuteDurableAgentTurnAsync(runRequest, activityOptions).ConfigureAwait(true);
-        }
-
-        // Branch: step mode (per-tool activities) runs the LLM/tool loop in workflow code so
-        // each tool call is a separately retryable / observable activity. Default mode wraps
-        // the entire turn in one ExecuteAgentAsync activity (existing behavior unchanged).
-        if (_input!.EnablePerToolActivities)
-        {
-            // Do NOT use the ConfigureAwait-false escape hatch below: this runs inside a
-            // Temporal workflow. Skipping the workflow scheduler's SynchronizationContext
-            // would put the continuation on the ThreadPool, leaving the workflow unable to
-            // register CompleteWorkflowExecution and causing it to hang at WorkflowTaskCompleted.
-            return await ExecuteStepModeTurnAsync(runRequest, activityOptions).ConfigureAwait(true);
-        }
-
-        // Pass the full conversation history (including the just-appended request entry) so the
-        // activity can flatten messages for the LLM. _history is inherited via the base's
-        // History accessor. In external-store mode the workflow does NOT inline history into
-        // the activity input — the activity loads it from IAgentHistoryStore instead, which
-        // keeps PII and large conversation graphs out of the Temporal ActivityScheduled event.
-        var useExternalStore = _input!.UseExternalStore;
-        var activityInput = new ExecuteAgentInput(
-            _input!.AgentName,
-            runRequest,
-            conversationHistory: useExternalStore ? null : History,
-            serializedStateBag: _currentStateBag,
-            sessionId: null,
-            useExternalStore: useExternalStore);
-
-        // Do NOT use the ConfigureAwait-false escape hatch here: this runs inside a Temporal
-        // workflow and the continuation must remain on the workflow scheduler. Skipping the
-        // workflow scheduler's SynchronizationContext would put the continuation on the
-        // ThreadPool, leaving the workflow unable to register CompleteWorkflowExecution and
-        // causing it to hang at WorkflowTaskCompleted. Mirrors the comment block in
-        // DurableAIFunction.cs:55-56 and matches the step-mode awaits below.
-        var result = await Workflow.ExecuteActivityAsync(
-            (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
-            activityOptions).ConfigureAwait(true);
-
-        // GAP 6: persist the updated StateBag for the next turn.
-        _currentStateBag = result.SerializedStateBag;
-        return result.Response;
+        return await ExecuteDurableAgentTurnAsync(runRequest, stepActivityOptions).ConfigureAwait(true);
     }
 
     /// <summary>
-    /// Phase 3 durable-agent dispatch loop. Drives the alternation between
-    /// <c>RunDurableAgentStepAsync</c> (one LLM call) and
-    /// <c>InvokeAgentToolAsync</c> per tool call. Tool calls within a single LLM response
-    /// fan out via <see cref="Workflow.WhenAllAsync{TResult}(IEnumerable{Task{TResult}})"/>;
-    /// the loop terminates when the LLM returns a final assistant message or when
+    /// Durable-agent dispatch loop. Drives the alternation between
+    /// <c>RunDurableAgentStepAsync</c> (one LLM call) and <c>InvokeAgentToolAsync</c> per tool
+    /// call. Tool calls within a single LLM response fan out via
+    /// <see cref="Workflow.WhenAllAsync{TResult}(IEnumerable{Task{TResult}})"/>; the loop
+    /// terminates when the LLM returns a final assistant message or when
     /// <see cref="DurableAgentBuilder.MaxToolCallsPerTurn"/> iterations are exceeded.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Architectural difference from <see cref="ExecuteStepModeTurnAsync"/> (legacy): the durable
-    /// path dispatches tools to <c>InvokeAgentToolAsync</c> (per-agent registry) rather than
-    /// MEAI's flat <c>InvokeFunctionAsync</c>. Two agents on one worker can register tools with
-    /// the same name without collision, and the Web UI shows a distinct activity type so
-    /// operators can tell which dispatch path is in play.
-    /// </para>
-    /// </remarks>
     private async Task<AgentResponse> ExecuteDurableAgentTurnAsync(
         RunRequest runRequest,
         ActivityOptions stepActivityOptions)
     {
         Workflow.Logger.LogDurableAgentTurnStarted(_input!.AgentName, Workflow.Info.WorkflowId);
 
-        // Accumulated messages threaded through the step loop. The base appended this turn's
-        // request entry to History before calling us; flatten History when in-workflow history
-        // mode is on so the LLM sees prior turns. When external-store mode is on the workflow's
-        // history is metadata-only (Messages stripped) — the FIRST step's activity loads prior
-        // history from the store and prepends it; the workflow only seeds the current turn's
-        // request messages here.
-        var accumulated = _input!.UseExternalStore
+        // External history mode: workflow does not retain message payloads in History entries
+        // (ShouldStripMessagesFromHistoryEntry returns true). Seed the LLM with just the current
+        // request's messages; the activity will load prior session history from the store on
+        // the first step (IsFirstStep = true).
+        var accumulated = UseExternalStoreMode
             ? new List<ChatMessage>(runRequest.Messages)
             : FlattenHistoryMessages();
 
-        // Track every assistant + function-result message produced across the loop so the
-        // final AgentResponse exposes the full multi-step transcript.
         var allTurnMessages = new List<ChatMessage>();
         UsageDetails? totalUsage = null;
 
@@ -424,17 +293,9 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
                 AccumulatedMessages = accumulated,
                 SerializedStateBag = _currentStateBag,
                 SessionId = null,
-                // First-step flag triggers an external-history-store load inside the activity.
-                // Subsequent iterations within the same turn already carry the loaded history
-                // through `accumulated`, so loading again would duplicate prior entries.
                 IsFirstStep = iteration == 0,
             };
 
-            // Do NOT use the ConfigureAwait-false escape hatch here: this runs inside a
-            // Temporal workflow and the continuation must remain on the workflow scheduler.
-            // Skipping the workflow scheduler's SynchronizationContext would put the
-            // continuation on the ThreadPool, leaving the workflow unable to register
-            // CompleteWorkflowExecution and causing it to hang at WorkflowTaskCompleted.
             var stepResult = await Workflow.ExecuteActivityAsync(
                 (AgentActivities a) => a.RunDurableAgentStepAsync(stepInput),
                 stepActivityOptions).ConfigureAwait(true);
@@ -467,9 +328,6 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
 
             Workflow.Logger.LogDurableAgentTurnIteration(_input!.AgentName, iteration + 1, toolCalls.Count);
 
-            // Fan out: dispatch one InvokeAgentToolAsync activity per tool call. Use
-            // Workflow.WhenAllAsync (the SDK-provided workflow-safe combinator) — never
-            // Task.WhenAll inside [Workflow] code.
             var toolTasks = new List<Task<InvokeAgentToolResult>>(toolCalls.Count);
             foreach (var tc in toolCalls)
             {
@@ -485,18 +343,13 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
                     CallId = tc.CallId,
                 };
 
-                // The awaited WhenAllAsync below stays on the workflow scheduler.
                 toolTasks.Add(Workflow.ExecuteActivityAsync(
                     (AgentActivities a) => a.InvokeAgentToolAsync(toolInput),
                     toolOptions));
             }
 
-            // Do NOT use the ConfigureAwait-false escape hatch here — this stays on the
-            // workflow scheduler. See comment block on the step await above for the rationale.
             var toolResults = await Workflow.WhenAllAsync(toolTasks).ConfigureAwait(true);
 
-            // Build a FunctionResultContent message for each completed tool. Order matches
-            // the order of toolCalls (Workflow.WhenAllAsync preserves input order).
             var functionResultContents = new List<AIContent>(toolCalls.Count);
             for (var i = 0; i < toolCalls.Count; i++)
             {
@@ -510,8 +363,6 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             allTurnMessages.Add(toolResultMessage);
         }
 
-        // Iteration cap exceeded — return a structured error response rather than letting
-        // workflow history grow without bound (runaway tool-calling guard).
         Workflow.Logger.LogDurableAgentTurnAborted(_input!.AgentName, maxIterations);
 
         var errorMessage = new ChatMessage(
@@ -528,13 +379,6 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         };
     }
 
-    /// <summary>
-    /// Flattens the in-workflow conversation <see cref="DurableChatWorkflowBase{TOutput}.History"/>
-    /// (which already includes this turn's request entry, just appended by the base) into a
-    /// flat list of <see cref="ChatMessage"/> instances suitable for an LLM call. Used by
-    /// <see cref="ExecuteDurableAgentTurnAsync"/> when external history mode is off so that
-    /// multi-turn conversations carry prior assistant + tool messages forward.
-    /// </summary>
     private List<ChatMessage> FlattenHistoryMessages()
     {
         var totalMessageCount = 0;
@@ -555,167 +399,10 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         return messages;
     }
 
-    /// <summary>
-    /// Resolves <see cref="ActivityOptions"/> for a single durable-agent per-tool dispatch.
-    /// Looks up the tool name in <see cref="AgentWorkflowInput.DurableAgentToolActivityOptions"/>
-    /// first; falls back to a default built from the workflow's standard activity timeouts and
-    /// retry policy when no per-tool entry exists.
-    /// </summary>
     private ActivityOptions ResolveDurableToolActivityOptions(string toolName)
     {
         if (_input!.DurableAgentToolActivityOptions is not null
             && _input!.DurableAgentToolActivityOptions.TryGetValue(toolName, out var perTool))
-        {
-            return perTool;
-        }
-
-        return new ActivityOptions
-        {
-            StartToCloseTimeout = _input!.ActivityTimeout,
-            HeartbeatTimeout = _input!.HeartbeatTimeout,
-            Summary = toolName,
-            RetryPolicy = _input!.RetryPolicy,
-        };
-    }
-
-    /// <summary>
-    /// Step-mode tool-dispatch loop. The workflow alternates between calling
-    /// <c>RunAgentStepAsync</c> (one LLM call) and dispatching <c>InvokeFunctionAsync</c>
-    /// activities in parallel via <see cref="Workflow.WhenAllAsync{TResult}(IEnumerable{Task{TResult}})"/>
-    /// for each <see cref="FunctionCallContent"/> the LLM produced. Loop terminates when the
-    /// LLM returns a final assistant message or <see cref="AgentWorkflowInput.MaxToolCallsPerTurn"/>
-    /// iterations are exceeded.
-    /// </summary>
-    private async Task<AgentResponse> ExecuteStepModeTurnAsync(
-        RunRequest runRequest,
-        ActivityOptions stepActivityOptions)
-    {
-        // Accumulated messages threaded through the step loop. Initial set is the request
-        // messages — note: the request entry was already appended to history by the base.
-        var accumulated = new List<ChatMessage>(runRequest.Messages);
-
-        // Track every assistant + function-result message produced across the loop so the
-        // final AgentResponse exposes the full multi-step transcript (per the plan §"History
-        // Representation for Multi-Step Turns").
-        var allTurnMessages = new List<ChatMessage>();
-        UsageDetails? totalUsage = null;
-
-        var maxIterations = _input!.MaxToolCallsPerTurn;
-
-        for (var iteration = 0; iteration < maxIterations; iteration++)
-        {
-            var stepInput = new AgentStepInput
-            {
-                AgentName = _input!.AgentName,
-                Request = runRequest,
-                AccumulatedMessages = accumulated,
-                SerializedStateBag = _currentStateBag,
-                SessionId = null,
-            };
-
-            // Do NOT use the ConfigureAwait-false escape hatch here: this runs inside a
-            // Temporal workflow and the continuation must remain on the workflow scheduler.
-            var stepResult = await Workflow.ExecuteActivityAsync(
-                (AgentActivities a) => a.RunAgentStepAsync(stepInput),
-                stepActivityOptions).ConfigureAwait(true);
-
-            // Persist the StateBag after each step.
-            _currentStateBag = stepResult.UpdatedStateBag;
-
-            // Accumulate usage across iterations for the final response.
-            if (stepResult.Usage is not null)
-            {
-                totalUsage ??= new UsageDetails();
-                totalUsage.InputTokenCount = (totalUsage.InputTokenCount ?? 0) + (stepResult.Usage.InputTokenCount ?? 0);
-                totalUsage.OutputTokenCount = (totalUsage.OutputTokenCount ?? 0) + (stepResult.Usage.OutputTokenCount ?? 0);
-                totalUsage.TotalTokenCount = (totalUsage.TotalTokenCount ?? 0) + (stepResult.Usage.TotalTokenCount ?? 0);
-            }
-
-            // Always include the assistant message in the running transcript and accumulator.
-            accumulated.Add(stepResult.AssistantMessage);
-            allTurnMessages.Add(stepResult.AssistantMessage);
-
-            if (stepResult.IsFinal || stepResult.ToolCalls is null || stepResult.ToolCalls.Count == 0)
-            {
-                // Final answer — return the assembled multi-step response.
-                return new AgentResponse
-                {
-                    Messages = allTurnMessages,
-                    Usage = totalUsage,
-                    CreatedAt = Workflow.UtcNow,
-                };
-            }
-
-            // Fan out: dispatch one InvokeFunctionAsync activity per tool call. The workflow
-            // scheduler runs them in parallel; results are collected via Workflow.WhenAllAsync.
-            var toolCalls = stepResult.ToolCalls;
-            var toolTasks = new List<Task<DurableFunctionOutput>>(toolCalls.Count);
-            foreach (var tc in toolCalls)
-            {
-                var toolOptions = ResolveToolActivityOptions(tc.Name);
-
-                var toolInput = new DurableFunctionInput
-                {
-                    FunctionName = tc.Name,
-                    Arguments = tc.Arguments is null
-                        ? null
-                        : new Dictionary<string, object?>(tc.Arguments),
-                };
-
-                // The awaited WhenAllAsync below stays on the workflow scheduler.
-                toolTasks.Add(Workflow.ExecuteActivityAsync(
-                    (DurableFunctionActivities a) => a.InvokeFunctionAsync(toolInput),
-                    toolOptions));
-            }
-
-            // Use Workflow.WhenAllAsync (the SDK-provided workflow-safe combinator) to wait
-            // for all tool activities. Do NOT use Task.WhenAll inside [Workflow] code.
-            var toolOutputs = await Workflow.WhenAllAsync(toolTasks).ConfigureAwait(true);
-
-            // Build a FunctionResultContent message for each completed tool. Order matches
-            // the order of toolCalls (Workflow.WhenAllAsync preserves input order).
-            var functionResultContents = new List<AIContent>(toolCalls.Count);
-            for (var i = 0; i < toolCalls.Count; i++)
-            {
-                functionResultContents.Add(new FunctionResultContent(
-                    callId: toolCalls[i].CallId,
-                    result: toolOutputs[i].Result));
-            }
-
-            var toolResultMessage = new ChatMessage(ChatRole.Tool, functionResultContents);
-            accumulated.Add(toolResultMessage);
-            allTurnMessages.Add(toolResultMessage);
-        }
-
-        // Loop iteration cap exceeded — return a structured error response rather than letting
-        // workflow history grow without bound (runaway tool-calling guard).
-        Workflow.Logger.LogWarning(
-            "[{AgentName}/{WorkflowId}] Step-mode loop exceeded MaxToolCallsPerTurn ({Max}); returning error response.",
-            _input!.AgentName, Workflow.Info.WorkflowId, maxIterations);
-
-        var errorMessage = new ChatMessage(
-            ChatRole.Assistant,
-            $"Maximum tool-call iterations ({maxIterations}) exceeded for this turn. " +
-            "The agent did not converge on a final answer.");
-        allTurnMessages.Add(errorMessage);
-
-        return new AgentResponse
-        {
-            Messages = allTurnMessages,
-            Usage = totalUsage,
-            CreatedAt = Workflow.UtcNow,
-        };
-    }
-
-    /// <summary>
-    /// Resolves <see cref="ActivityOptions"/> for a single per-tool dispatch. Looks up the
-    /// tool name in <see cref="AgentWorkflowInput.PerToolActivityOptions"/> first; falls back
-    /// to the workflow's default activity options when no per-tool entry exists.
-    /// </summary>
-    private ActivityOptions ResolveToolActivityOptions(string toolName)
-    {
-        if (_input!.PerToolActivityOptions is not null
-            && _input!.PerToolActivityOptions.TryGetValue(toolName, out var perTool))
         {
             return perTool;
         }
@@ -734,7 +421,6 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         try
         {
             var requestEntry = AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow);
-            // Reuses the same turn machinery (mutex, history append, response build) as RunAgentAsync.
             await RunTurnAsync(requestEntry, chatOptions: null).ConfigureAwait(true);
         }
         catch (Exception ex)
@@ -742,12 +428,6 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             Workflow.Logger.LogFireAndForgetActivityFailed(
                 _input?.AgentName ?? "unknown", Workflow.Info.WorkflowId, ex);
             // Swallow — fire-and-forget errors must not crash the session.
-            // RunTurnAsync's atomicity guarantees that on activity failure no orphan request
-            // entry is appended (the request entry is appended inside RunTurnAsync's try block,
-            // but the response entry is only appended on success — the partial-pair concern from
-            // the prior implementation is moot because the base always pairs them inside one
-            // try, and on exception both the request entry append and the activity dispatch are
-            // re-thrown together to this catch).
         }
     }
 }

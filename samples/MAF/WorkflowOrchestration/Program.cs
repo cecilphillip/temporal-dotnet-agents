@@ -67,7 +67,7 @@ builder.Services
     .AddTemporalAgents(options =>
     {
         // Register the agent (or factory for DI-resolved agents)
-        options.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1));
+        options.AddDurableAgent("Assistant", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
     })
     .AddWorkflow<WeatherOrchestrationWorkflow>();
 

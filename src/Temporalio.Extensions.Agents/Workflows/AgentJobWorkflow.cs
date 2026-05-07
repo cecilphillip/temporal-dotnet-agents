@@ -1,17 +1,17 @@
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
 /// <summary>
 /// A simple, fire-and-forget Temporal workflow for scheduled or deferred agent runs.
-/// Unlike <see cref="AgentWorkflow"/>, this workflow carries no conversation history,
+/// Unlike <see cref="AgentWorkflow"/>, this workflow carries no persisted history,
 /// no StateBag, no TTL loop, and no <c>[WorkflowUpdate]</c> handlers — it executes
-/// a single agent activity and exits.
+/// the durable-agent dispatch loop in-place and exits.
 /// </summary>
 /// <remarks>
 /// Workflow ID convention: <c>ta-{agentName}-scheduled-{scheduleId}</c>.
-/// This is disjoint from interactive session IDs (<c>ta-{agentName}-{sessionKey}</c>),
-/// so scheduled runs never collide with live sessions.
 /// </remarks>
 [Workflow("Temporalio.Extensions.Agents.AgentJobWorkflow")]
 internal sealed class AgentJobWorkflow
@@ -19,25 +19,78 @@ internal sealed class AgentJobWorkflow
     [WorkflowRun]
     public async Task RunAsync(AgentJobInput input)
     {
-        // No history, no StateBag — each scheduled run starts completely fresh.
-        // The OTel agent.turn span fires automatically because it lives in
-        // AgentActivities.ExecuteAgentAsync — the same code path as session runs.
-        //
-        // Note: ExecuteAgentInput is constructed outside the expression tree to avoid
-        // CS9175 (collection expressions are not allowed inside expression trees).
-        var activityInput = new ExecuteAgentInput(
-            input.AgentName,
-            input.Request,
-            []);     // empty conversation history — no prior context for jobs
+        var stepActivityOptions = new ActivityOptions
+        {
+            StartToCloseTimeout = input.ActivityTimeout,
+            HeartbeatTimeout = input.HeartbeatTimeout,
+            Summary = AgentActivities.BuildActivitySummary(input.AgentName),
+            RetryPolicy = input.RetryPolicy,
+        };
 
-        await Temporalio.Workflows.Workflow.ExecuteActivityAsync(
-            (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
-            new ActivityOptions
+        var accumulated = new List<ChatMessage>(input.Request.Messages);
+        const int maxIterations = 20;
+
+        for (var iteration = 0; iteration < maxIterations; iteration++)
+        {
+            var stepInput = new AgentStepInput
             {
-                StartToCloseTimeout = input.ActivityTimeout,
-                HeartbeatTimeout = input.HeartbeatTimeout,
-                Summary = AgentActivities.BuildActivitySummary(input.AgentName),
-                RetryPolicy = input.RetryPolicy,
-            });
+                AgentName = input.AgentName,
+                Request = input.Request,
+                AccumulatedMessages = accumulated,
+                SerializedStateBag = null,
+                SessionId = null,
+                IsFirstStep = iteration == 0,
+            };
+
+            var stepResult = await Workflow.ExecuteActivityAsync(
+                (AgentActivities a) => a.RunDurableAgentStepAsync(stepInput),
+                stepActivityOptions).ConfigureAwait(true);
+
+            accumulated.Add(stepResult.AssistantMessage);
+
+            if (stepResult.IsFinal || stepResult.ToolCalls is null || stepResult.ToolCalls.Count == 0)
+            {
+                return;
+            }
+
+            var toolCalls = stepResult.ToolCalls;
+            var toolTasks = new List<Task<InvokeAgentToolResult>>(toolCalls.Count);
+            foreach (var tc in toolCalls)
+            {
+                var toolOptions = new ActivityOptions
+                {
+                    StartToCloseTimeout = input.ActivityTimeout,
+                    HeartbeatTimeout = input.HeartbeatTimeout,
+                    Summary = tc.Name,
+                    RetryPolicy = input.RetryPolicy,
+                };
+
+                var toolInput = new InvokeAgentToolInput
+                {
+                    AgentName = input.AgentName,
+                    ToolName = tc.Name,
+                    Arguments = tc.Arguments is null
+                        ? null
+                        : new Dictionary<string, object?>(tc.Arguments),
+                    CallId = tc.CallId,
+                };
+
+                toolTasks.Add(Workflow.ExecuteActivityAsync(
+                    (AgentActivities a) => a.InvokeAgentToolAsync(toolInput),
+                    toolOptions));
+            }
+
+            var toolResults = await Workflow.WhenAllAsync(toolTasks).ConfigureAwait(true);
+
+            var functionResultContents = new List<AIContent>(toolCalls.Count);
+            for (var i = 0; i < toolCalls.Count; i++)
+            {
+                functionResultContents.Add(new FunctionResultContent(
+                    callId: toolCalls[i].CallId,
+                    result: toolResults[i].Result));
+            }
+
+            accumulated.Add(new ChatMessage(ChatRole.Tool, functionResultContents));
+        }
     }
 }

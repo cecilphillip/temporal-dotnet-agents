@@ -87,24 +87,13 @@ public class AddDurableAgentTests
     }
 
     [Fact]
-    public void AddDurableAgent_DuplicatesLegacyAddAIAgent_ThrowsInvalidOperationException()
+    public void AddDurableAgent_DuplicatesProxy_ThrowsInvalidOperationException()
     {
         var options = new TemporalAgentsOptions();
-        options.AddAIAgent(new StubAIAgent("Shared"));
-
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            options.AddDurableAgent("Shared", agent => agent.ChatClient = _ => NewChatClient()));
-        Assert.Contains("Shared", ex.Message);
-    }
-
-    [Fact]
-    public void AddDurableAgent_DuplicatesAddAIAgentFactory_ThrowsInvalidOperationException()
-    {
-        var options = new TemporalAgentsOptions();
-        options.AddAIAgentFactory("FactoryAgent", _ => new StubAIAgent("FactoryAgent"));
+        options.AddAgentProxy("Shared");
 
         Assert.Throws<InvalidOperationException>(() =>
-            options.AddDurableAgent("FactoryAgent", agent => agent.ChatClient = _ => NewChatClient()));
+            options.AddDurableAgent("Shared", agent => agent.ChatClient = _ => NewChatClient()));
     }
 
     [Fact]
@@ -195,20 +184,6 @@ public class AddDurableAgentTests
         var options = new TemporalAgentsOptions();
         var returned = options.AddDurableAgent("Chained", agent => agent.ChatClient = _ => NewChatClient());
         Assert.Same(options, returned);
-    }
-
-    [Fact]
-    public void AddDurableAgent_SyntheticLegacyFactory_ThrowsWhenInvoked()
-    {
-        // The synthetic factory wired into _agentFactories is defense-in-depth — it should
-        // never fire in production because Phase 3 will branch the workflow before reaching
-        // the legacy path. If it does fire, it must surface a clear wiring-bug message.
-        var options = new TemporalAgentsOptions();
-        options.AddDurableAgent("Trip", agent => agent.ChatClient = _ => NewChatClient());
-
-        var factory = options.GetAgentFactories()["Trip"];
-        var ex = Assert.Throws<InvalidOperationException>(() => factory(null!));
-        Assert.Contains("AddDurableAgent", ex.Message);
     }
 
     private sealed class TestChatClient : IChatClient

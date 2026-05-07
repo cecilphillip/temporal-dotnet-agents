@@ -12,8 +12,8 @@ namespace Temporalio.Extensions.Agents;
 
 /// <summary>
 /// An <see cref="AIAgent"/> for use inside orchestrating Temporal workflows.
-/// Calls <see cref="AgentActivities.ExecuteAgentAsync"/> directly via
-/// <see cref="Workflow.ExecuteActivityAsync{TActivityInstance, TResult}"/>.
+/// Drives the durable-agent dispatch loop (<c>RunDurableAgentStep</c> + <c>InvokeAgentTool</c>)
+/// directly via <see cref="Workflow.ExecuteActivityAsync{TActivityInstance, TResult}"/>.
 /// Maintains conversation history as workflow state (replayed from event history).
 /// </summary>
 /// <remarks>
@@ -111,22 +111,110 @@ public sealed class TemporalAIAgent : AIAgent
         _history.Add(AgentSessionRequest.FromRunRequest(request, Workflow.UtcNow));
         _requestCount++;
 
-        // TemporalAIAgent lives inside a workflow and creates sessions in-process,
-        // so StateBag persistence across turns is handled by the workflow history itself.
-        // We pass null for the StateBag (no cross-activity-call state needed here).
-        // We pass the session ID explicitly because the orchestrating workflow's ID
-        // may not follow the ta-{agentName}-{key} convention.
         var sessionId = session is TemporalAgentSession ts ? ts.SessionId : (TemporalAgentSessionId?)null;
-        var activityInput = new ExecuteAgentInput(_agentName, request, _history, sessionId: sessionId);
 
         Workflow.Logger.LogInWorkflowAgentDispatching(_agentName, _requestCount);
 
-        var result = await Workflow.ExecuteActivityAsync(
-            (AgentActivities a) => a.ExecuteAgentAsync(activityInput),
-            _activityOptions);
+        // Drive the durable-agent dispatch loop for sub-agents inside an orchestrating workflow.
+        // Mirrors the AgentWorkflow main loop but without continue-as-new / search attributes /
+        // history reduction (the orchestrating workflow owns those concerns).
+        var accumulated = new List<ChatMessage>();
+        foreach (var entry in _history)
+        {
+            foreach (var m in entry.Messages)
+            {
+                accumulated.Add(m);
+            }
+        }
 
-        _history.Add(AgentSessionResponse.FromAgentResponse(request.CorrelationId!, result.Response, Workflow.UtcNow));
-        return result.Response;
+        var allTurnMessages = new List<ChatMessage>();
+        UsageDetails? totalUsage = null;
+        const int maxIterations = 20;
+
+        for (var iteration = 0; iteration < maxIterations; iteration++)
+        {
+            var stepInput = new AgentStepInput
+            {
+                AgentName = _agentName,
+                Request = request,
+                AccumulatedMessages = accumulated,
+                SerializedStateBag = null,
+                SessionId = sessionId,
+                IsFirstStep = iteration == 0,
+            };
+
+            var stepResult = await Workflow.ExecuteActivityAsync(
+                (AgentActivities a) => a.RunDurableAgentStepAsync(stepInput),
+                _activityOptions);
+
+            if (stepResult.Usage is not null)
+            {
+                totalUsage ??= new UsageDetails();
+                totalUsage.InputTokenCount = (totalUsage.InputTokenCount ?? 0) + (stepResult.Usage.InputTokenCount ?? 0);
+                totalUsage.OutputTokenCount = (totalUsage.OutputTokenCount ?? 0) + (stepResult.Usage.OutputTokenCount ?? 0);
+                totalUsage.TotalTokenCount = (totalUsage.TotalTokenCount ?? 0) + (stepResult.Usage.TotalTokenCount ?? 0);
+            }
+
+            accumulated.Add(stepResult.AssistantMessage);
+            allTurnMessages.Add(stepResult.AssistantMessage);
+
+            if (stepResult.IsFinal || stepResult.ToolCalls is null || stepResult.ToolCalls.Count == 0)
+            {
+                var response = new AgentResponse
+                {
+                    Messages = allTurnMessages,
+                    Usage = totalUsage,
+                    CreatedAt = Workflow.UtcNow,
+                };
+
+                _history.Add(AgentSessionResponse.FromAgentResponse(
+                    request.CorrelationId!, response, Workflow.UtcNow));
+                return response;
+            }
+
+            var toolCalls = stepResult.ToolCalls;
+            var toolTasks = new List<Task<InvokeAgentToolResult>>(toolCalls.Count);
+            foreach (var tc in toolCalls)
+            {
+                var toolInput = new InvokeAgentToolInput
+                {
+                    AgentName = _agentName,
+                    ToolName = tc.Name,
+                    Arguments = tc.Arguments is null
+                        ? null
+                        : new Dictionary<string, object?>(tc.Arguments),
+                    CallId = tc.CallId,
+                };
+
+                toolTasks.Add(Workflow.ExecuteActivityAsync(
+                    (AgentActivities a) => a.InvokeAgentToolAsync(toolInput),
+                    _activityOptions));
+            }
+
+            var toolResults = await Workflow.WhenAllAsync(toolTasks);
+
+            var functionResultContents = new List<AIContent>(toolCalls.Count);
+            for (var i = 0; i < toolCalls.Count; i++)
+            {
+                functionResultContents.Add(new FunctionResultContent(
+                    callId: toolCalls[i].CallId,
+                    result: toolResults[i].Result));
+            }
+
+            var toolResultMessage = new ChatMessage(ChatRole.Tool, functionResultContents);
+            accumulated.Add(toolResultMessage);
+            allTurnMessages.Add(toolResultMessage);
+        }
+
+        var iterCapResponse = new AgentResponse
+        {
+            Messages = allTurnMessages,
+            Usage = totalUsage,
+            CreatedAt = Workflow.UtcNow,
+        };
+        _history.Add(AgentSessionResponse.FromAgentResponse(
+            request.CorrelationId!, iterCapResponse, Workflow.UtcNow));
+        return iterCapResponse;
     }
 
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(

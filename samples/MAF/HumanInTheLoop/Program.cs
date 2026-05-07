@@ -98,10 +98,10 @@ builder.Services
         // HITL requires a timeout that covers the full human review window.
         // The underlying activity heartbeats during this period so the worker
         // won't treat it as stuck — as long as HeartbeatTimeout < ActivityTimeout.
-        opts.ActivityTimeout  = TimeSpan.FromHours(24);
-        opts.HeartbeatTimeout = TimeSpan.FromMinutes(5);
+        opts.DefaultActivityTimeout  = TimeSpan.FromHours(24);
+        opts.DefaultHeartbeatTimeout = TimeSpan.FromMinutes(5);
 
-        opts.AddAIAgent(emailAgent, timeToLive: TimeSpan.FromHours(2));
+        opts.AddDurableAgent("EmailAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(2); });
     });
 
 using var host = builder.Build();

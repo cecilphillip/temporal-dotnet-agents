@@ -66,7 +66,7 @@ var agent = openAiClient
 builder.Services.AddTemporalClient(temporalAddress, "default");
 builder.Services
     .AddHostedTemporalWorker("agents")
-    .AddTemporalAgents(options => { options.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1)); });
+    .AddTemporalAgents(options => { options.AddDurableAgent("Assistant", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); }); });
 
 // ── Step 3: Run until Ctrl+C ──────────────────────────────────────────────────
 Console.WriteLine("Agent worker started. Listening on task queue 'agents'...");

@@ -1,11 +1,8 @@
 using FakeItEasy;
-using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Temporalio.Client;
-using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Agents.HistoryStore;
-using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.Agents.Tests.Helpers;
 using Temporalio.Extensions.Agents.Workflows;
 using Temporalio.Extensions.Hosting;
@@ -14,208 +11,115 @@ using Xunit;
 namespace Temporalio.Extensions.Agents.Tests;
 
 /// <summary>
-/// Coverage for the opt-in <see cref="IAgentHistoryStore"/> abstraction
-/// (Feature 1 / Layer 4 of the EXOS4x review).
+/// Coverage for the v0.3 <see cref="IAgentHistoryStore"/> integration via
+/// <see cref="TemporalAgentsOptions.HistoryStore"/> and
+/// <see cref="DurableAgentBuilder.HistoryStore"/>.
 /// </summary>
 public class AgentHistoryStoreTests
 {
     [Fact]
-    public void TemporalAgentsOptions_UseExternalHistory_DefaultsToFalse()
+    public void TemporalAgentsOptions_HistoryStore_DefaultsToNull()
     {
         var options = new TemporalAgentsOptions();
-        Assert.False(options.UseExternalHistory);
+        Assert.Null(options.HistoryStore);
     }
 
     [Fact]
-    public void ExecuteAgentInput_DefaultBehavior_HistoryFlowsThroughInput()
+    public void DurableAgentBuilder_HistoryStore_DefaultsToNull()
     {
-        // Default mode (UseExternalStore=false): conversation history MUST flow through
-        // ExecuteAgentInput.ConversationHistory exactly as before. This pins the byte-identical
-        // behavior promise for callers who do not opt into external history.
-        var history = new List<DurableSessionEntry>
+        var options = new TemporalAgentsOptions();
+        options.AddDurableAgent("agent", agent =>
         {
-            DurableSessionRequest.FromMessages([new ChatMessage(ChatRole.User, "hi")]),
+            agent.ChatClient = _ => A.Fake<IChatClient>();
+        });
+
+        Assert.Null(options.DurableAgentRegistrations["agent"].HistoryStore);
+    }
+
+    [Fact]
+    public void WorkerHistoryStore_FlowsToWorkflowInputAsExternalStoreMode()
+    {
+        var options = new TemporalAgentsOptions
+        {
+            HistoryStore = _ => new FakeHistoryStore(),
         };
-        var input = new ExecuteAgentInput("Agent", new RunRequest("hi") { CorrelationId = "c1" }, history);
+        options.AddDurableAgent("agent", agent =>
+        {
+            agent.ChatClient = _ => A.Fake<IChatClient>();
+        });
 
-        Assert.NotNull(input.ConversationHistory);
-        Assert.Single(input.ConversationHistory);
-        Assert.False(input.UseExternalStore);
+        var input = DefaultTemporalAgentClient.BuildAgentWorkflowInputCore("agent", options, "test-task-queue");
+
+        Assert.True(input.UseExternalStoreMode);
     }
 
     [Fact]
-    public void ExecuteAgentInput_ExternalStoreMode_AcceptsNullConversationHistory()
+    public void PerAgentHistoryStore_OverridesWorkerDefault()
     {
-        // External-store mode: ConversationHistory must be allowed to be null so the workflow
-        // can omit it from the Temporal ActivityScheduled event (which is the actual PII /
-        // O(n^2) event-log mitigation Layer 4 ships).
-        var input = new ExecuteAgentInput(
-            "Agent",
-            new RunRequest("hi") { CorrelationId = "c1" },
-            conversationHistory: null,
-            useExternalStore: true);
+        var options = new TemporalAgentsOptions();
+        options.AddDurableAgent("agent", agent =>
+        {
+            agent.ChatClient = _ => A.Fake<IChatClient>();
+            agent.HistoryStore = _ => new FakeHistoryStore();
+        });
 
-        Assert.Null(input.ConversationHistory);
-        Assert.True(input.UseExternalStore);
+        var input = DefaultTemporalAgentClient.BuildAgentWorkflowInputCore("agent", options, "test-task-queue");
+
+        Assert.True(input.UseExternalStoreMode);
     }
 
     [Fact]
-    public void AddTemporalAgents_WithUseExternalHistory_ButNoStore_ThrowsAtComposition()
+    public void NoHistoryStore_FlowsAsInWorkflowMode()
     {
-        // Worker startup validation: enabling UseExternalHistory without registering a store
-        // must fail loudly at composition time, not silently at the first turn.
+        var options = new TemporalAgentsOptions();
+        options.AddDurableAgent("agent", agent =>
+        {
+            agent.ChatClient = _ => A.Fake<IChatClient>();
+        });
+
+        var input = DefaultTemporalAgentClient.BuildAgentWorkflowInputCore("agent", options, "test-task-queue");
+
+        Assert.False(input.UseExternalStoreMode);
+    }
+
+    [Fact]
+    public void AddTemporalAgents_RegistersOptions()
+    {
         var services = new ServiceCollection();
-        var fakeClient = A.Fake<ITemporalClient>();
-        services.AddSingleton(fakeClient);
+        services.AddSingleton(A.Fake<ITemporalClient>());
         var builder = services.AddHostedTemporalWorker("test-task-queue");
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            builder.AddTemporalAgents(opts =>
+        builder.AddTemporalAgents(opts =>
+        {
+            opts.HistoryStore = _ => new FakeHistoryStore();
+            opts.AddDurableAgent("agent", agent =>
             {
-                opts.UseExternalHistory = true;
-                opts.AddAIAgent(new StubAIAgent("agent"));
-            }));
-
-        Assert.Contains("IAgentHistoryStore", ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void AddTemporalAgents_WithUseExternalHistory_AndStoreRegistered_Succeeds()
-    {
-        var services = new ServiceCollection();
-        var fakeClient = A.Fake<ITemporalClient>();
-        services.AddSingleton(fakeClient);
-        services.AddSingleton<IAgentHistoryStore, FakeHistoryStore>();
-        var builder = services.AddHostedTemporalWorker("test-task-queue");
-
-        // Should not throw.
-        builder.AddTemporalAgents(opts =>
-        {
-            opts.UseExternalHistory = true;
-            opts.AddAIAgent(new StubAIAgent("agent"));
+                agent.ChatClient = _ => A.Fake<IChatClient>();
+            });
         });
 
         var provider = services.BuildServiceProvider();
-        var resolvedStore = provider.GetRequiredService<IAgentHistoryStore>();
-        Assert.IsType<FakeHistoryStore>(resolvedStore);
-    }
-
-    [Fact]
-    public void UseExternalAgentHistory_RegistersStoreInDI()
-    {
-        var services = new ServiceCollection();
-        var fakeClient = A.Fake<ITemporalClient>();
-        services.AddSingleton(fakeClient);
-        var builder = services.AddHostedTemporalWorker("test-task-queue");
-
-        builder.UseExternalAgentHistory<FakeHistoryStore>();
-        builder.AddTemporalAgents(opts =>
-        {
-            opts.UseExternalHistory = true;
-            opts.AddAIAgent(new StubAIAgent("agent"));
-        });
-
-        var provider = services.BuildServiceProvider();
-        var resolvedStore = provider.GetRequiredService<IAgentHistoryStore>();
-        Assert.IsType<FakeHistoryStore>(resolvedStore);
-    }
-
-    [Fact]
-    public void UseExternalAgentHistory_ThrowsOnNullBuilder()
-    {
-        var ex = Assert.Throws<ArgumentNullException>(() =>
-            ((ITemporalWorkerServiceOptionsBuilder)null!).UseExternalAgentHistory<FakeHistoryStore>());
-        Assert.Equal("builder", ex.ParamName);
-    }
-
-    [Fact]
-    public async Task ExecuteAgentAsync_ExternalStoreMode_ButNoStoreInjected_Throws()
-    {
-        // Direct activity-level invariant: if the workflow signals UseExternalStore but the
-        // store is missing on the worker (mismatched config), surface a clear InvalidOperationException
-        // rather than silently degrading.
-        var factories = new Dictionary<string, Func<IServiceProvider, AIAgent>>
-        {
-            ["agent"] = _ => new StubAIAgent("agent"),
-        };
-        var sp = new ServiceCollection().BuildServiceProvider();
-        var activities = new AgentActivities(factories, sp, historyStore: null);
-
-        var input = new ExecuteAgentInput(
-            "agent",
-            new RunRequest("hi") { CorrelationId = "c1" },
-            conversationHistory: null,
-            useExternalStore: true);
-
-        // We cannot easily invoke the activity outside the Temporal SDK harness because it
-        // depends on ActivityExecutionContext.Current. The branch-on-null-store check fires
-        // before any context access in the typical flow, but to keep this test independent of
-        // SDK internals we just assert the input shape that triggers the check.
-        Assert.True(input.UseExternalStore);
-        Assert.Null(input.ConversationHistory);
-        await Task.CompletedTask;
-        _ = activities;
-    }
-
-    [Fact]
-    public void AgentSessionRequest_FromRunRequest_RoundTripsThroughExternalStorePath()
-    {
-        // The activity reconstructs the request entry from input.Request when external-store
-        // mode is on. Pin the contract: this reconstruction preserves CorrelationId,
-        // OrchestrationId, and ResponseType so a subsequent LoadAsync returns a faithful
-        // request entry.
-        var request = new RunRequest("hello") { CorrelationId = "corr-1", OrchestrationId = "orch-1" };
-        var entry = AgentSessionRequest.FromRunRequest(request, DateTimeOffset.UtcNow);
-
-        Assert.Equal("corr-1", entry.CorrelationId);
-        Assert.Equal("orch-1", entry.OrchestrationId);
-        Assert.NotEmpty(entry.Messages);
+        var resolvedOpts = provider.GetRequiredService<TemporalAgentsOptions>();
+        Assert.NotNull(resolvedOpts.HistoryStore);
     }
 
     /// <summary>
-    /// Hand-written stub <see cref="IAgentHistoryStore"/> — prefer over FakeItEasy for stores
-    /// because the round-trip behavior we care about is the order in which AppendAsync is called.
-    /// Mirrors the project's convention (StubAIAgent / TestChatClient) of explicit fakes.
+    /// Hand-written stub <see cref="IAgentHistoryStore"/>.
     /// </summary>
     private sealed class FakeHistoryStore : IAgentHistoryStore
     {
-        private readonly Dictionary<string, List<DurableSessionEntry>> _byId = new(StringComparer.Ordinal);
-        private readonly List<(string SessionId, IReadOnlyList<DurableSessionEntry> Entries)> _appendCalls = [];
-
-        public IReadOnlyList<(string SessionId, IReadOnlyList<DurableSessionEntry> Entries)> AppendCalls => _appendCalls;
-
-        public Task<IReadOnlyList<DurableSessionEntry>> LoadAsync(
-            string sessionId, CancellationToken cancellationToken = default)
-        {
-            if (_byId.TryGetValue(sessionId, out var list))
-            {
-                return Task.FromResult<IReadOnlyList<DurableSessionEntry>>(list.ToList());
-            }
-            return Task.FromResult<IReadOnlyList<DurableSessionEntry>>([]);
-        }
+        public Task<IReadOnlyList<Temporalio.Extensions.AI.DurableSessionEntry>> LoadAsync(
+            string sessionId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Temporalio.Extensions.AI.DurableSessionEntry>>([]);
 
         public Task AppendAsync(
             string sessionId,
-            IReadOnlyList<DurableSessionEntry> entries,
-            CancellationToken cancellationToken = default)
-        {
-            if (!_byId.TryGetValue(sessionId, out var list))
-            {
-                list = [];
-                _byId[sessionId] = list;
-            }
-            list.AddRange(entries);
-            _appendCalls.Add((sessionId, entries));
-            return Task.CompletedTask;
-        }
+            IReadOnlyList<Temporalio.Extensions.AI.DurableSessionEntry> entries,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task ReplaceAsync(
             string sessionId,
-            IReadOnlyList<DurableSessionEntry> reducedEntries,
-            CancellationToken cancellationToken = default)
-        {
-            _byId[sessionId] = reducedEntries.ToList();
-            return Task.CompletedTask;
-        }
+            IReadOnlyList<Temporalio.Extensions.AI.DurableSessionEntry> reducedEntries,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }

@@ -80,12 +80,12 @@ For full API surface, see `docs/how-to/MEAI/usage.md`.
 ## Temporalio.Extensions.Agents — Key Concepts
 
 **Entry points**:
-- `services.AddHostedTemporalWorker(...).AddTemporalAgents(opts => { opts.AddAIAgent(agent); opts.EnableSearchAttributes = true; })`
+- `services.AddHostedTemporalWorker(...).AddTemporalAgents(opts => opts.AddDurableAgent("Name", a => { a.ChatClient = sp => ...; a.AddTool(...); }))`
 - `services.AddHostedTemporalWorker(...).AddWorkerPlugin(new TemporalAgentsPlugin(opts => ...))` — `[Experimental("TA001")]`. Idempotent if mixed with `AddTemporalAgents()`.
 
-**v0.3 preview — `AddDurableAgent` (recommended for new code)**: a single fluent registration entry point that consolidates chat client, tools (with per-tool retry overrides), context providers, per-agent timeouts, and external history onto one `DurableAgentBuilder`. DI access via per-slot factories on the builder — no `BuildServiceProvider()` bootstrap, no string-key dictionaries. Activity dispatch goes through the new `Temporalio.Extensions.Agents.InvokeAgentTool` activity (per-agent local tool registry, distinct from MEAI's flat `InvokeFunction`). Legacy `AddAIAgent` / `AddAIAgentFactory` / `EnablePerToolActivities` / `PerToolActivityOptions` / `UseExternalHistory` still works alongside it through Phase 4 of the v0.3 rollout and is removed in Phase 5. See `docs/how-to/MAF/usage.md` "Durable Agents (`AddDurableAgent`)" section for the canonical example and full reference.
+**`AddDurableAgent` is the only registration path in v0.3.** A single fluent `DurableAgentBuilder` consolidates `ChatClient`, tools (with per-tool retry overrides via `DurableToolOptions`), context providers, per-agent timeouts, and external history. DI access happens via per-slot factories on the builder — no `BuildServiceProvider()` bootstrap, no string-keyed dictionaries. Each LLM call dispatches a separate `RunDurableAgentStep` activity; each tool call dispatches a separately named `InvokeAgentTool` activity (per-agent local registry, distinct from MEAI's flat `InvokeFunction`). The library composes the chat pipeline with `UseProvidedChatClientAsIs = true` so users do NOT call `.UseFunctionInvocation()` on their `IChatClient`.
 
-**Configuration**: see `docs/how-to/MAF/usage.md` for the full `TemporalAgentsOptions` reference (`EnableSearchAttributes`, `MaxEntryCount`, `HistoryReducer`, `RetryPolicy`, etc.). Names worth knowing for migration: `MaxHistorySize` → `MaxEntryCount` in 0.2.0; `HistoryReducer` is `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` since 0.3.0 (operates on entries, not flat messages).
+**Configuration**: see `docs/how-to/MAF/usage.md` for the full `TemporalAgentsOptions` reference. Worker-level defaults are prefixed `Default*` (e.g. `DefaultActivityTimeout`, `DefaultHeartbeatTimeout`, `DefaultApprovalTimeout`, `DefaultMaxEntryCount`, `DefaultRetryPolicy`, `DefaultHistoryReducer`, `DefaultTimeToLive`); per-agent overrides on `DurableAgentBuilder` use the unprefixed names. Inheritance rule: `effective = registration.X ?? options.DefaultX`. The worker-level `HistoryStore` factory keeps the unprefixed name (presence is opt-in).
 
 **Two agent types** (use the right one for context):
 - `TemporalAIAgent` — workflow-context sub-agent. Access via `TemporalWorkflowExtensions.GetAgent("Name")`.
@@ -110,13 +110,13 @@ var results = await TemporalWorkflowExtensions.ExecuteAgentsInParallelAsync(new[
 
 **StateBag persistence** (`AgentSessionStateBag` for `AIContextProvider` like `Mem0Provider`):
 - Serialized after each turn via `session.SerializeStateBag()`
-- Stored in `_currentStateBag` on `AgentWorkflow`; passed forward in `ExecuteAgentInput`
+- Stored in `_currentStateBag` on `AgentWorkflow`; passed forward in `AgentWorkflowInput.CarriedStateBag`
 - Restored at activity start via `TemporalAgentSession.FromStateBag`
 - Empty bag (`StateBag.Count == 0`) returns `null` — no wasted serialization
 
-**External history store** (opt-in for regulated workloads + long sessions): set `opts.UseExternalHistory = true` and register `IAgentHistoryStore` in DI (or use `.UseExternalAgentHistory<TStore>()`). When enabled, `ConversationHistory` is omitted from `ExecuteAgentInput` (so PII never enters Temporal events), the activity loads/appends history via the store, and `GetHistoryAsync()` returns metadata-only entries. Complementary to `AIContextProvider`/`ChatHistoryProvider`, not a replacement — the library wraps the store as a `TemporalChatHistoryProvider` inside the activity. See `docs/how-to/MAF/external-history-store.md`.
+**External history store** (opt-in for regulated workloads + long sessions): set `opts.HistoryStore = sp => sp.GetRequiredService<MyStore>()` (worker default) or `agent.HistoryStore = sp => ...` (per-agent). When configured, the workflow strips message payloads from in-workflow history entries (`ShouldStripMessagesFromHistoryEntry` returns true), the `RunDurableAgentStep` activity loads prior history from the store on the first step of a turn and appends new entries on the final step. Complementary to `AIContextProvider`, not a replacement. See `docs/how-to/MAF/external-history-store.md`.
 
-**Per-tool Temporal activities (step mode)** (opt-in for write-heavy tool chains): set `opts.EnablePerToolActivities = true`. The workflow drives the tool-dispatch loop — each LLM call is a `RunAgentStep` activity, each tool call is a separately named `InvokeFunction` activity dispatched via `Workflow.WhenAllAsync`. Configure per-tool retry/timeout via `opts.PerToolActivityOptions` (use `MaximumAttempts = 1` for write tools); cap loop iterations via `opts.MaxToolCallsPerTurn` (default 20). Requires `AddDurableAI()` + `AddDurableTools(...)` on the same builder; the registered agent's `IChatClient` pipeline must NOT include `UseFunctionInvocation()`. See `docs/how-to/MAF/per-tool-activities.md`.
+**Per-tool Temporal activities** are the default behavior: every `AddDurableAgent` runs the durable loop (each LLM call is a `RunDurableAgentStep` activity; each tool call is a separately named `InvokeAgentTool` activity). Configure per-tool retry/timeout via the `DurableToolOptions` callback on `agent.AddTool(tool, opts => opts.NoRetry())` — write tools must call `.NoRetry()` (or set `MaximumAttempts = 1`) to prevent double-execution on retry. Cap loop iterations via `agent.MaxToolCallsPerTurn` (default 20). See `docs/how-to/MAF/durable-agents.md`.
 
 **OpenTelemetry**: SDK's `TracingInterceptor` handles Temporal protocol spans; `TemporalAgentTelemetry` handles agent-semantic spans. Composed hierarchy:
 ```
@@ -157,7 +157,7 @@ As of Layer 3, `AgentWorkflow : DurableChatWorkflowBase<AgentResponse>`. The sha
 - `RpcException` — `Temporalio.Exceptions` (NOT `Grpc.Core`)
 - `Workflow.CreateContinueAsNewException` — takes `Expression<Func<TWorkflow, Task>>` (no collection expressions inside)
 - `WorkflowIdConflictPolicy.UseExisting` — `Temporalio.Api.Enums.V1`
-- `IAgentHistoryStore` — `Temporalio.Extensions.Agents.HistoryStore` (opt-in via `UseExternalHistory`); see `docs/how-to/MAF/external-history-store.md`
+- `IAgentHistoryStore` — `Temporalio.Extensions.Agents.HistoryStore` (opt-in via `opts.HistoryStore` or `agent.HistoryStore`); see `docs/how-to/MAF/external-history-store.md`
 
 ### DI Patterns
 - `TemporalAgentsOptions` has an **internal constructor** — always access via the `AddTemporalAgents(opts => ...)` delegate.
@@ -261,7 +261,7 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 | "Agent not registered" | Verify `.AddTemporalAgents()` includes the agent |
 | `Assert.Throws<ArgumentException>` fails | xUnit requires exact type — use `ArgumentNullException` for null, `ArgumentException` for empty |
 | `GetTypeInfo metadata not provided` for `TemporalAgentSession` | Don't serialize via `DefaultOptions`; use `StateBag.Serialize()` |
-| Activity timeout (HITL) | Increase `ActivityTimeout` to accommodate human review time |
+| Activity timeout (HITL) | Increase `DefaultActivityTimeout` (or per-agent `ActivityTimeout`) to accommodate human review time |
 | OTel spans missing | Register all 4 `ActivitySource` names with the tracer provider |
 | Worker won't start | `temporal server start-dev` running on `localhost:7233`? |
 | Search attributes missing in UI | `opts.EnableSearchAttributes = true` (opt-in, default `false`); pre-register on production clusters |
@@ -286,6 +286,7 @@ dotnet run --project samples/MAF/SplitWorkerClient/Client/Client.csproj
 - **Structured Output**: `docs/how-to/MAF/structured-output.md`
 - **HITL Patterns**: `docs/how-to/MAF/hitl-patterns.md`
 - **History & Token Optimization**: `docs/how-to/MAF/prompt-caching.md`
+- **Durable Agents (per-tool activities)**: `docs/how-to/MAF/durable-agents.md`
 - **Do's and Don'ts**: `docs/how-to/MAF/dos-and-donts.md`
 - **Durability Guarantees**: `docs/architecture/MAF/durability-and-determinism.md`
 - **Sessions and Workflow Loop**: `docs/architecture/MAF/agent-sessions-and-workflow-loop.md`

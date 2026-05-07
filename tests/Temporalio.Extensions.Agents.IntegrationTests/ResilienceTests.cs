@@ -44,7 +44,7 @@ public class ResilienceTests
         builder.Services.AddSingleton<ITemporalClient>(env.Client);
         builder.Services
             .AddHostedTemporalWorker(taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(new EchoAIAgent("EchoAgent")));
+            .AddTemporalAgents(options => options.AddDurableAgent("EchoAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient()));
 
         using var host = builder.Build();
         await host.StartAsync();
@@ -236,7 +236,7 @@ public class ResilienceTests
         builder.Services.AddSingleton<ITemporalClient>(client);
         builder.Services
             .AddHostedTemporalWorker(taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(new EchoAIAgent("EchoAgent")));
+            .AddTemporalAgents(options => options.AddDurableAgent("EchoAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient()));
         return builder.Build();
     }
 }

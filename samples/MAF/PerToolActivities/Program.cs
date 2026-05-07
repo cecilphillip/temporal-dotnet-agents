@@ -108,44 +108,22 @@ builder.Services.AddTemporalClient(temporalAddress, "default");
 
 builder.Services
     .AddHostedTemporalWorker(taskQueue)
-    .AddDurableAI(opts =>
-    {
-        opts.RegisterDefaultWorkflow = false;
-    })
-    .AddDurableTools(lookupTool, refundTool, emailTool)
     .AddTemporalAgents(opts =>
     {
-        opts.EnablePerToolActivities = true;
-        opts.MaxToolCallsPerTurn = 10;
-
-        // Per-tool retry policies. Write tools get MaximumAttempts = 1 so a worker
-        // crash or transient gRPC failure cannot re-issue the side effect. The read
-        // tool (lookup_order) is intentionally omitted — it falls through to
-        // TemporalAgentsOptions.RetryPolicy, which is the SDK default unbounded retry.
-        opts.PerToolActivityOptions = new()
+        // Phase 5 placeholder — Phase 7 rewrites the sample to v0.3 idiomatic shape.
+        opts.AddDurableAgent("RefundAgent", a =>
         {
-            ["apply_refund"] = new ActivityOptions
-            {
-                StartToCloseTimeout = TimeSpan.FromSeconds(30),
-                RetryPolicy = new RetryPolicy { MaximumAttempts = 1 },
-            },
-            ["send_email"] = new ActivityOptions
-            {
-                StartToCloseTimeout = TimeSpan.FromSeconds(30),
-                RetryPolicy = new RetryPolicy { MaximumAttempts = 1 },
-            },
-            // lookup_order: omitted — uses the default policy and retries on transient failure.
-        };
-
-        opts.AddAIAgentFactory("RefundAgent", sp =>
-            sp.GetRequiredService<IChatClient>().AsAIAgent(
-                name: "RefundAgent",
-                instructions:
-                    "You are a customer refund specialist. Use lookup_order to verify the order, " +
-                    "apply_refund to issue the refund, and send_email to confirm with the customer. " +
-                    "Always look up the order before applying a refund. After applying the refund, " +
-                    "send a single confirmation email and produce a brief final summary for the user.",
-                tools: [lookupTool, refundTool, emailTool]));
+            a.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            a.MaxToolCallsPerTurn = 10;
+            a.Instructions =
+                "You are a customer refund specialist. Use lookup_order to verify the order, " +
+                "apply_refund to issue the refund, and send_email to confirm with the customer. " +
+                "Always look up the order before applying a refund. After applying the refund, " +
+                "send a single confirmation email and produce a brief final summary for the user.";
+            a.AddTool(lookupTool);
+            a.AddTool(refundTool, t => t.NoRetry().WithTimeout(TimeSpan.FromSeconds(30)));
+            a.AddTool(emailTool, t => t.NoRetry().WithTimeout(TimeSpan.FromSeconds(30)));
+        });
     })
     .AddWorkflow<RefundWorkflow>();
 

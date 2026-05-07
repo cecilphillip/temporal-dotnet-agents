@@ -91,7 +91,7 @@ builder.Services
     .AddTemporalAgents(opts =>
     {
         opts.UseExternalHistory = true;
-        opts.AddAIAgent(myAgent);
+        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
     });
 
 var host = builder.Build();
@@ -272,7 +272,7 @@ builder.Services
     .AddTemporalAgents(opts =>
     {
         opts.UseExternalHistory = true;
-        opts.AddAIAgent(myAgent);
+        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
     });
 ```
 
@@ -284,7 +284,7 @@ builder.Services
     .UseExternalAgentHistory<MyHistoryStore>()    // registers the store + sets UseExternalHistory = true
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(myAgent);
+        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
     });
 ```
 
@@ -352,7 +352,7 @@ When `UseExternalHistory = true`:
 
 - `CarriedHistory` is set to `null` on the new run's `AgentWorkflowInput`. There is nothing to carry — the store owns it.
 - The workflow dispatches a `ReduceHistoryInStoreAsync` activity *before* throwing the continue-as-new exception. That activity loads the history from the store and, if `prior.Count > MaxEntryCount`, calls `IAgentHistoryStore.ReplaceAsync` with the **most recent `MaxEntryCount` entries** (a deterministic tail-trim — `prior.Skip(prior.Count - MaxEntryCount)`). If the store is already within `MaxEntryCount`, the activity is a no-op.
-- The activity does **not** apply the user's `TemporalAgentsOptions.HistoryReducer` delegate to the external store. The reducer is annotated `[JsonIgnore]` and cannot be transported into a Temporal activity, so the external-store path performs a fixed tail-trim instead. The in-memory `HistoryReducer` delegate continues to work as documented in the [Usage Guide](./usage.md) for the in-memory mode (`UseExternalHistory = false`); only the external-store path differs.
+- The activity does **not** apply the user's `TemporalAgentsOptions.DefaultHistoryReducer` delegate to the external store. The reducer is annotated `[JsonIgnore]` and cannot be transported into a Temporal activity, so the external-store path performs a fixed tail-trim instead. The in-memory `HistoryReducer` delegate continues to work as documented in the [Usage Guide](./usage.md) for the in-memory mode (`UseExternalHistory = false`); only the external-store path differs.
 
 #### Workaround: custom store-side reduction
 

@@ -110,7 +110,7 @@ builder.Services
     .AddTemporalAgents(opts =>
     {
         opts.EnablePerToolActivities = true;   // step mode dispatches InvokeFunction
-        opts.AddAIAgent(myAgent);
+        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
     });
 
 // CORRECT — register tools in DurableFunctionRegistry first
@@ -121,11 +121,11 @@ builder.Services
     .AddTemporalAgents(opts =>
     {
         opts.EnablePerToolActivities = true;
-        opts.AddAIAgent(myAgent);
+        opts.AddDurableAgent("MyAgent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
     });
 ```
 
-**Why:** Step mode's per-tool activity is `DurableFunctionActivities.InvokeFunctionAsync`, which resolves tools by name from `DurableFunctionRegistry`. That registry is populated by `AddDurableTools(...)`, which is wired up by `AddDurableAI()`. `TemporalAgentsRegistrar` validates this at startup and throws `InvalidOperationException` if `DurableFunctionActivities` is not registered when the flag is on — silent fallback would defeat the per-tool retry guarantee callers opted in for. See [Per-Tool Temporal Activities (Step Mode)](./per-tool-activities.md).
+**Why:** Step mode's per-tool activity is `DurableFunctionActivities.InvokeFunctionAsync`, which resolves tools by name from `DurableFunctionRegistry`. That registry is populated by `AddDurableTools(...)`, which is wired up by `AddDurableAI()`. `TemporalAgentsRegistrar` validates this at startup and throws `InvalidOperationException` if `DurableFunctionActivities` is not registered when the flag is on — silent fallback would defeat the per-tool retry guarantee callers opted in for. See [Per-Tool Temporal Activities (Step Mode)](./durable-agents.md).
 
 ### Do use GetAgent() with string constants or activity results
 
@@ -152,7 +152,7 @@ builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(agent);
+        opts.AddDurableAgent("Agent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
     });
 ```
 
@@ -243,8 +243,8 @@ var serializedBag = session.StateBag.Serialize();
 ### Do set appropriate timeouts for your use case
 
 ```csharp
-opts.ActivityTimeout = TimeSpan.FromMinutes(10); // for fast models
-opts.ActivityTimeout = TimeSpan.FromHours(24);   // for HITL approval
+opts.DefaultActivityTimeout = TimeSpan.FromMinutes(10); // for fast models
+opts.DefaultActivityTimeout = TimeSpan.FromHours(24);   // for HITL approval
 ```
 
 The default (5 minutes) is reasonable for most LLM calls, but HITL approval flows need much longer timeouts to accommodate human review time.
@@ -253,12 +253,12 @@ The default (5 minutes) is reasonable for most LLM calls, but HITL approval flow
 
 ```csharp
 // GOOD — heartbeats every 5 min, total timeout 30 min
-opts.ActivityTimeout    = TimeSpan.FromMinutes(30);
-opts.HeartbeatTimeout   = TimeSpan.FromMinutes(5);
+opts.DefaultActivityTimeout    = TimeSpan.FromMinutes(30);
+opts.DefaultHeartbeatTimeout   = TimeSpan.FromMinutes(5);
 
 // BAD — heartbeat timeout longer than activity timeout defeats the purpose
-opts.ActivityTimeout    = TimeSpan.FromMinutes(5);
-opts.HeartbeatTimeout   = TimeSpan.FromMinutes(30);
+opts.DefaultActivityTimeout    = TimeSpan.FromMinutes(5);
+opts.DefaultHeartbeatTimeout   = TimeSpan.FromMinutes(30);
 ```
 
 **Why:** `HeartbeatTimeout` detects stuck activities by checking for periodic progress signals. If it exceeds `ActivityTimeout`, the activity times out before a heartbeat check can trigger.
@@ -429,7 +429,7 @@ opts.PerToolActivityOptions["send_email"] = new ActivityOptions
 // (no entry needed; reads ActivityTimeout / RetryPolicy from TemporalAgentsOptions)
 ```
 
-**Why:** In default mode, a transient failure mid-turn re-runs the entire turn — including any write tools that already succeeded. Step mode lets you scope retry to the tool: `MaximumAttempts = 1` tells Temporal not to re-execute the activity, so a write tool runs at most once per LLM-requested invocation. This is the primary reason `PerToolActivityOptions` exists. See [Per-Tool Temporal Activities (Step Mode)](./per-tool-activities.md).
+**Why:** In default mode, a transient failure mid-turn re-runs the entire turn — including any write tools that already succeeded. Step mode lets you scope retry to the tool: `MaximumAttempts = 1` tells Temporal not to re-execute the activity, so a write tool runs at most once per LLM-requested invocation. This is the primary reason `PerToolActivityOptions` exists. See [Per-Tool Temporal Activities (Step Mode)](./durable-agents.md).
 
 ### Do use `Workflow.WhenAllAsync` for parallel activity fan-out
 
@@ -496,7 +496,7 @@ opts.AddScheduledAgentRun("Agent", "my-schedule", request, updatedSpec);
 - [LLM-Call Interception](./llm-call-interception.md) — per-LLM-call decorators via `ChatClientFactory`
 - [Testing Agents](./testing-agents.md) — test patterns and fixtures
 - [Scheduling](./scheduling.md) — schedule lifecycle and pitfalls
-- [Per-Tool Temporal Activities (Step Mode)](./per-tool-activities.md) — `EnablePerToolActivities`, write-tool retry pattern, iteration cap
+- [Per-Tool Temporal Activities (Step Mode)](./durable-agents.md) — `EnablePerToolActivities`, write-tool retry pattern, iteration cap
 
 ---
 

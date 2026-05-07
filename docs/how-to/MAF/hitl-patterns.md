@@ -198,8 +198,8 @@ builder.Services
     .AddHostedTemporalWorker("agents")
     .AddTemporalAgents(opts =>
     {
-        opts.ApprovalTimeout = TimeSpan.FromHours(4); // default: 7 days
-        opts.AddAIAgent(agent);
+        opts.DefaultApprovalTimeout = TimeSpan.FromHours(4); // default: 7 days
+        opts.AddDurableAgent("Agent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
     });
 ```
 
@@ -219,9 +219,9 @@ new DurableApprovalDecision
 The activity that hosts the tool **also** has a timeout. It must exceed the `ApprovalTimeout`, otherwise the activity times out before the human can respond:
 
 ```csharp
-opts.ActivityTimeout    = TimeSpan.FromHours(24); // must exceed ApprovalTimeout
-opts.HeartbeatTimeout   = TimeSpan.FromMinutes(5);
-opts.ApprovalTimeout    = TimeSpan.FromHours(4);
+opts.DefaultActivityTimeout    = TimeSpan.FromHours(24); // must exceed ApprovalTimeout
+opts.DefaultHeartbeatTimeout   = TimeSpan.FromMinutes(5);
+opts.DefaultApprovalTimeout    = TimeSpan.FromHours(4);
 ```
 
 **Rule of thumb:** `ActivityTimeout` > `ApprovalTimeout` + expected LLM processing time.
@@ -452,8 +452,8 @@ builder.Services
     .AddHostedTemporalWorker("hitl-sample")
     .AddTemporalAgents(opts =>
     {
-        opts.ActivityTimeout    = TimeSpan.FromHours(24);
-        opts.HeartbeatTimeout   = TimeSpan.FromMinutes(5);
+        opts.DefaultActivityTimeout    = TimeSpan.FromHours(24);
+        opts.DefaultHeartbeatTimeout   = TimeSpan.FromMinutes(5);
         opts.AddAIAgent(emailAgent, timeToLive: TimeSpan.FromHours(2));
     });
 ```

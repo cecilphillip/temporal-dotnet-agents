@@ -305,7 +305,7 @@ public class WorkflowLifecycleTests : IClassFixture<IntegrationTestFixture>
             .AddTemporalAgents(options =>
             {
                 options.DefaultTimeToLive = TimeSpan.FromSeconds(2);
-                options.AddAIAgent(new Helpers.EchoAIAgent("TTLAgent"));
+                options.AddDurableAgent("TTLAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient());
             });
 
         using var host = builder.Build();
@@ -351,7 +351,7 @@ public class WorkflowLifecycleTests : IClassFixture<IntegrationTestFixture>
             .AddTemporalAgents(options =>
             {
                 options.DefaultTimeToLive = TimeSpan.FromSeconds(2);
-                options.AddAIAgent(new Helpers.EchoAIAgent("TTLAgent"));
+                options.AddDurableAgent("TTLAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient());
             });
 
         using var host = builder.Build();
@@ -396,8 +396,7 @@ public class WorkflowLifecycleTests : IClassFixture<IntegrationTestFixture>
         builder.Services.AddSingleton<ITemporalClient>(_fixture.Client);
         builder.Services
             .AddHostedTemporalWorker(taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(
-                new Helpers.EchoAIAgent("EchoAgent")));
+            .AddTemporalAgents(options => options.AddDurableAgent("EchoAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient()));
         return builder.Build();
     }
 }

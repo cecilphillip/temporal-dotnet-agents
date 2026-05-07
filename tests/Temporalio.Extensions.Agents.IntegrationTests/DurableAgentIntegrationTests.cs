@@ -250,7 +250,7 @@ public class DurableAgentIntegrationTests : IClassFixture<DurableAgentEnvironmen
         var workerBuilder = builder.Services.AddHostedTemporalWorker(taskQueue);
         workerBuilder.AddTemporalAgents(opts =>
         {
-            opts.AddAIAgent(new EchoAIAgent("EchoAgent"));
+            opts.AddDurableAgent("EchoAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient());
         });
 
         using var host = builder.Build();

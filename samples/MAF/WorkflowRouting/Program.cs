@@ -3,6 +3,7 @@
 //
 // Run:  dotnet run --project samples/MAF/WorkflowRouting/WorkflowRouting.csproj
 
+using Microsoft.Extensions.AI;
 using System.ClientModel;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -97,14 +98,14 @@ builder.Services
     .AddTemporalAgents(opts =>
     {
         // Classifier doesn't need a description — it's not a routable specialist.
-        opts.AddAIAgent(classifier);
+        opts.AddDurableAgent("Classifier", a => a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient());
 
         // Specialist agents carry descriptions via AsAIAgent(description: ...),
         // which are auto-extracted into the descriptor registry for DynamicRoutingWorkflow.
         // Note: NO SetRouterAgent — we use descriptors without the IAgentRouter abstraction.
-        opts.AddAIAgent(ordersAgent);
-        opts.AddAIAgent(techSupportAgent);
-        opts.AddAIAgent(generalAgent);
+        opts.AddDurableAgent("OrdersAgent", a => a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient());
+        opts.AddDurableAgent("TechSupportAgent", a => a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient());
+        opts.AddDurableAgent("GeneralAgent", a => a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient());
     })
     .AddWorkflow<CustomerServiceWorkflow>()
     .AddWorkflow<DynamicRoutingWorkflow>()

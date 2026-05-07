@@ -170,14 +170,14 @@ public class AgentIntegrationTests : IClassFixture<IntegrationTestFixture>
 
         builder.Services
             .AddHostedTemporalWorker(taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgentFactory(
-                "DIAgent",
-                sp =>
+            .AddTemporalAgents(options => options.AddDurableAgent("DIAgent", a =>
+            {
+                a.ChatClient = sp =>
                 {
-                    // This factory runs inside AgentActivities.ExecuteAgentAsync.
                     var greetingSvc = sp.GetRequiredService<IGreetingService>();
-                    return new GreetingAIAgent("DIAgent", greetingSvc);
-                }));
+                    return new GreetingChatClient(greetingSvc);
+                };
+            }));
 
         using var host = builder.Build();
         await host.StartAsync();
@@ -215,31 +215,42 @@ public class AgentIntegrationTests : IClassFixture<IntegrationTestFixture>
     }
 
     /// <summary>
-    /// Agent that uses an injected <see cref="IGreetingService"/> to produce its response.
+    /// Chat client that uses an injected <see cref="IGreetingService"/> to produce its response.
     /// </summary>
-    private sealed class GreetingAIAgent : TestAgentBase
+    private sealed class GreetingChatClient : IChatClient
     {
         private readonly IGreetingService _greetingService;
 
-        public GreetingAIAgent(string name, IGreetingService greetingService)
-            : base(name)
+        public GreetingChatClient(IGreetingService greetingService)
         {
             _greetingService = greetingService;
         }
 
-        protected override Task<AgentResponse> RunCoreAsync(
+        public ChatClientMetadata Metadata { get; } = new("greeting");
+
+        public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
-            AgentSession? session = null,
-            AgentRunOptions? options = null,
+            ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
-            var response = new AgentResponse
-            {
-                Messages = [new ChatMessage(ChatRole.Assistant, _greetingService.GetGreeting())],
-                CreatedAt = DateTimeOffset.UtcNow
-            };
-
-            return Task.FromResult(response);
+            return Task.FromResult(new ChatResponse(
+                new ChatMessage(ChatRole.Assistant, _greetingService.GetGreeting())));
         }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var resp = await GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            foreach (var msg in resp.Messages)
+            {
+                yield return new ChatResponseUpdate(msg.Role, msg.Text);
+            }
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose() { }
     }
 }

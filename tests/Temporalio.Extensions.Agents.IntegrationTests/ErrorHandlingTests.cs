@@ -38,7 +38,7 @@ public class ErrorHandlingTests : IClassFixture<IntegrationTestFixture>
         // First attempt: agent starts delaying → 2s timeout fires → activity cancelled → retry.
         // Second attempt: agent returns immediately → success.
         var taskQueue = $"start-to-close-test-{Guid.NewGuid():N}";
-        var agent = new SlowThenFastAIAgent("SlowAgent", TimeSpan.FromSeconds(60));
+        var agent = new SlowThenFastChatClient(TimeSpan.FromSeconds(60));
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<ITemporalClient>(_fixture.Client);
@@ -46,8 +46,8 @@ public class ErrorHandlingTests : IClassFixture<IntegrationTestFixture>
             .AddHostedTemporalWorker(taskQueue)
             .AddTemporalAgents(options =>
             {
-                options.AddAIAgent(agent);
-                options.ActivityTimeout = TimeSpan.FromSeconds(2);
+                options.AddDurableAgent("SlowAgent", a => a.ChatClient = _ => agent);
+                options.DefaultActivityTimeout = TimeSpan.FromSeconds(2);
             });
 
         using var host = builder.Build();
@@ -94,7 +94,7 @@ public class ErrorHandlingTests : IClassFixture<IntegrationTestFixture>
         // Since the non-streaming path doesn't heartbeat, Temporal detects the
         // missing heartbeat and retries the activity.
         var taskQueue = $"heartbeat-test-{Guid.NewGuid():N}";
-        var agent = new SlowThenFastAIAgent("HeartbeatAgent", TimeSpan.FromSeconds(60));
+        var agent = new SlowThenFastChatClient(TimeSpan.FromSeconds(60));
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<ITemporalClient>(_fixture.Client);
@@ -102,10 +102,10 @@ public class ErrorHandlingTests : IClassFixture<IntegrationTestFixture>
             .AddHostedTemporalWorker(taskQueue)
             .AddTemporalAgents(options =>
             {
-                options.AddAIAgent(agent);
+                options.AddDurableAgent("HeartbeatAgent", a => a.ChatClient = _ => agent);
                 // Leave the activity timeout at a generous value so it doesn't interfere.
-                options.ActivityTimeout = TimeSpan.FromMinutes(5);
-                options.HeartbeatTimeout = TimeSpan.FromSeconds(2);
+                options.DefaultActivityTimeout = TimeSpan.FromMinutes(5);
+                options.DefaultHeartbeatTimeout = TimeSpan.FromSeconds(2);
             });
 
         using var host = builder.Build();
@@ -147,13 +147,13 @@ public class ErrorHandlingTests : IClassFixture<IntegrationTestFixture>
     {
         // Agent throws InvalidOperationException on first call; succeeds on retry.
         var taskQueue = $"failure-retry-{Guid.NewGuid():N}";
-        var agent = new FailThenSucceedAIAgent("FailAgent", failCount: 1);
+        var agent = new FailThenSucceedChatClient(failCount: 1);
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<ITemporalClient>(_fixture.Client);
         builder.Services
             .AddHostedTemporalWorker(taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(agent));
+            .AddTemporalAgents(options => options.AddDurableAgent("FailAgent", a => a.ChatClient = _ => agent));
 
         using var host = builder.Build();
         await host.StartAsync();
@@ -187,13 +187,13 @@ public class ErrorHandlingTests : IClassFixture<IntegrationTestFixture>
         // After a failed-then-retried first turn, the workflow should remain healthy
         // for subsequent turns.
         var taskQueue = $"failure-recovery-{Guid.NewGuid():N}";
-        var agent = new FailThenSucceedAIAgent("RecoveryAgent", failCount: 1);
+        var agent = new FailThenSucceedChatClient(failCount: 1);
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<ITemporalClient>(_fixture.Client);
         builder.Services
             .AddHostedTemporalWorker(taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(agent));
+            .AddTemporalAgents(options => options.AddDurableAgent("RecoveryAgent", a => a.ChatClient = _ => agent));
 
         using var host = builder.Build();
         await host.StartAsync();

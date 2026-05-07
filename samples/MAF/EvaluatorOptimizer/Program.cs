@@ -3,6 +3,7 @@
 //
 // Run:  dotnet run --project samples/MAF/EvaluatorOptimizer/EvaluatorOptimizer.csproj
 
+using Microsoft.Extensions.AI;
 using System.ClientModel;
 using EvaluatorOptimizer;
 using Microsoft.Extensions.Configuration;
@@ -65,8 +66,8 @@ builder.Services
     .AddHostedTemporalWorker("evaluator-optimizer")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(generator);
-        opts.AddAIAgent(evaluator);
+        opts.AddDurableAgent("Generator", a => a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient());
+        opts.AddDurableAgent("Evaluator", a => a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient());
     })
     .AddWorkflow<EvaluatorOptimizerWorkflow>();
 

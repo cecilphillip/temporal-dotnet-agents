@@ -7,11 +7,12 @@ namespace Temporalio.Extensions.Agents.HistoryStore;
 /// </summary>
 /// <remarks>
 /// <para>
-/// When <see cref="TemporalAgentsOptions.UseExternalHistory"/> is <see langword="true"/>,
-/// the workflow stops carrying <see cref="DurableSessionEntry"/> instances inside
-/// <c>ExecuteAgentInput.ConversationHistory</c> on every activity dispatch. Instead the
-/// activity loads prior turns from this store via <see cref="LoadAsync"/> and appends
-/// the current turn's request/response entries via <see cref="AppendAsync"/>.
+/// When configured via <see cref="TemporalAgentsOptions.HistoryStore"/> (worker default) or
+/// <c>DurableAgentBuilder.HistoryStore</c> (per-agent override), the workflow stops carrying
+/// <see cref="DurableSessionEntry"/> instances inside the activity input on every dispatch.
+/// Instead, the durable-agent step activity loads prior turns from this store via
+/// <see cref="LoadAsync"/> and appends the current turn's request/response entries via
+/// <see cref="AppendAsync"/>.
 /// </para>
 /// <para>
 /// This is a Temporal-level coordination interface — it exists so that PII and large
@@ -58,10 +59,8 @@ public interface IAgentHistoryStore
 
     /// <summary>
     /// Replaces all entries for the given session with a reduced set. Called at
-    /// continue-as-new time when <see cref="TemporalAgentsOptions.HistoryReducer"/>
-    /// is configured AND <see cref="TemporalAgentsOptions.UseExternalHistory"/> is
-    /// <see langword="true"/>, so that the externally stored history stays aligned
-    /// with the workflow's reduced view.
+    /// continue-as-new time when an external history store is configured AND a history reducer
+    /// is set, so that the externally stored history stays aligned with the workflow's reduced view.
     /// </summary>
     /// <param name="sessionId">The agent workflow ID.</param>
     /// <param name="reducedEntries">The new full history for the session.</param>

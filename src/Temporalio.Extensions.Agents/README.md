@@ -87,7 +87,12 @@ builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(chatAgent, timeToLive: TimeSpan.FromHours(24));
+        opts.AddDurableAgent("MyAgent", a =>
+        {
+            a.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            a.Instructions = "You are a helpful assistant.";
+            a.TimeToLive = TimeSpan.FromHours(24);
+        });
         opts.EnableSearchAttributes = true;  // opt in to search attribute upserts
     });
 
@@ -97,7 +102,12 @@ builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddWorkerPlugin(new TemporalAgentsPlugin(opts =>
     {
-        opts.AddAIAgent(chatAgent, timeToLive: TimeSpan.FromHours(24));
+        opts.AddDurableAgent("MyAgent", a =>
+        {
+            a.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            a.Instructions = "You are a helpful assistant.";
+            a.TimeToLive = TimeSpan.FromHours(24);
+        });
         opts.EnableSearchAttributes = true;
     }));
 #pragma warning restore TA001

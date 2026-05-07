@@ -43,9 +43,9 @@ public class TimeoutConfigurationTests : IClassFixture<IntegrationTestFixture>
             .AddHostedTemporalWorker(taskQueue)
             .AddTemporalAgents(options =>
             {
-                options.AddAIAgent(new Helpers.EchoAIAgent("TimeoutAgent"));
-                options.ActivityTimeout = TimeSpan.FromMinutes(2);
-                options.HeartbeatTimeout = TimeSpan.FromSeconds(30);
+                options.AddDurableAgent("TimeoutAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient());
+                options.DefaultActivityTimeout = TimeSpan.FromMinutes(2);
+                options.DefaultHeartbeatTimeout = TimeSpan.FromSeconds(30);
             });
 
         using var host = builder.Build();
@@ -86,7 +86,7 @@ public class TimeoutConfigurationTests : IClassFixture<IntegrationTestFixture>
             .AddHostedTemporalWorker(taskQueue)
             .AddTemporalAgents(options =>
             {
-                options.AddAIAgent(new Helpers.EchoAIAgent("DefaultTimeoutAgent"));
+                options.AddDurableAgent("DefaultTimeoutAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient());
                 // ActivityTimeout / HeartbeatTimeout default to 5 minutes / 2 minutes when unset.
             });
 
@@ -123,9 +123,11 @@ public class TimeoutConfigurationTests : IClassFixture<IntegrationTestFixture>
             .AddHostedTemporalWorker(taskQueue)
             .AddTemporalAgents(options =>
             {
-                options.AddAIAgent(
-                    new Helpers.EchoAIAgent("ShortTTLAgent"),
-                    timeToLive: TimeSpan.FromHours(1));
+                options.AddDurableAgent("ShortTTLAgent", a =>
+                {
+                    a.ChatClient = _ => new Helpers.EchoChatClient();
+                    a.TimeToLive = TimeSpan.FromHours(1);
+                });
             });
 
         using var host = builder.Build();

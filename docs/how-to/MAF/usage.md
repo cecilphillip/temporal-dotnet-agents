@@ -86,20 +86,20 @@ For every scalar setting the rule is: **if you set it on the agent, it overrides
 | Per-agent setting (`DurableAgentBuilder`) | Worker default (`TemporalAgentsOptions`) |
 |-------------------------------------------|------------------------------------------|
 | `agent.TimeToLive` | `opts.DefaultTimeToLive` |
-| `agent.ApprovalTimeout` | `opts.ApprovalTimeout` |
-| `agent.ActivityTimeout` | `opts.ActivityTimeout` |
-| `agent.HeartbeatTimeout` | `opts.HeartbeatTimeout` |
-| `agent.RetryPolicy` | `opts.RetryPolicy` |
-| `agent.MaxEntryCount` | `opts.MaxEntryCount` |
-| `agent.HistoryReducer` | `opts.HistoryReducer` |
+| `agent.ApprovalTimeout` | `opts.DefaultApprovalTimeout` |
+| `agent.ActivityTimeout` | `opts.DefaultActivityTimeout` |
+| `agent.HeartbeatTimeout` | `opts.DefaultHeartbeatTimeout` |
+| `agent.RetryPolicy` | `opts.DefaultRetryPolicy` |
+| `agent.MaxEntryCount` | `opts.DefaultMaxEntryCount` |
+| `agent.HistoryReducer` | `opts.DefaultHistoryReducer` |
 | `agent.HistoryStore` | `opts.HistoryStore` |
 | `agent.MaxToolCallsPerTurn` | *no worker fallback — defaults to `20`* |
 
 The retry-policy hierarchy adds one more layer specifically for tools. From most to least specific:
 
-1. `agent.AddTool(t, opts => opts.RetryPolicy = ...)` — the per-tool override (use `opts.NoRetry()` on write tools).
+1. `agent.AddTool(t, opts => opts.DefaultRetryPolicy = ...)` — the per-tool override (use `opts.NoRetry()` on write tools).
 2. `agent.RetryPolicy` — the agent-level default for any tool that doesn't override.
-3. `opts.RetryPolicy` — the worker-level default used by agents that don't override.
+3. `opts.DefaultRetryPolicy` — the worker-level default used by agents that don't override.
 
 There is **no per-agent "default for all my tools" cascade beyond `agent.RetryPolicy`** — set policies per tool when the per-tool default is genuinely different.
 
@@ -429,10 +429,10 @@ builder.Services
         opts.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1));
 
         // Increase for slow models or long tool-call chains
-        opts.ActivityTimeout = TimeSpan.FromMinutes(10);
+        opts.DefaultActivityTimeout = TimeSpan.FromMinutes(10);
 
         // Increase if streaming heartbeats arrive slowly
-        opts.HeartbeatTimeout = TimeSpan.FromMinutes(2);
+        opts.DefaultHeartbeatTimeout = TimeSpan.FromMinutes(2);
     });
 ```
 
@@ -604,7 +604,7 @@ approval, the activity resumes from exactly the same point once a new worker pic
 Set `ActivityTimeout` to a value that exceeds your expected review time:
 
 ```csharp
-opts.ActivityTimeout = TimeSpan.FromHours(24);
+opts.DefaultActivityTimeout = TimeSpan.FromHours(24);
 ```
 
 ### Checking for Pending Approvals (External System)
@@ -839,7 +839,7 @@ builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(agent);
+        opts.AddDurableAgent("Agent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
     });
 ```
 
@@ -906,7 +906,7 @@ builder.Services
 
 > **Agent-registration constraint**: in step mode, the agent's `IChatClient` pipeline must NOT include `UseFunctionInvocation()` — the workflow owns the tool-dispatch loop. Tools are passed as schema via the `tools:` parameter on `AsAIAgent(...)` and resolved by name from `DurableFunctionRegistry` when the workflow dispatches `InvokeFunction`.
 
-For the full how-to including write-vs-read tool patterns, the iteration cap, the migration table, and what the Temporal Web UI shows, see [Per-Tool Temporal Activities (Step Mode)](./per-tool-activities.md).
+For the full how-to including write-vs-read tool patterns, the iteration cap, the migration table, and what the Temporal Web UI shows, see [Per-Tool Temporal Activities (Step Mode)](./durable-agents.md).
 
 ---
 
@@ -979,7 +979,7 @@ builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(agent);
+        opts.AddDurableAgent("Agent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
         opts.EnableSearchAttributes = true;
     });
 ```

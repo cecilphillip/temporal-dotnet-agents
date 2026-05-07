@@ -315,7 +315,7 @@ Or programmatically via `GetAgentScheduleHandle("daily-summary").DeleteAsync()`.
 `AgentJobWorkflow` inherits `ActivityTimeout` and `HeartbeatTimeout` from `TemporalAgentsOptions`. If your scheduled agent makes long-running tool calls, ensure the timeout is sufficient:
 
 ```csharp
-opts.ActivityTimeout = TimeSpan.FromMinutes(60);
+opts.DefaultActivityTimeout = TimeSpan.FromMinutes(60);
 ```
 
 This timeout applies to both interactive and scheduled runs. There is currently no per-schedule timeout override — the global option is used.

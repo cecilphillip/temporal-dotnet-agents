@@ -24,11 +24,7 @@ public class InvokeAgentToolActivityTests
         serviceCollection.AddSingleton(options);
         var sp = serviceCollection.BuildServiceProvider();
 
-        // The activity uses the factory dictionary only for legacy paths — durable resolution
-        // goes through TemporalAgentsOptions.DurableAgentRegistrations which is read off the
-        // options singleton via DI.
-        var factories = options.GetAgentFactories();
-        var activities = new AgentActivities(factories, sp);
+        var activities = new AgentActivities(sp);
         return (activities, sp, options);
     }
 

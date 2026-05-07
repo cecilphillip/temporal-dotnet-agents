@@ -57,9 +57,7 @@ public class ContinueAsNewTests : IAsyncLifetime
         builder.Services.AddSingleton<ITemporalClient>(_env.Client);
         builder.Services
             .AddHostedTemporalWorker(_taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(
-                new Helpers.EchoAIAgent("EchoAgent"),
-                timeToLive: TimeSpan.FromMinutes(10)));
+            .AddTemporalAgents(options => options.AddDurableAgent("EchoAgent", a => { a.ChatClient = _ => new Helpers.EchoChatClient(); a.TimeToLive = TimeSpan.FromMinutes(10); }));
 
         _host = builder.Build();
         await _host.StartAsync();
@@ -173,7 +171,7 @@ public class ContinueAsNewTests : IAsyncLifetime
         // is cancelled and retried quickly.
 
         var taskQueue = $"can-timeout-{Guid.NewGuid():N}";
-        var agent = new SlowThenFastAIAgent("TimeoutCANAgent", TimeSpan.FromSeconds(60));
+        var chatClient = new SlowThenFastChatClient(TimeSpan.FromSeconds(60));
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<ITemporalClient>(_env.Client);
@@ -181,9 +179,13 @@ public class ContinueAsNewTests : IAsyncLifetime
             .AddHostedTemporalWorker(taskQueue)
             .AddTemporalAgents(options =>
             {
-                options.AddAIAgent(agent, timeToLive: TimeSpan.FromMinutes(10));
-                options.ActivityTimeout = TimeSpan.FromSeconds(3);
-                options.HeartbeatTimeout = TimeSpan.FromSeconds(2);
+                options.AddDurableAgent("TimeoutCANAgent", a =>
+                {
+                    a.ChatClient = _ => chatClient;
+                    a.TimeToLive = TimeSpan.FromMinutes(10);
+                });
+                options.DefaultActivityTimeout = TimeSpan.FromSeconds(3);
+                options.DefaultHeartbeatTimeout = TimeSpan.FromSeconds(2);
             });
 
         using var extraHost = builder.Build();

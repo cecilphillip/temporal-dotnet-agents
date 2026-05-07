@@ -41,8 +41,8 @@ public class HITLApprovalTimeoutTests : IClassFixture<IntegrationTestFixture>
             .AddHostedTemporalWorker(taskQueue)
             .AddTemporalAgents(options =>
             {
-                options.AddAIAgent(new EchoAIAgent("HITLAgent"));
-                options.ApprovalTimeout = TimeSpan.FromSeconds(2);
+                options.AddDurableAgent("HITLAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient());
+                options.DefaultApprovalTimeout = TimeSpan.FromSeconds(2);
             });
 
         using var host = builder.Build();
@@ -100,8 +100,8 @@ public class HITLApprovalTimeoutTests : IClassFixture<IntegrationTestFixture>
             .AddHostedTemporalWorker(taskQueue)
             .AddTemporalAgents(options =>
             {
-                options.AddAIAgent(new EchoAIAgent("HITLApproveAgent"));
-                options.ApprovalTimeout = TimeSpan.FromMinutes(5);
+                options.AddDurableAgent("HITLApproveAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient());
+                options.DefaultApprovalTimeout = TimeSpan.FromMinutes(5);
             });
 
         using var host = builder.Build();

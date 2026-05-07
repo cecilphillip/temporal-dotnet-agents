@@ -1,7 +1,5 @@
 using System.Collections.Generic;
-using System.Reflection;
 using Microsoft.Agents.AI;
-using Microsoft.Extensions.AI;
 using Temporalio.Client.Schedules;
 using Temporalio.Common;
 using Temporalio.Extensions.AI;
@@ -12,40 +10,20 @@ using Temporalio.Extensions.Agents.Workflows;
 namespace Temporalio.Extensions.Agents;
 
 /// <summary>
-/// Options for configuring Temporal agents.
+/// Options for configuring Temporal agents. Agents are registered exclusively via
+/// <see cref="AddDurableAgent(string, Action{DurableAgentBuilder})"/>; the v0.2 surface
+/// (<c>AddAIAgent</c>, <c>AddAIAgentFactory</c>, etc.) was removed in v0.3.
 /// </summary>
 public sealed class TemporalAgentsOptions
 {
-    // Agent names are case-insensitive
-    private readonly Dictionary<string, Func<IServiceProvider, AIAgent>> _agentFactories =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private readonly Dictionary<string, TimeSpan?> _agentTimeToLive =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private readonly Dictionary<string, string> _agentDescriptions =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    // Captures the per-agent ChatOptions at registration time so the step-mode activity can
-    // honor configured Temperature / ModelId / etc. — ChatClientAgent.ChatOptions is internal
-    // (see Microsoft.Agents.AI 1.0.0-preview), so we extract it via reflection at AddAIAgent
-    // time rather than at activity dispatch time. Only populated for ChatClientAgent instances.
-    private readonly Dictionary<string, ChatOptions> _agentChatOptions =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    // Phase 2 (v0.3.0 API redesign): durable-agent registrations created via AddDurableAgent.
-    // Shares the agent-name namespace with _agentFactories so the legacy and new paths cannot
-    // collide. Phase 3 will branch the workflow on presence here; until then the legacy path
-    // continues to drive everything.
+    // Agent names are case-insensitive across the durable-agent and proxy namespaces.
     private readonly Dictionary<string, DurableAgentRegistration> _durableAgentRegistrations =
         new(StringComparer.OrdinalIgnoreCase);
 
-    // Cached PropertyInfo for ChatClientAgent.ChatOptions (internal getter). Reflection lookup
-    // happens once per process; subsequent registrations are cheap.
-    private static readonly PropertyInfo? ChatClientAgentChatOptionsProperty =
-        typeof(ChatClientAgent).GetProperty(
-            "ChatOptions",
-            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+    // Proxy-only declarations (client-side processes). Stores the optional TTL; the proxy is wired
+    // by AddTemporalAgentProxies / TemporalAgentsRegistrar.
+    private readonly Dictionary<string, TimeSpan?> _proxyDeclarations =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private readonly List<ScheduleAgentRegistration> _scheduledRuns = [];
 
@@ -54,165 +32,79 @@ public sealed class TemporalAgentsOptions
     }
 
     /// <summary>
-    /// Gets or sets the default TTL for agent workflows. Defaults to 14 days.
-    /// Set to <see langword="null"/> to disable TTL for agents without explicit TTL configuration.
+    /// Gets or sets the worker-level default TTL for agent workflows. Agents that do not set
+    /// <see cref="DurableAgentBuilder.TimeToLive"/> inherit this value. Defaults to 14 days.
+    /// Set to <see langword="null"/> to disable TTL by default.
     /// </summary>
     public TimeSpan? DefaultTimeToLive { get; set; } = TimeSpan.FromDays(14);
 
     /// <summary>
-    /// Gets or sets the activity timeout applied to every
-    /// <see cref="AgentActivities.ExecuteAgentAsync"/> activity invocation.
-    /// This bounds the total wall-clock time allowed for one agent turn, including
-    /// any tool calls and retries within that turn. Defaults to 5 minutes.
+    /// Gets or sets the worker-level default activity start-to-close timeout used by the
+    /// <c>RunAgentStep</c> activity. Agents inherit this value when
+    /// <see cref="DurableAgentBuilder.ActivityTimeout"/> is unset. Defaults to 5 minutes.
     /// </summary>
-    public TimeSpan ActivityTimeout { get; set; } = TimeSpan.FromMinutes(5);
+    public TimeSpan DefaultActivityTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Gets or sets the heartbeat timeout for agent activity invocations.
-    /// If the activity does not send a heartbeat within this interval Temporal
-    /// considers it lost and schedules a retry. Relevant when streaming is enabled
-    /// because the activity heartbeats on each streamed chunk. Defaults to 2 minutes.
+    /// Gets or sets the worker-level default heartbeat timeout for agent step activities.
+    /// Agents inherit this value when <see cref="DurableAgentBuilder.HeartbeatTimeout"/> is unset.
+    /// Defaults to 2 minutes.
     /// </summary>
-    public TimeSpan HeartbeatTimeout { get; set; } = TimeSpan.FromMinutes(2);
+    public TimeSpan DefaultHeartbeatTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
-    /// Gets or sets the maximum time the workflow will wait for a human to respond
-    /// to an approval request before timing out. Defaults to 7 days.
-    /// When the timeout elapses, <see cref="AgentWorkflow.RequestApprovalAsync"/>
-    /// returns a rejected <see cref="DurableApprovalDecision"/> with a timeout comment.
+    /// Gets or sets the worker-level default approval timeout for human-in-the-loop flows.
+    /// Agents inherit this value when <see cref="DurableAgentBuilder.ApprovalTimeout"/> is unset.
+    /// Defaults to 7 days.
     /// </summary>
-    public TimeSpan ApprovalTimeout { get; set; } = TimeSpan.FromDays(7);
+    public TimeSpan DefaultApprovalTimeout { get; set; } = TimeSpan.FromDays(7);
 
     /// <summary>
-    /// Activity retry policy applied at every agent activity dispatch.
-    /// When null, Temporal SDK defaults apply (unbounded retries).
+    /// Gets or sets the worker-level default retry policy applied to the agent's
+    /// <c>RunAgentStep</c> activity. Agents inherit this value when
+    /// <see cref="DurableAgentBuilder.RetryPolicy"/> is unset. When <see langword="null"/>,
+    /// Temporal SDK defaults apply. Per-tool retry policies are configured separately via
+    /// <see cref="DurableAgentBuilder.AddTool(Microsoft.Extensions.AI.AIFunction, Action{DurableToolOptions}?)"/>.
     /// </summary>
-    public RetryPolicy? RetryPolicy { get; set; }
+    public RetryPolicy? DefaultRetryPolicy { get; set; }
 
     /// <summary>
     /// Default <c>false</c>. Set to <c>true</c> to opt into upserting
     /// AgentName / SessionCreatedAt / TurnCount search attributes on the workflow.
     /// Requires server-side pre-registration of the attribute keys.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>Breaking change in this release</b>: previous versions upserted these attributes
-    /// unconditionally. To restore prior behavior, set <c>EnableSearchAttributes = true</c>
-    /// on your <c>AddTemporalAgents</c> call.
-    /// </para>
-    /// </remarks>
     public bool EnableSearchAttributes { get; set; }
 
     /// <summary>
-    /// Worker-level default <see cref="IAgentHistoryStore"/> factory for durable agents registered
-    /// via <see cref="AddDurableAgent"/>. When a per-agent <c>HistoryStore</c> is unset on the
-    /// builder, the agent inherits this value. Setting this to a non-null factory is the v0.3
-    /// equivalent of the legacy <see cref="UseExternalHistory"/> opt-in.
+    /// Gets or sets the worker-level default <see cref="IAgentHistoryStore"/> factory. When a
+    /// per-agent <c>HistoryStore</c> is unset on the builder, the agent inherits this value.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Phase 2 only stores the property. Workflow integration that resolves and invokes the factory
-    /// at first activity dispatch is wired up in Phase 4 alongside the per-agent settings flow.
-    /// </para>
-    /// </remarks>
     public Func<IServiceProvider, IAgentHistoryStore>? HistoryStore { get; set; }
 
     /// <summary>
-    /// Maximum number of history entries before triggering continue-as-new.
-    /// Default 1000. Continue-as-new also fires on Temporal SDK's own
-    /// <see cref="Temporalio.Workflows.Workflow.ContinueAsNewSuggested"/> threshold, whichever comes first.
+    /// Gets or sets the worker-level default maximum number of <see cref="DurableSessionEntry"/>
+    /// instances retained before triggering continue-as-new. Agents inherit this value when
+    /// <see cref="DurableAgentBuilder.MaxEntryCount"/> is unset. Defaults to 1000. Continue-as-new
+    /// also fires on Temporal SDK's own
+    /// <see cref="Temporalio.Workflows.Workflow.ContinueAsNewSuggested"/> threshold, whichever
+    /// comes first.
     /// </summary>
-    public int MaxEntryCount { get; set; } = 1000;
+    public int DefaultMaxEntryCount { get; set; } = 1000;
 
     /// <summary>
-    /// Optional pure-function reducer applied to the carried history before continue-as-new.
-    /// Runs in workflow context — must be deterministic.
-    /// When null, full history is carried forward verbatim.
+    /// Gets or sets the worker-level default deterministic, pure history reducer applied before
+    /// continue-as-new. Agents inherit this value when <see cref="DurableAgentBuilder.HistoryReducer"/>
+    /// is unset. When <see langword="null"/>, full history is carried forward verbatim.
     /// </summary>
     /// <remarks>
-    /// The reducer receives the full history list and returns the list to carry forward.
-    /// Prefer LINQ projections over mutating the input list. The library may add fields
-    /// to <see cref="DurableSessionEntry"/> (or its subclasses) in future versions — design
-    /// reducers to be tolerant of unknown subtypes.
+    /// The reducer receives the full history list and returns the list to carry forward. Prefer
+    /// LINQ projections over mutating the input list.
     /// <para>
     /// WARNING: This delegate is not serialized. Re-supply it on every StartWorkflowAsync call
     /// (on the same worker, in-memory carry-forward across continue-as-new is fine).
     /// </para>
     /// </remarks>
-    public Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>? HistoryReducer { get; set; }
-
-    /// <summary>
-    /// When <see langword="true"/>, agent conversation history is loaded and appended via a
-    /// registered <see cref="HistoryStore.IAgentHistoryStore"/> instead of being carried
-    /// inside the Temporal <c>ActivityScheduled</c> event. Defaults to <see langword="false"/>.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Setting this to <see langword="true"/> requires an <see cref="HistoryStore.IAgentHistoryStore"/>
-    /// implementation to be registered in DI. Worker startup throws
-    /// <see cref="InvalidOperationException"/> if no store is registered.
-    /// </para>
-    /// <para>
-    /// Migration: workflows started while this setting was <see langword="false"/> continue
-    /// using in-memory history until they complete or hit continue-as-new. The
-    /// <c>UseExternalStore</c> flag travels with the running workflow input.
-    /// </para>
-    /// </remarks>
-    public bool UseExternalHistory { get; set; }
-
-    /// <summary>
-    /// When <see langword="true"/>, agent turns run as a <em>step-mode</em> workflow loop:
-    /// each LLM call is a separate <c>RunAgentStepAsync</c> activity, and each tool call
-    /// is a separate <c>Temporalio.Extensions.AI.InvokeFunction</c> activity dispatched by
-    /// the workflow (not the agent's <c>FunctionInvokingChatClient</c>). Defaults to
-    /// <see langword="false"/>.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Enabling step mode requires <c>AddDurableAI</c> on the same worker builder, because
-    /// the workflow dispatches <c>DurableFunctionActivities.InvokeFunctionAsync</c> for tool
-    /// execution. Worker startup throws <see cref="InvalidOperationException"/> if
-    /// <c>DurableFunctionActivities</c> is not registered.
-    /// </para>
-    /// <para>
-    /// Tools used in step mode must also be registered via <c>AddDurableTools(...)</c> so
-    /// they can be resolved by name inside the tool-invocation activity.
-    /// </para>
-    /// <para>
-    /// Migration: this flag travels with the workflow input. Sessions started before the
-    /// upgrade carry <c>EnablePerToolActivities = false</c> and continue using the
-    /// single-activity path until they complete or hit continue-as-new.
-    /// </para>
-    /// </remarks>
-    public bool EnablePerToolActivities { get; set; }
-
-    /// <summary>
-    /// Optional per-tool <see cref="Temporalio.Workflows.ActivityOptions"/> used when
-    /// <see cref="EnablePerToolActivities"/> is <see langword="true"/>. The dictionary key is
-    /// the tool's <see cref="Microsoft.Extensions.AI.AIFunction.Name"/> (case-insensitive). When a tool name is not
-    /// present, the workflow falls back to <see cref="ActivityTimeout"/>, <see cref="HeartbeatTimeout"/>,
-    /// and <see cref="RetryPolicy"/>.
-    /// </summary>
-    /// <remarks>
-    /// Use this to constrain write-style tools (send email, write record) by setting
-    /// <c>MaximumAttempts = 1</c> in their retry policy so non-idempotent re-execution is
-    /// prevented on retry. Read-style tools may benefit from the default unbounded retry
-    /// policy.
-    /// </remarks>
-    public Dictionary<string, Temporalio.Workflows.ActivityOptions>? PerToolActivityOptions { get; set; }
-
-    /// <summary>
-    /// Maximum number of step-mode loop iterations per single agent turn. The loop counts
-    /// LLM step activities; each iteration dispatches at most one batch of tool activities
-    /// (parallel fan-out). When the cap is exceeded, the workflow returns a structured error
-    /// response rather than letting workflow history grow unbounded. Default 20.
-    /// </summary>
-    /// <remarks>
-    /// Tune up for agents that legitimately chain many tools per turn; tune down for
-    /// hardening. The cap protects against runaway LLM tool-calling loops on adversarial
-    /// inputs.
-    /// </remarks>
-    public int MaxToolCallsPerTurn { get; set; } = 20;
+    public Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>? DefaultHistoryReducer { get; set; }
 
     /// <summary>
     /// Registers a durable agent and returns this options instance for chaining. The configure
@@ -221,9 +113,7 @@ public sealed class TemporalAgentsOptions
     /// of the worker process).
     /// </summary>
     /// <param name="name">
-    /// Case-insensitive agent name. Must be unique across <em>all</em> registration paths
-    /// (<see cref="AddAIAgent(AIAgent, TimeSpan?)"/>, <see cref="AddAIAgentFactory(string, Func{IServiceProvider, AIAgent}, TimeSpan?, string?)"/>,
-    /// <see cref="AddAgentProxy"/>, and other <c>AddDurableAgent</c> calls share one namespace).
+    /// Case-insensitive agent name. Must be unique within this options instance.
     /// </param>
     /// <param name="configure">
     /// Builder callback invoked synchronously during this method. Must assign
@@ -231,54 +121,27 @@ public sealed class TemporalAgentsOptions
     /// <see cref="InvalidOperationException"/>.
     /// </param>
     /// <returns>This options instance, for fluent chaining.</returns>
-    /// <exception cref="ArgumentException">
-    /// Thrown when <paramref name="name"/> is null/empty.
-    /// </exception>
-    /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="configure"/> is <see langword="null"/>.
-    /// </exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> is null/empty.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="configure"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when <paramref name="name"/> is already registered (durable, legacy, or proxy), or
-    /// when the configure delegate completed without assigning <see cref="DurableAgentBuilder.ChatClient"/>.
+    /// Thrown when <paramref name="name"/> is already registered, or when the configure delegate
+    /// completed without assigning <see cref="DurableAgentBuilder.ChatClient"/>.
     /// </exception>
-    /// <remarks>
-    /// <para>
-    /// Phase 2 of the v0.3 API redesign: Phase 3 wires the workflow loop to consume the durable
-    /// registration. Until then, durable agents register their name and description for
-    /// introspection (<see cref="GetRegisteredAgentNames"/> / <see cref="GetAgentDescriptors"/>) but
-    /// the workflow continues to use the legacy dispatch path.
-    /// </para>
-    /// <para>
-    /// To allow downstream introspection APIs to surface the durable agent without leaking the
-    /// builder's resolution lifecycle, a synthetic factory is wired into the legacy
-    /// <c>_agentFactories</c> map. The synthetic factory throws on invocation — Phase 3's workflow
-    /// branches on durable registration before reaching that path, so the throw is defensive and
-    /// only fires if a durable agent is dispatched through the legacy code path (which would be a
-    /// wiring bug).
-    /// </para>
-    /// </remarks>
     public TemporalAgentsOptions AddDurableAgent(string name, Action<DurableAgentBuilder> configure)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(configure);
 
-        // Q9b: throw immediately at the second call site, regardless of whether the existing
-        // entry came from AddDurableAgent, AddAIAgent, AddAIAgentFactory, or AddAgentProxy.
-        // _durableAgentRegistrations and _agentFactories are kept in lockstep — the synthetic
-        // factory below ensures introspection sees durable agents — so checking either is
-        // equivalent in practice. We check both for defense in depth.
-        if (_agentFactories.ContainsKey(name) || _durableAgentRegistrations.ContainsKey(name))
+        if (_durableAgentRegistrations.ContainsKey(name) || _proxyDeclarations.ContainsKey(name))
         {
             throw new InvalidOperationException(
                 $"An agent with name '{name}' has already been registered. Agent names must be unique " +
-                "across AddDurableAgent, AddAIAgent, AddAIAgentFactory, and AddAgentProxy.");
+                "across AddDurableAgent and AddAgentProxy.");
         }
 
         var builder = new DurableAgentBuilder(name);
         configure(builder);
 
-        // Q9 end-of-delegate validation: ChatClient is required. Surfaces the most common wiring
-        // mistake (forgetting to set ChatClient) at the call site instead of at first dispatch.
         if (builder.ChatClient is null)
         {
             throw new InvalidOperationException(
@@ -288,147 +151,14 @@ public sealed class TemporalAgentsOptions
         var registration = builder.ToRegistration();
         _durableAgentRegistrations.Add(name, registration);
 
-        // Synthetic legacy factory: lets GetRegisteredAgentNames / IsAgentRegistered /
-        // GetAgentDescriptors see durable agents through the existing introspection API. The
-        // throw is a safety net — Phase 3's workflow branches on _durableAgentRegistrations
-        // before reaching this factory.
-        _agentFactories.Add(name, _ => throw new InvalidOperationException(
-            $"Durable agents must be invoked via the AddDurableAgent path, not the legacy factory path. " +
-            $"Agent '{name}' was registered via AddDurableAgent — this indicates a wiring mistake."));
-
-        if (!string.IsNullOrWhiteSpace(registration.Description))
-        {
-            _agentDescriptions[name] = registration.Description!;
-        }
-
         return this;
-    }
-
-    /// <summary>Adds an agent factory with an optional per-agent TTL.</summary>
-    /// <param name="name">
-    /// Case-insensitive agent name. Must be unique across registrations.
-    /// </param>
-    /// <param name="factory">
-    /// Factory invoked once at activity dispatch time to obtain the <see cref="AIAgent"/> instance.
-    /// Receives the activity's <see cref="IServiceProvider"/>.
-    /// </param>
-    /// <param name="timeToLive">
-    /// Per-agent session TTL. When null, falls back to <see cref="DefaultTimeToLive"/>
-    /// (14 days by default).
-    /// </param>
-    /// <param name="description">
-    /// Optional human-readable description of what the agent does. When provided, the agent
-    /// appears in <see cref="GetAgentDescriptors"/> for use in routing prompts.
-    /// </param>
-    /// <returns>This options instance, for fluent chaining.</returns>
-    public TemporalAgentsOptions AddAIAgentFactory(string name, Func<IServiceProvider, AIAgent> factory, TimeSpan? timeToLive = null, string? description = null)
-    {
-        ArgumentNullException.ThrowIfNull(name);
-        ArgumentNullException.ThrowIfNull(factory);
-        if (_agentFactories.ContainsKey(name))
-            throw new ArgumentException($"An agent factory with name '{name}' has already been registered.", nameof(name));
-        _agentFactories.Add(name, factory);
-        if (timeToLive.HasValue)
-        {
-            _agentTimeToLive[name] = timeToLive;
-        }
-
-        if (!string.IsNullOrWhiteSpace(description))
-        {
-            _agentDescriptions[name] = description;
-        }
-
-        return this;
-    }
-
-    /// <summary>Adds multiple agents at once.</summary>
-    /// <param name="agents">
-    /// One or more <see cref="AIAgent"/> instances to register. Each agent must have a
-    /// non-null, non-whitespace <see cref="AIAgent.Name"/> and must not duplicate an
-    /// already-registered name.
-    /// </param>
-    /// <returns>This options instance, for fluent chaining.</returns>
-    public TemporalAgentsOptions AddAIAgents(params IEnumerable<AIAgent> agents)
-    {
-        ArgumentNullException.ThrowIfNull(agents);
-        foreach (var agent in agents)
-        {
-            AddAIAgent(agent);
-        }
-
-        return this;
-    }
-
-    /// <summary>Adds a single agent with an optional per-agent TTL.</summary>
-    /// <param name="agent">
-    /// The <see cref="AIAgent"/> instance to register. Its <see cref="AIAgent.Name"/> must be
-    /// non-null, non-whitespace, and unique within this options instance.
-    /// </param>
-    /// <param name="timeToLive">
-    /// Per-agent session TTL. When null, falls back to <see cref="DefaultTimeToLive"/>
-    /// (14 days by default).
-    /// </param>
-    /// <returns>This options instance, for fluent chaining.</returns>
-    public TemporalAgentsOptions AddAIAgent(AIAgent agent, TimeSpan? timeToLive = null)
-    {
-        ArgumentNullException.ThrowIfNull(agent);
-
-        if (string.IsNullOrWhiteSpace(agent.Name))
-        {
-            throw new ArgumentException($"{nameof(agent.Name)} must not be null or whitespace.", nameof(agent));
-        }
-
-        if (_agentFactories.ContainsKey(agent.Name))
-        {
-            throw new ArgumentException($"An agent with name '{agent.Name}' has already been registered.", nameof(agent));
-        }
-
-        _agentFactories.Add(agent.Name, _ => agent);
-        if (timeToLive.HasValue)
-        {
-            _agentTimeToLive[agent.Name] = timeToLive;
-        }
-
-        // Auto-extract the description from the agent if one is set.
-        if (!string.IsNullOrWhiteSpace(agent.Description))
-        {
-            _agentDescriptions[agent.Name] = agent.Description;
-        }
-
-        // Capture configured ChatOptions for step-mode use. ChatClientAgent.ChatOptions is
-        // internal in Microsoft.Agents.AI; the reflection lookup is the only path to honor
-        // per-agent settings (Temperature, ModelId, TopP, etc.) when step mode bypasses the
-        // agent's own GetResponseAsync pipeline and talks directly to IChatClient.
-        if (agent is ChatClientAgent cca)
-        {
-            var configured = ReadChatOptionsFromAgent(cca);
-            if (configured is not null)
-            {
-                _agentChatOptions[agent.Name] = configured;
-            }
-        }
-
-        return this;
-    }
-
-    /// <summary>
-    /// Reads the (internal) <c>ChatOptions</c> property off a <see cref="ChatClientAgent"/> via
-    /// reflection. Shared between registration-time capture and the activity-time fallback that
-    /// covers the <see cref="AddAIAgentFactory(string, Func{IServiceProvider, AIAgent}, TimeSpan?, string?)"/>
-    /// path (where the agent does not exist at registration). Returns <see langword="null"/> when
-    /// the property is unavailable on the running runtime or the agent was constructed without options.
-    /// </summary>
-    internal static ChatOptions? ReadChatOptionsFromAgent(ChatClientAgent agent)
-    {
-        ArgumentNullException.ThrowIfNull(agent);
-        return ChatClientAgentChatOptionsProperty?.GetValue(agent) as ChatOptions;
     }
 
     /// <summary>
     /// Declares a named agent proxy for client-only scenarios where the real agent
-    /// implementation runs in a separate worker process.
-    /// No factory is required; call this from <see cref="ServiceCollectionExtensions.AddTemporalAgentProxies"/>
-    /// instead of <see cref="AddAIAgent"/> or <see cref="AddAIAgentFactory"/>.
+    /// implementation runs in a separate worker process. No factory is required; call this from
+    /// <see cref="ServiceCollectionExtensions.AddTemporalAgentProxies"/> instead of
+    /// <see cref="AddDurableAgent(string, Action{DurableAgentBuilder})"/>.
     /// </summary>
     /// <param name="name">
     /// Case-insensitive agent name that must match the name used by the remote worker.
@@ -443,76 +173,14 @@ public sealed class TemporalAgentsOptions
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        if (_agentFactories.ContainsKey(name))
+        if (_durableAgentRegistrations.ContainsKey(name) || _proxyDeclarations.ContainsKey(name))
         {
-            throw new ArgumentException($"An agent with name '{name}' has already been registered.", nameof(name));
+            throw new ArgumentException(
+                $"An agent with name '{name}' has already been registered.", nameof(name));
         }
 
-        // Guard factory — if somehow invoked from a worker context it fails fast with a clear message.
-        // Note: this throw is defense-in-depth. The keyed AIAgent proxy registered for proxy-only
-        // entries (see TemporalWorkerBuilderExtensions) is fully functional in worker processes —
-        // it routes RunAsync calls through Temporal updates, never invoking this factory locally.
-        // The factory only fires if AgentActivities.ExecuteAgentAsync attempts to execute a
-        // proxy-only agent name on the worker, which is the failure mode we want to surface clearly.
-        _agentFactories.Add(name, _ => throw new InvalidOperationException(
-            $"Agent '{name}' was registered with AddAgentProxy() for client-only use. " +
-            $"Register the real agent via AddAIAgent() or AddAIAgentFactory() in the worker process."));
-
-        if (timeToLive.HasValue)
-        {
-            _agentTimeToLive[name] = timeToLive;
-        }
-
+        _proxyDeclarations.Add(name, timeToLive);
         return this;
-    }
-
-    // ── Async factory overload (GAP 7: MCP convenience) ──────────────────────
-
-    /// <summary>
-    /// Adds an agent using an <c>async</c> factory.
-    /// The factory is invoked synchronously (blocking) during worker startup, not on hot paths.
-    /// </summary>
-    /// <param name="name">
-    /// Case-insensitive agent name. Must be unique across registrations.
-    /// </param>
-    /// <param name="asyncFactory">
-    /// Async factory invoked once at activity dispatch time. The result is awaited
-    /// synchronously via <c>GetAwaiter().GetResult()</c> — safe at startup but not on the
-    /// workflow thread. Receives the activity's <see cref="IServiceProvider"/>.
-    /// </param>
-    /// <param name="timeToLive">
-    /// Per-agent session TTL. When null, falls back to <see cref="DefaultTimeToLive"/>
-    /// (14 days by default).
-    /// </param>
-    /// <param name="description">
-    /// Optional human-readable description of what the agent does. When provided, the agent
-    /// appears in <see cref="GetAgentDescriptors"/> for use in routing prompts.
-    /// </param>
-    /// <returns>This options instance, for fluent chaining.</returns>
-    /// <remarks>
-    /// Use this overload when agent setup requires async work, such as connecting to an MCP
-    /// server and listing its tools:
-    /// <code>
-    /// opts.AddAIAgentFactory("MyAgent", async sp =>
-    /// {
-    ///     // McpClientTool extends AIFunction (MEAI-native) — no adapter needed.
-    ///     var mcpClient = await McpClientFactory.CreateAsync(transport);
-    ///     var mcpTools  = await mcpClient.ListToolsAsync();
-    ///     return chatClient.AsAIAgent("MyAgent", tools: [.. staticTools, .. mcpTools]);
-    /// });
-    /// </code>
-    /// </remarks>
-    public TemporalAgentsOptions AddAIAgentFactory(
-        string name,
-        Func<IServiceProvider, Task<AIAgent>> asyncFactory,
-        TimeSpan? timeToLive = null,
-        string? description = null)
-    {
-        ArgumentNullException.ThrowIfNull(name);
-        ArgumentNullException.ThrowIfNull(asyncFactory);
-
-        // Resolve at worker startup (blocking is safe here — DI container is being built).
-        return AddAIAgentFactory(name, sp => asyncFactory(sp).GetAwaiter().GetResult(), timeToLive, description);
     }
 
     /// <summary>
@@ -526,12 +194,6 @@ public sealed class TemporalAgentsOptions
     /// <param name="request">The request to send to the agent on each scheduled run.</param>
     /// <param name="spec">When and how often the schedule fires.</param>
     /// <param name="policy">Overlap and catchup policy. Defaults to <see cref="SchedulePolicy"/> defaults.</param>
-    /// <remarks>
-    /// <b>Config drift:</b> changing <paramref name="spec"/> in code does not update an existing
-    /// schedule on restart — the already-exists warning is logged and the old spec remains active.
-    /// To apply an updated spec, delete the schedule first via
-    /// <see cref="ITemporalAgentClient.GetAgentScheduleHandle"/> and then restart the worker.
-    /// </remarks>
     public TemporalAgentsOptions AddScheduledAgentRun(
         string agentName,
         string scheduleId,
@@ -554,76 +216,75 @@ public sealed class TemporalAgentsOptions
     // ── Agent Registry (read-only introspection) ──────────────────────────
 
     /// <summary>
-    /// Returns the names of all registered agents (case-preserving, in registration order).
-    /// Useful for health-check endpoints, admin dashboards, and startup validation.
+    /// Returns the names of all registered agents (durable and proxy), in registration order.
     /// </summary>
-    /// <returns>
-    /// A snapshot of the registered agent names at the time of the call. The list is
-    /// independent of the internal registry — mutations to it do not affect registrations.
-    /// </returns>
-    public IReadOnlyList<string> GetRegisteredAgentNames() =>
-        [.. _agentFactories.Keys];
+    public IReadOnlyList<string> GetRegisteredAgentNames()
+    {
+        var names = new List<string>(_durableAgentRegistrations.Count + _proxyDeclarations.Count);
+        names.AddRange(_durableAgentRegistrations.Keys);
+        names.AddRange(_proxyDeclarations.Keys);
+        return names;
+    }
 
     /// <summary>
     /// Returns <see langword="true"/> if an agent with the given name is registered.
     /// The check is case-insensitive.
     /// </summary>
-    /// <param name="name">
-    /// The agent name to look up. Null or empty returns <see langword="false"/> without throwing.
-    /// </param>
-    /// <returns>
-    /// <see langword="true"/> if <paramref name="name"/> matches a registered agent name
-    /// (case-insensitive); <see langword="false"/> otherwise.
-    /// </returns>
     public bool IsAgentRegistered(string name) =>
-        !string.IsNullOrEmpty(name) && _agentFactories.ContainsKey(name);
+        !string.IsNullOrEmpty(name)
+        && (_durableAgentRegistrations.ContainsKey(name) || _proxyDeclarations.ContainsKey(name));
 
     /// <summary>
-    /// Returns descriptors for all registered agents that have a description.
-    /// Agents registered without a description (e.g. classifier agents that are not routable
-    /// specialists) are excluded. Use this in routing activities to build an LLM dispatch prompt.
+    /// Returns descriptors for all registered durable agents that have a description.
+    /// Use this in routing activities to build an LLM dispatch prompt.
     /// </summary>
-    /// <returns>
-    /// A snapshot of <see cref="AgentDescriptor"/> entries for agents with descriptions,
-    /// in registration order. The list is independent of the internal registry.
-    /// </returns>
     public IReadOnlyList<AgentDescriptor> GetAgentDescriptors() =>
-        [.. _agentDescriptions.Select(kvp => new AgentDescriptor(kvp.Key, kvp.Value))];
+        [.. _durableAgentRegistrations
+            .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value.Description))
+            .Select(kvp => new AgentDescriptor(kvp.Key, kvp.Value.Description!))];
 
     /// <summary>
     /// Returns the description for the given agent, or <see langword="null"/> if the agent
     /// has no description or is not registered. The lookup is case-insensitive.
     /// </summary>
-    /// <param name="agentName">
-    /// The agent name to look up. Null or empty returns <see langword="null"/> without throwing.
-    /// </param>
-    public string? GetAgentDescription(string agentName) =>
-        string.IsNullOrEmpty(agentName) ? null : _agentDescriptions.GetValueOrDefault(agentName);
+    public string? GetAgentDescription(string agentName)
+    {
+        if (string.IsNullOrEmpty(agentName))
+        {
+            return null;
+        }
 
-    /// <summary>Gets all registered agent factories.</summary>
-    internal IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>> GetAgentFactories() =>
-        _agentFactories.AsReadOnly();
+        return _durableAgentRegistrations.TryGetValue(agentName, out var reg)
+            ? reg.Description
+            : null;
+    }
 
     /// <summary>
-    /// Gets the durable-agent registrations (Phase 2 of v0.3 API redesign). Phase 3 reads this
-    /// dictionary from the workflow loop to dispatch the new per-tool path. Empty when no
-    /// <see cref="AddDurableAgent"/> calls have been made.
+    /// Gets the durable-agent registrations. Empty when no <see cref="AddDurableAgent"/> calls
+    /// have been made.
     /// </summary>
     internal IReadOnlyDictionary<string, DurableAgentRegistration> DurableAgentRegistrations =>
         _durableAgentRegistrations;
 
-    /// <summary>
-    /// Returns the <see cref="ChatOptions"/> captured at registration time for the named agent,
-    /// or <see langword="null"/> when the agent is not a <see cref="ChatClientAgent"/> or has no
-    /// configured options. Used by the step-mode activity to seed its per-call ChatOptions so
-    /// that registration-time settings (Temperature, ModelId, etc.) are not silently dropped.
-    /// </summary>
-    internal ChatOptions? GetAgentChatOptions(string agentName) =>
-        string.IsNullOrEmpty(agentName)
-            ? null
-            : _agentChatOptions.GetValueOrDefault(agentName);
+    /// <summary>Gets the proxy-only declarations.</summary>
+    internal IReadOnlyDictionary<string, TimeSpan?> ProxyDeclarations => _proxyDeclarations;
 
-    /// <summary>Gets the TTL for a specific agent, falling back to <see cref="DefaultTimeToLive"/>.</summary>
-    internal TimeSpan? GetTimeToLive(string agentName) =>
-        _agentTimeToLive.GetValueOrDefault(agentName, DefaultTimeToLive);
+    /// <summary>
+    /// Gets the resolved TTL for a specific agent. Per-agent value (durable registration or proxy
+    /// declaration) wins; otherwise falls back to <see cref="DefaultTimeToLive"/>.
+    /// </summary>
+    internal TimeSpan? GetTimeToLive(string agentName)
+    {
+        if (_durableAgentRegistrations.TryGetValue(agentName, out var reg) && reg.TimeToLive.HasValue)
+        {
+            return reg.TimeToLive;
+        }
+
+        if (_proxyDeclarations.TryGetValue(agentName, out var proxyTtl) && proxyTtl.HasValue)
+        {
+            return proxyTtl;
+        }
+
+        return DefaultTimeToLive;
+    }
 }

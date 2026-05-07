@@ -43,8 +43,7 @@ public class NoLoggingTests : IClassFixture<IntegrationTestFixture>
             services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
             services
                 .AddHostedTemporalWorker(taskQueue)
-                .AddTemporalAgents(options => options.AddAIAgent(
-                    new EchoAIAgent("NoLogAgent")));
+                .AddTemporalAgents(options => options.AddDurableAgent("NoLogAgent", a => a.ChatClient = _ => new EchoChatClient()));
         });
 
         using var host = builder.Build();

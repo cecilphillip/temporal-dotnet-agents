@@ -151,8 +151,7 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
         builder.Services.AddSingleton<ITemporalClient>(_fixture.Client);
         builder.Services
             .AddHostedTemporalWorker(taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(
-                new EchoAIAgent("my-custom-agent")));
+            .AddTemporalAgents(options => options.AddDurableAgent("my-custom-agent", a => a.ChatClient = _ => new EchoChatClient()));
 
         using var host = builder.Build();
         await host.StartAsync();
@@ -185,8 +184,7 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
         builder.Services.AddSingleton<ITemporalClient>(_fixture.Client);
         builder.Services
             .AddHostedTemporalWorker(taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(
-                new EchoAIAgent("agent_v2_beta")));
+            .AddTemporalAgents(options => options.AddDurableAgent("agent_v2_beta", a => a.ChatClient = _ => new EchoChatClient()));
 
         using var host = builder.Build();
         await host.StartAsync();
@@ -435,8 +433,7 @@ public class EdgeCaseTests : IClassFixture<IntegrationTestFixture>
         builder.Services.AddSingleton<ITemporalClient>(_fixture.Client);
         builder.Services
             .AddHostedTemporalWorker(taskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(
-                new EmptyResponseAIAgent("EmptyAgent")));
+            .AddTemporalAgents(options => options.AddDurableAgent("EmptyAgent", a => a.ChatClient = _ => new EmptyResponseChatClient()));
 
         using var host = builder.Build();
         await host.StartAsync();

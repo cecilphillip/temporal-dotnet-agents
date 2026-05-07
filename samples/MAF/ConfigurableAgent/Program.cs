@@ -81,47 +81,33 @@ builder.Services
         // early (antipattern). The factory receives the fully-built IServiceProvider
         // at first activity dispatch, so everything resolves cleanly.
 
-        opts.AddAIAgentFactory("TriageAgent", sp =>
+        // Phase 5 placeholder — Phase 7 rewrites samples to the v0.3 idiomatic shape.
+        opts.AddDurableAgent("TriageAgent", a =>
         {
-            var options = sp.GetRequiredService<IOptions<TriageAgentOptions>>().Value;
-            var orderService = sp.GetRequiredService<OrderService>();
-
-            var instructions = options.Instructions
-                .Replace("{CompanyName}", options.CompanyName);
-
-            var lookupTool = AIFunctionFactory.Create(
-                orderService.LookupOrder,
-                "LookupOrder",
-                "Look up the current status of a customer order by order ID.");
-
-            return openAiClient.GetChatClient(model).AsAIAgent(
-                name: "TriageAgent",
-                description: "First-line support — handles order lookups and common questions.",
-                instructions: instructions,
-                tools: [lookupTool],
-                clientFactory: c => c.AsBuilder().UseFunctionInvocation().Build());
+            a.Description = "First-line support — handles order lookups and common questions.";
+            a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient();
+            a.AddTool("LookupOrder", sp =>
+            {
+                var orderService = sp.GetRequiredService<OrderService>();
+                return AIFunctionFactory.Create(
+                    orderService.LookupOrder,
+                    "LookupOrder",
+                    "Look up the current status of a customer order by order ID.");
+            });
         });
 
-        opts.AddAIAgentFactory("EscalationAgent", sp =>
+        opts.AddDurableAgent("EscalationAgent", a =>
         {
-            var options = sp.GetRequiredService<IOptions<EscalationAgentOptions>>().Value;
-            var policyService = sp.GetRequiredService<EscalationPolicyService>();
-            var triageOptions = sp.GetRequiredService<IOptions<TriageAgentOptions>>().Value;
-
-            var instructions = options.Instructions
-                .Replace("{CompanyName}", triageOptions.CompanyName);
-
-            var policyTool = AIFunctionFactory.Create(
-                policyService.GetReturnPolicy,
-                "GetReturnPolicy",
-                "Returns Acme Store's return and refund policy.");
-
-            return openAiClient.GetChatClient(model).AsAIAgent(
-                name: "EscalationAgent",
-                description: "Specialist for complaints, refunds, and complex cases.",
-                instructions: instructions,
-                tools: [policyTool],
-                clientFactory: c => c.AsBuilder().UseFunctionInvocation().Build());
+            a.Description = "Specialist for complaints, refunds, and complex cases.";
+            a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient();
+            a.AddTool("GetReturnPolicy", sp =>
+            {
+                var policyService = sp.GetRequiredService<EscalationPolicyService>();
+                return AIFunctionFactory.Create(
+                    policyService.GetReturnPolicy,
+                    "GetReturnPolicy",
+                    "Returns Acme Store's return and refund policy.");
+            });
         });
     })
     .AddWorkflow<SupportWorkflow>();

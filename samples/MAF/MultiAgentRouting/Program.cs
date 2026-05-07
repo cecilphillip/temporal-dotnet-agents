@@ -3,6 +3,7 @@
 //
 // Run:  dotnet run --project samples/MAF/MultiAgentRouting/MultiAgentRouting.csproj
 
+using Microsoft.Extensions.AI;
 using System.ClientModel;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -98,9 +99,9 @@ builder.Services
     .AddHostedTemporalWorker("agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(weatherAgent, timeToLive: TimeSpan.FromHours(1));
-        opts.AddAIAgent(billingAgent, timeToLive: TimeSpan.FromHours(1));
-        opts.AddAIAgent(techSupportAgent, timeToLive: TimeSpan.FromHours(1));
+        opts.AddDurableAgent("WeatherAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
+        opts.AddDurableAgent("BillingAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
+        opts.AddDurableAgent("TechSupportAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
     })
     .AddWorkflow<RoutingWorkflow>()
     .AddWorkflow<ParallelAgentWorkflow>()

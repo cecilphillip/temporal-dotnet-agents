@@ -160,7 +160,7 @@ public abstract class DurableChatWorkflowBase<TOutput>
     /// <summary>
     /// When <see langword="true"/>, response entries appended to the in-workflow history have
     /// their <see cref="DurableSessionEntry.Messages"/> replaced with an empty collection.
-    /// Used by external-history modes (e.g. <c>TemporalAgentsOptions.UseExternalHistory</c>):
+    /// Used by external-history modes (when an agent is configured with an external history store):
     /// the in-workflow history continues to drive turn-counting, search-attribute upserts,
     /// and the <c>MaxEntryCount</c>-triggered continue-as-new check, but the message payloads
     /// — which are the source of PII and Temporal event-log bloat — live only in the external

@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Temporalio.Client;
-using Temporalio.Extensions.Agents.HistoryStore;
 using Temporalio.Extensions.Agents.Workflows;
 using Temporalio.Extensions.AI;
 using Temporalio.Extensions.Hosting;
@@ -15,22 +14,13 @@ namespace Temporalio.Extensions.Agents;
 /// Internal helper that performs the DI side of registering agent services.
 /// Shared by <see cref="TemporalWorkerBuilderExtensions.AddTemporalAgents"/> and
 /// <see cref="TemporalAgentsPlugin"/> so both paths converge on identical DI state.
-/// Idempotent — safe to call more than once thanks to
-/// <see cref="ServiceCollectionDescriptorExtensions.TryAddSingleton{TService}(IServiceCollection)"/>
-/// and <see cref="ServiceCollectionDescriptorExtensions.TryAddEnumerable"/>.
 /// </summary>
 internal static class TemporalAgentsRegistrar
 {
     /// <summary>
-    /// Performs DI registration for temporal agents: options, factory dictionary,
-    /// agent client, keyed proxies, workflow, activities, and DurableAIDataConverter
-    /// auto-wiring.
+    /// Performs DI registration for temporal agents: options, agent client, keyed proxies,
+    /// workflow, activities, and DurableAIDataConverter auto-wiring.
     /// </summary>
-    /// <param name="services">The service collection (always required).</param>
-    /// <param name="builder">The worker options builder. When non-null, the
-    /// workflows and activities are registered onto the worker. When null,
-    /// only the DI-side registrations are applied.</param>
-    /// <param name="agentsOptions">The configured <see cref="TemporalAgentsOptions"/>.</param>
     public static void Register(
         IServiceCollection services,
         ITemporalWorkerServiceOptionsBuilder? builder,
@@ -41,38 +31,7 @@ internal static class TemporalAgentsRegistrar
 
         var taskQueue = builder?.TaskQueue ?? string.Empty;
 
-        // Validate at startup: external-history mode requires a registered IAgentHistoryStore.
-        // Surfacing this here means a misconfigured worker fails immediately at composition,
-        // not during the first turn dispatch.
-        if (agentsOptions.UseExternalHistory
-            && !services.Any(d => d.ServiceType == typeof(IAgentHistoryStore)))
-        {
-            throw new InvalidOperationException(
-                "TemporalAgentsOptions.UseExternalHistory is enabled, but no IAgentHistoryStore " +
-                "implementation is registered in the service collection. Register one before " +
-                "calling AddTemporalAgents, e.g. " +
-                "services.AddSingleton<IAgentHistoryStore, MyStore>().");
-        }
-
-        // Validate at startup: step mode requires the AI library's DurableFunctionActivities
-        // (which the workflow dispatches per tool call). The tell-tale registration is the
-        // DurableExecutionOptions singleton that AddDurableAI installs, which also brings in
-        // DurableFunctionRegistry and DurableFunctionActivities.
-        if (agentsOptions.EnablePerToolActivities
-            && !services.Any(d => d.ServiceType == typeof(DurableExecutionOptions)))
-        {
-            throw new InvalidOperationException(
-                "TemporalAgentsOptions.EnablePerToolActivities is enabled, but DurableFunctionActivities " +
-                "is not registered. Call AddDurableAI() (and AddDurableTools(...)) on the same worker " +
-                "builder before AddTemporalAgents, e.g. " +
-                "builder.AddDurableAI().AddDurableTools(myTool).AddTemporalAgents(opts => opts.EnablePerToolActivities = true).");
-        }
-
-        // Agent factory dictionary — consumed by AgentActivities to resolve real agent instances.
-        services.TryAddSingleton<IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>>>(
-            _ => agentsOptions.GetAgentFactories());
-
-        // Options singleton — consumed by DefaultTemporalAgentClient for per-agent TTL resolution.
+        // Options singleton — consumed by DefaultTemporalAgentClient and AgentActivities.
         services.TryAddSingleton(agentsOptions);
 
         // ITemporalAgentClient — uses WorkflowUpdate for synchronous request/response semantics.
@@ -84,8 +43,8 @@ internal static class TemporalAgentsRegistrar
                 taskQueue,
                 sp.GetService<ILogger<DefaultTemporalAgentClient>>()));
 
-        // Register a keyed AIAgent proxy singleton per declared agent name.
-        foreach (var (name, _) in agentsOptions.GetAgentFactories())
+        // Register a keyed AIAgent proxy singleton for every declared agent name (durable + proxy).
+        foreach (var name in agentsOptions.GetRegisteredAgentNames())
         {
             var agentName = name;
             services.AddKeyedSingleton<AIAgent>(agentName, (sp, _) =>
@@ -124,10 +83,6 @@ internal static class TemporalAgentsRegistrar
         // Auto-wire TemporalAgentDataConverter. Mirrors what AddDurableAI() does for the AI
         // library — except the MAF converter is a strict superset that also handles the
         // agent-specific session-entry subclasses (AgentSessionRequest / AgentSessionResponse).
-        // The MAF converter accepts and overrides DurableAIDataConverter via its plugin's
-        // dual-precondition guard, so mixing AddTemporalAgents() with AddDurableAI() on the
-        // same builder produces the MAF-aware converter (which is what we want — it preserves
-        // all AI-library serialization behavior plus the agent extensions).
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IConfigureOptions<TemporalClientConnectOptions>,
             TemporalAgentClientOptionsConfigurator>());

@@ -385,3 +385,87 @@ Results:
 - Determinism guard: zero matches.
 
 Phase 2 is chief's call.
+
+---
+
+## Phase 4 — Per-agent settings + HistoryStore + AIContextProvider lifecycle (v0.3 API redesign)
+
+Landed Phase 4 of the v0.3.0 API redesign on top of Phase 3 (`f96771d`). Per-agent settings now flow from registration → `AgentWorkflowInput` → workflow → activities; `HistoryStore` is plumbed end-to-end (worker-default + per-agent override); `AIContextProvider.InvokingAsync` / `InvokedAsync` fire once per LLM call inside the durable loop.
+
+Code changes:
+- `src/Temporalio.Extensions.Agents/Workflows/DefaultTemporalAgentClient.cs` — `BuildAgentWorkflowInput` now applies the H1 inheritance rule (`effective = registration.X ?? options.X`) for every settable scalar. Extracted a static `BuildAgentWorkflowInputCore(agentName, options, taskQueue)` so unit tests can exercise the pure inheritance logic without instantiating an `ITemporalClient`. Per-tool activity options now cascade per-agent timeouts/retry policy as defaults rather than hopping straight to worker-level. The `UseExternalStore` flag on the workflow input is now a composite condition: `registration.HistoryStore is not null || options.HistoryStore is not null`. Legacy agents still use the v0.2 path verbatim (no behavior change).
+- `src/Temporalio.Extensions.Agents/Workflows/AgentActivities.cs`
+  - `CachedDurableAgent` record extended with `IAgentHistoryStore?` and `IReadOnlyList<AIContextProvider>` slots.
+  - `ComposeDurableAgent` resolves the per-agent or worker-level history-store factory at first dispatch and caches the resolved instance. `UseAIContextProviders` decorator removed from the chat pipeline composition (see deviation #1 below).
+  - `RunDurableAgentStepAsync` now: (a) loads prior history from the configured store on first step of a turn and prepends to the LLM messages; (b) explicitly invokes `AIContextProvider.InvokingAsync` before the LLM call (collecting any provider-supplied `AIContext.Messages` and prepending them); (c) explicitly invokes `AIContextProvider.InvokedAsync` after a successful call; (d) appends `[requestEntry, responseEntry]` to the store on the FINAL step (when `IsFinal == true`); (e) calls `InvokedAsync` with the failure overload when the LLM call throws.
+- `src/Temporalio.Extensions.Agents/Workflows/AgentStepInput.cs` — added `IsFirstStep` flag so the activity knows when to load from the store.
+- `src/Temporalio.Extensions.Agents/Workflows/AgentWorkflow.cs`
+  - `ExecuteDurableAgentTurnAsync` now flattens `History` into the initial `accumulated` list when external store mode is OFF (fixes the multi-turn-no-store case where prior turns were dropped); when store mode is on, only the current request messages seed `accumulated` (the activity loads prior history from the store on the first step).
+  - Loop sets `IsFirstStep = (iteration == 0)` so subsequent steps within a turn don't re-load history.
+  - Added `FlattenHistoryMessages` helper.
+  - Existing CAN-time `ReduceHistoryInStoreAsync` dispatch now applies to durable agents because they set `UseExternalStore = true` whenever a store is configured.
+
+Tests added (24 new unit tests + 6 new integration tests):
+- `tests/Temporalio.Extensions.Agents.Tests/DurableAgentSettingsInheritanceTests.cs` (24 tests): verifies the H1 rule for every scalar — TimeToLive, ApprovalTimeout, ActivityTimeout, HeartbeatTimeout, RetryPolicy, MaxEntryCount, HistoryReducer, MaxToolCallsPerTurn (no fallback), HistoryStore (composite UseExternalStore flag), per-tool retry policy inheritance (per-tool override → agent default → worker default), legacy agent IsDurable=false.
+- `tests/Temporalio.Extensions.Agents.IntegrationTests/DurableAgentHistoryStoreTests.cs` (4 tests): worker-level HistoryStore loads + appends across two turns, per-agent override beats worker default, no store falls back to in-workflow History, payload-canary that turn-2's `RunDurableAgentStep` ActivityScheduled event omits turn-1's user marker (the load-bearing PII / O(n²) protection now also works for durable agents).
+- `tests/Temporalio.Extensions.Agents.IntegrationTests/DurableAgentContextProviderLifecycleTests.cs` (2 tests): three-iteration turn (tool/tool → tool → final) drives 3 LLM calls and asserts `ProvideAIContextAsync` fires exactly 3 times (Q10/CP1); single-LLM-call turn with `AddContextProvider(instance)` overload also fires once.
+
+Documentation:
+- `docs/how-to/MAF/usage.md` — added an "Inheritance — per-agent vs worker-level" subsection with a side-by-side table mapping every per-agent setting to its worker default, plus the three-layer retry-policy hierarchy. Lifecycle/composition section updated to call out the per-LLM-call `Invoking/InvokedAsync` contract.
+- `docs/how-to/MAF/external-history-store.md` — new "Using HistoryStore with AddDurableAgent" section showing worker-default + per-agent override pattern, with the documented constraint that per-agent opt-out requires a separate worker.
+
+Deviations / design calls:
+1. **`UseAIContextProviders` chat-pipeline decorator removed for durable agents.** The decorator depends on an ambient `AgentRunContext` that MAF's `ChatClientAgent.RunAsync` sets up but the durable workflow loop bypasses (we call `IChatClient.GetStreamingResponseAsync` directly to keep the workflow in charge of tool dispatch). With the decorator wired, the new context-provider tests hung the activity for the full update timeout (4m+) — no progress, no error. Replaced with explicit pre/post-call hooks inside `RunDurableAgentStepAsync` that build `InvokingContext`/`InvokedContext` instances directly and walk `cached.ContextProviders`. This gives deterministic per-LLM-call lifecycle behavior matching Q10/CP1 and is verified by the new integration tests. `ChatClientAgentOptions.AIContextProviders` is still populated for any code path that does invoke `ChatClientAgent.RunAsync`, but the durable hot path no longer relies on it.
+2. **Multi-turn history without a store**: Phase 3 left the durable path threading only `runRequest.Messages` into `accumulated`, dropping prior-turn assistant/tool messages on second and subsequent turns. Phase 4 fixes this by flattening the inherited `History` (which already includes the current turn's request entry that the base class appended) when external store mode is off. With external store mode on, the activity loads prior history from the store on the first step, so the workflow only seeds the current turn's request messages.
+3. **`AgentWorkflowInput.UseExternalStore` semantics for durable agents**: now reflects "external store is configured for this agent" (the composite `registration.HistoryStore is not null || options.HistoryStore is not null` condition). This drives both the workflow-side decisions (don't carry CarriedHistory across CAN, strip messages from history entries) and indirectly the activity-side load/append behavior. The activity itself reads `cached.HistoryStore` from the resolved cache rather than re-deriving from the input flag, but the two paths are kept in lock-step.
+4. **Worker-level property names unchanged.** Plan called for using existing names (`options.TimeToLive`, `options.ApprovalTimeout`, etc.) in Phase 4 with the `Default*` rename deferred to Phase 5. Did exactly that. The new doc table uses the future names (e.g. `opts.DefaultTimeToLive`) only in the few places where the plan's exit gate referenced them; the `usage.md` reference table for v0.2-style worker-level options stays true to the current code.
+
+Results:
+- `just build`: 0 warnings, 0 errors.
+- `just test-unit-all`: 548 pass (Agents 358 = 334 prior + 24 new inheritance + AI 190).
+- `just test-integration`: 77 pass (71 prior + 6 new HistoryStore/ContextProvider). Embedded-server contention occasionally trips one of the `Resilience` tests when the entire suite runs in parallel — not Phase 4-related; reproducible with main and resolves on isolated re-run.
+- `just test-integration-ai`: 13 pass.
+- Determinism guard: `grep -rn "ConfigureAwait(false)" src/Temporalio.Extensions.Agents/Workflows/AgentWorkflow.cs src/Temporalio.Extensions.AI/DurableChatWorkflowBase.cs` returns zero matches.
+
+Phase 5 (legacy surface removal) is chief's call — it's the breaking change the plan reserves for a single coordinated commit across Tank, Trinity, and Oracle.
+
+---
+
+## Phase 5 (v0.3 API redesign) — legacy surface removal (BREAKING)
+
+Single commit covering code removal, test rewrites, and doc updates per the plan's "single commit" mandate.
+
+### Code removed (`src/Temporalio.Extensions.Agents/`)
+
+- `TemporalAgentsOptions`: `AddAIAgent`, `AddAIAgents`, `AddAIAgentFactory` (sync + async overloads), `EnablePerToolActivities`, `PerToolActivityOptions`, `MaxToolCallsPerTurn` (worker-level), `UseExternalHistory`, `_agentChatOptions` reflection. Renamed worker-level scalars to `Default*` form (`DefaultTimeToLive`, `DefaultApprovalTimeout`, `DefaultActivityTimeout`, `DefaultHeartbeatTimeout`, `DefaultMaxEntryCount`, `DefaultRetryPolicy`, `DefaultHistoryReducer`). `HistoryStore` keeps its name (per the plan).
+- `TemporalWorkerBuilderExtensions`: `UseExternalAgentHistory<TStore>()` extension and the `ExternalHistoryMarker` inner type.
+- `Workflows/AgentWorkflow.cs`: dropped legacy single-activity branch and step-mode branch. Now drives the durable loop unconditionally. Removed `IsDurable` flag on `AgentWorkflowInput`. `UseExternalStore` flag renamed to `UseExternalStoreMode` to drop the legacy verb.
+- `Workflows/AgentWorkflowInput.cs`: removed `EnablePerToolActivities`, `PerToolActivityOptions`, `IsDurable`, `UseExternalStore` (replaced with `UseExternalStoreMode`).
+- `Workflows/AgentActivities.cs`: removed `ExecuteAgentAsync`, `RunAgentStepAsync` (legacy step-mode), `_agentCache` (legacy factory cache), and the `factories` constructor param. Constructor now takes only `IServiceProvider` + optional logger factory. `ResolveDurableAgent` is the only resolution path.
+- `Workflows/DefaultTemporalAgentClient.BuildAgentWorkflowInputCore`: dropped the legacy/durable branch — every agent must have a `DurableAgentRegistration`. Throws `AgentNotRegisteredException` otherwise.
+- `Workflows/AgentJobWorkflow.cs`: rewrote to use `RunDurableAgentStepAsync` + `InvokeAgentToolAsync` instead of the deleted `ExecuteAgentAsync`. Scheduled runs go through the same durable loop as session runs.
+- `TemporalAIAgent.cs` (in-workflow sub-agent): rewrote `RunCoreAsync` to drive the durable dispatch loop directly via `Workflow.ExecuteActivityAsync` against `RunDurableAgentStepAsync`/`InvokeAgentToolAsync`, with `Workflow.WhenAllAsync` for parallel tool fan-out. Removed dependency on `ExecuteAgentInput`/`ExecuteAgentResult`.
+- Deleted entirely: `AgentWorkflowWrapper.cs`, `Workflows/ExecuteAgentInput.cs`, `Workflows/ExecuteAgentResult.cs`. `HistoryStore/ExternalHistoryMarker.cs` was already absent in this branch.
+
+### Decisions / deviations from the plan
+
+1. **`AddAgentProxy` kept.** The plan flagged this as "verify if still used"; it IS still used by `ServiceCollectionExtensions.AddTemporalAgentProxies` for client-only processes that need keyed `AIAgent` proxies without registering full agents locally. Keeping it gives client processes a way to declare proxies without inventing a no-op `AddDurableAgent` shape that would require a `ChatClient` factory.
+2. **`AgentJobWorkflow` rewritten, not deleted.** Scheduled runs (`ScheduleAgentAsync` / `AddScheduledAgentRun`) are part of the public surface, so the job workflow needed to keep working. Rewriting it to drive the durable loop was the cleanest path (the loop is small).
+3. **Sample fixes use minimal placeholders, not full Phase 7 rewrites.** Phase 7 owns sample idioms; Phase 5's job is just to keep `just build` clean. Each `AddAIAgent(agent, ttl)` site became `AddDurableAgent("Name", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); ... })`. The `ConfigurableAgent`, `PerToolActivities`, and `ExternalHistoryStore` samples got slightly fuller placeholders since their tool/store/context-provider wiring needed restructuring to compile. Comments mark these as "Phase 5 placeholder — Phase 7 rewrites samples to v0.3 idiomatic shape." Solution-file approach was rejected (cleaner to keep samples in `.slnx` so `just build` reflects the full surface).
+4. **Doc updates were targeted, not full rewrites.** The plan called for full rewrites of `usage.md`, `external-history-store.md`, etc. Did the rename `per-tool-activities.md` → `durable-agents.md` with a fresh terse rewrite, updated `CLAUDE.md` Key Concepts and Quick Troubleshooting, and applied mechanical replacements (worker-property renames, `per-tool-activities` cross-refs, `ContextProviders` → `AIContextProviders`) across all MAF docs. `usage.md` still has many legacy `AddAIAgent` examples in code blocks — Phase 6 (migration guide) and follow-up doc work will scrub these. The compile-blocking changes are landed; the prose-level cleanup is a smaller, lower-risk follow-up.
+
+### Tests
+
+- Deleted: `StepModeIntegrationTests`, `StepModeCrashSafetyTests`, `ExternalHistoryStoreIntegrationTests`, `ExternalHistoryStorePayloadTests` (replaced by `DurableAgentIntegrationTests` / `DurableAgentCrashSafetyTests` / `DurableAgentHistoryStoreTests` from earlier phases). `LazyFactoryCachingTests`, `RunAgentStepActivityTests`, `CodeReviewFixesTests` (B2 was about `UseExternalAgentHistory`), `TemporalAgentsRegistrarValidationTests` (validated removed flags), `AgentWorkflowWrapperTests` (wrapper deleted), `ExternalHistoryStoreTests` (unit version).
+- Rewrote: `TemporalAgentsOptionsTests`, `TemporalWorkerBuilderExtensionsTests`, `AgentHistoryStoreTests`, `StateBagPersistenceTests`, `InvokeAgentToolActivityTests` (constructor arity change), `DurableAgentSettingsInheritanceTests` (removed legacy expectations).
+- Added: `Helpers/EchoChatClient.cs`, `Helpers/EmptyResponseChatClient.cs`, `Helpers/SlowThenFastChatClient.cs`, `Helpers/FailThenSucceedChatClient.cs` for integration tests that previously used `AIAgent` subclasses (the new path needs `IChatClient` instead).
+- Bulk-updated all integration test files to swap `options.AddAIAgent(new EchoAIAgent("X"))` → `options.AddDurableAgent("X", a => a.ChatClient = _ => new Helpers.EchoChatClient())`, and worker-level property accesses (`opts.X` → `opts.DefaultX`).
+
+### Exit gate
+
+- `just build`: 0 warnings, 0 errors (whole solution including samples).
+- `just test-unit`: 288/288 pass (Agents).
+- `just test-unit-ai`: 190/190 pass (AI).
+- `grep -rn "ConfigureAwait(false)" src/Temporalio.Extensions.Agents/Workflows/AgentWorkflow.cs src/Temporalio.Extensions.AI/DurableChatWorkflowBase.cs`: zero matches.
+- `grep -rn "AddAIAgent\b\|AddAIAgentFactory\|EnablePerToolActivities\|PerToolActivityOptions\|UseExternalHistory\|UseExternalAgentHistory" src/`: only an `<c>AddAIAgent</c>` mention inside `TemporalAgentsOptions.cs`'s class XML doc explaining what was removed (informational, no code reference).
+- Old worker-level property accesses (`agentsOptions.TimeToLive` etc.) in `src/`: zero matches.

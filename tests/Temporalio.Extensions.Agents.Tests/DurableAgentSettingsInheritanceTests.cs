@@ -74,7 +74,7 @@ public class DurableAgentSettingsInheritanceTests
     {
         var options = OptionsWithDurableAgent(
             configureAgent: a => a.ApprovalTimeout = TimeSpan.FromHours(1),
-            configureOptions: o => o.ApprovalTimeout = TimeSpan.FromHours(8));
+            configureOptions: o => o.DefaultApprovalTimeout = TimeSpan.FromHours(8));
 
         var input = Build(options);
 
@@ -85,7 +85,7 @@ public class DurableAgentSettingsInheritanceTests
     public void WhenPerAgentApprovalTimeoutNull_InheritsWorkerDefault()
     {
         var options = OptionsWithDurableAgent(
-            configureOptions: o => o.ApprovalTimeout = TimeSpan.FromHours(8));
+            configureOptions: o => o.DefaultApprovalTimeout = TimeSpan.FromHours(8));
 
         var input = Build(options);
 
@@ -99,7 +99,7 @@ public class DurableAgentSettingsInheritanceTests
     {
         var options = OptionsWithDurableAgent(
             configureAgent: a => a.ActivityTimeout = TimeSpan.FromSeconds(45),
-            configureOptions: o => o.ActivityTimeout = TimeSpan.FromMinutes(10));
+            configureOptions: o => o.DefaultActivityTimeout = TimeSpan.FromMinutes(10));
 
         var input = Build(options);
 
@@ -110,7 +110,7 @@ public class DurableAgentSettingsInheritanceTests
     public void WhenPerAgentActivityTimeoutNull_InheritsWorkerDefault()
     {
         var options = OptionsWithDurableAgent(
-            configureOptions: o => o.ActivityTimeout = TimeSpan.FromMinutes(10));
+            configureOptions: o => o.DefaultActivityTimeout = TimeSpan.FromMinutes(10));
 
         var input = Build(options);
 
@@ -124,7 +124,7 @@ public class DurableAgentSettingsInheritanceTests
     {
         var options = OptionsWithDurableAgent(
             configureAgent: a => a.HeartbeatTimeout = TimeSpan.FromSeconds(20),
-            configureOptions: o => o.HeartbeatTimeout = TimeSpan.FromMinutes(5));
+            configureOptions: o => o.DefaultHeartbeatTimeout = TimeSpan.FromMinutes(5));
 
         var input = Build(options);
 
@@ -135,7 +135,7 @@ public class DurableAgentSettingsInheritanceTests
     public void WhenPerAgentHeartbeatTimeoutNull_InheritsWorkerDefault()
     {
         var options = OptionsWithDurableAgent(
-            configureOptions: o => o.HeartbeatTimeout = TimeSpan.FromMinutes(5));
+            configureOptions: o => o.DefaultHeartbeatTimeout = TimeSpan.FromMinutes(5));
 
         var input = Build(options);
 
@@ -152,7 +152,7 @@ public class DurableAgentSettingsInheritanceTests
 
         var options = OptionsWithDurableAgent(
             configureAgent: a => a.RetryPolicy = agentPolicy,
-            configureOptions: o => o.RetryPolicy = workerPolicy);
+            configureOptions: o => o.DefaultRetryPolicy = workerPolicy);
 
         var input = Build(options);
 
@@ -165,7 +165,7 @@ public class DurableAgentSettingsInheritanceTests
         var workerPolicy = new RetryPolicy { MaximumAttempts = 5 };
 
         var options = OptionsWithDurableAgent(
-            configureOptions: o => o.RetryPolicy = workerPolicy);
+            configureOptions: o => o.DefaultRetryPolicy = workerPolicy);
 
         var input = Build(options);
 
@@ -179,7 +179,7 @@ public class DurableAgentSettingsInheritanceTests
     {
         var options = OptionsWithDurableAgent(
             configureAgent: a => a.MaxEntryCount = 50,
-            configureOptions: o => o.MaxEntryCount = 5000);
+            configureOptions: o => o.DefaultMaxEntryCount = 5000);
 
         var input = Build(options);
 
@@ -190,7 +190,7 @@ public class DurableAgentSettingsInheritanceTests
     public void WhenPerAgentMaxEntryCountNull_InheritsWorkerDefault()
     {
         var options = OptionsWithDurableAgent(
-            configureOptions: o => o.MaxEntryCount = 5000);
+            configureOptions: o => o.DefaultMaxEntryCount = 5000);
 
         var input = Build(options);
 
@@ -209,7 +209,7 @@ public class DurableAgentSettingsInheritanceTests
 
         var options = OptionsWithDurableAgent(
             configureAgent: a => a.HistoryReducer = agentReducer,
-            configureOptions: o => o.HistoryReducer = workerReducer);
+            configureOptions: o => o.DefaultHistoryReducer = workerReducer);
 
         var input = Build(options);
 
@@ -223,7 +223,7 @@ public class DurableAgentSettingsInheritanceTests
             list => list;
 
         var options = OptionsWithDurableAgent(
-            configureOptions: o => o.HistoryReducer = workerReducer);
+            configureOptions: o => o.DefaultHistoryReducer = workerReducer);
 
         var input = Build(options);
 
@@ -270,7 +270,7 @@ public class DurableAgentSettingsInheritanceTests
         // The composite UseExternalStore flag flows to the workflow side; the actual factory
         // resolution happens activity-side via ResolveDurableAgent. Here we verify the input
         // signals that external history is in play.
-        Assert.True(input.UseExternalStore);
+        Assert.True(input.UseExternalStoreMode);
     }
 
     [Fact]
@@ -283,7 +283,7 @@ public class DurableAgentSettingsInheritanceTests
 
         var input = Build(options);
 
-        Assert.True(input.UseExternalStore);
+        Assert.True(input.UseExternalStoreMode);
     }
 
     [Fact]
@@ -293,7 +293,7 @@ public class DurableAgentSettingsInheritanceTests
 
         var input = Build(options);
 
-        Assert.False(input.UseExternalStore);
+        Assert.False(input.UseExternalStoreMode);
     }
 
     [Fact]
@@ -308,34 +308,11 @@ public class DurableAgentSettingsInheritanceTests
         var inputA = Build(options, "AgentA");
         var inputB = Build(options, "AgentB");
 
-        Assert.True(inputA.UseExternalStore);
-        Assert.True(inputB.UseExternalStore);
+        Assert.True(inputA.UseExternalStoreMode);
+        Assert.True(inputB.UseExternalStoreMode);
     }
 
-    // ── Composite — durable flag + tool dictionary survive inheritance ──────────
-
-    [Fact]
-    public void WhenAgentRegistered_IsDurableTrue()
-    {
-        var options = OptionsWithDurableAgent();
-
-        var input = Build(options);
-
-        Assert.True(input.IsDurable);
-    }
-
-    [Fact]
-    public void WhenLegacyAgentRegistered_IsDurableFalse()
-    {
-        var options = new TemporalAgentsOptions();
-        options.AddAIAgent(new StubAIAgent("Legacy"));
-
-        var input = Build(options, "Legacy");
-
-        Assert.False(input.IsDurable);
-        // Legacy step-mode controls flow through unchanged for legacy agents.
-        Assert.False(input.UseExternalStore);
-    }
+    // ── Composite — tool dictionary survives inheritance ────────────────────────
 
     [Fact]
     public void WhenDurableAgentToolHasNoRetry_PerToolEntryReflectsIt()

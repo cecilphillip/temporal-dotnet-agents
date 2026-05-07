@@ -3,6 +3,7 @@
 //
 // Run:  dotnet run --project samples/MAF/AmbientAgent/AmbientAgent.csproj
 
+using Microsoft.Extensions.AI;
 using System.ClientModel;
 using AmbientAgent;
 using Microsoft.Extensions.Configuration;
@@ -77,8 +78,8 @@ builder.Services
     .AddHostedTemporalWorker("ambient-agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(analysisAgent, timeToLive: TimeSpan.FromHours(1));
-        opts.AddAIAgent(alertAgent, timeToLive: TimeSpan.FromHours(1));
+        opts.AddDurableAgent("AnalysisAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
+        opts.AddDurableAgent("AlertAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
     })
     .AddWorkflow<MonitorWorkflow>()
     .AddWorkflow<AlertWorkflow>()

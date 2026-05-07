@@ -73,19 +73,13 @@ builder.Services
     .AddHostedTemporalWorker(taskQueue)
     .AddTemporalAgents(opts =>
     {
-        // Layer 1 — flip the workflow's history serialization off so messages
-        // never enter Temporal's ActivityScheduled event payload. The store
-        // registered above is what the activity loads/appends through.
-        opts.UseExternalHistory = true;
+        // Phase 5 placeholder — Phase 7 rewrites the sample to v0.3 idiomatic shape.
+        opts.HistoryStore = sp => sp.GetRequiredService<Temporalio.Extensions.Agents.HistoryStore.IAgentHistoryStore>();
 
-        // Layer 2 — register the agent factory; the factory pulls the singleton
-        // TenantContextProvider out of DI and attaches it to ChatClientAgentOptions.
-        opts.AddAIAgentFactory("SupportAgent", sp =>
+        opts.AddDurableAgent("SupportAgent", a =>
         {
-            var directory = sp.GetRequiredService<TenantDirectory>();
-            var provider = sp.GetRequiredService<TenantContextProvider>();
-
-            const string instructions =
+            a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient();
+            a.Instructions =
                 "You are a multi-tenant customer support agent. Use the tenant " +
                 "metadata supplied in system context to tailor responses (mention " +
                 "the tenant tier or SLA when relevant). Treat order IDs of the form " +
@@ -93,17 +87,7 @@ builder.Services
                 "(this is a demo). If a question references information you don't see " +
                 "in the current messages, say you don't have visibility into that " +
                 "earlier part of the conversation.";
-
-            var agentOptions = new ChatClientAgentOptions
-            {
-                Name = "SupportAgent",
-                ChatOptions = new ChatOptions { Instructions = instructions },
-                AIContextProviders = [provider],
-            };
-
-            return openAiClient
-                .GetChatClient(model)
-                .AsAIAgent(agentOptions);
+            a.AddContextProvider(sp => sp.GetRequiredService<TenantContextProvider>());
         });
     })
     .AddWorkflow<SupportSessionWorkflow>();

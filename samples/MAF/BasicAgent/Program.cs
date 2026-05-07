@@ -65,7 +65,14 @@ var agent = openAiClient
 builder.Services.AddTemporalClient(temporalAddress, "default");
 builder.Services
     .AddHostedTemporalWorker("agents")
-    .AddTemporalAgents(options => { options.AddAIAgent(agent, timeToLive: TimeSpan.FromHours(1)); });
+    .AddTemporalAgents(options => options.AddDurableAgent("Assistant", a =>
+    {
+        // Phase 5 placeholder — Phase 7 rewrites samples to the v0.3 idiomatic shape.
+        a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient();
+        a.Instructions = "You are a helpful assistant.";
+        a.AddTool(weatherTool);
+        a.TimeToLive = TimeSpan.FromHours(1);
+    }));
 
 // ── Step 5: Start the host (worker runs as IHostedService) ────────────────────
 var host = builder.Build();

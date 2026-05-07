@@ -264,23 +264,23 @@ Or use `AgentJobWorkflow` via scheduling, which always starts with empty history
 
 ### 5b. Cap History at a Fixed Size with MaxEntryCount
 
-`TemporalAgentsOptions.MaxEntryCount` sets a hard cap on the number of history entries kept in the workflow. When the cap is reached, the workflow triggers continue-as-new, discarding the oldest entries:
+`TemporalAgentsOptions.DefaultMaxEntryCount` sets a hard cap on the number of history entries kept in the workflow. When the cap is reached, the workflow triggers continue-as-new, discarding the oldest entries:
 
 ```csharp
 builder.Services
     .AddHostedTemporalWorker("localhost:7233", "default", "agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddAIAgent(agent);
-        opts.MaxEntryCount = 50;  // keep at most 50 entries across continue-as-new
+        opts.AddDurableAgent("Agent", a => a.ChatClient = sp => sp.GetRequiredService<IChatClient>());
+        opts.DefaultMaxEntryCount = 50;  // keep at most 50 entries across continue-as-new
     });
 ```
 
 Pair with a `HistoryReducer` to control which entries are retained at the boundary. The reducer signature is now `Func<IList<DurableSessionEntry>, IList<DurableSessionEntry>>?` — entry-shaped on both libraries, matching the unified entry-layer wire format:
 
 ```csharp
-opts.MaxEntryCount = 50;
-opts.HistoryReducer = entries =>
+opts.DefaultMaxEntryCount = 50;
+opts.DefaultHistoryReducer = entries =>
 {
     // Keep the most recent 30 entries; drop older ones
     return entries.TakeLast(30).ToList();

@@ -31,7 +31,8 @@ public static class ServiceCollectionExtensions
     /// <remarks>
     /// Use this in processes that only send messages to agent sessions (e.g. an API server, CLI tool)
     /// when the Temporal worker runs in a separate process. Declare the agents you want proxies for
-    /// using <see cref="TemporalAgentsOptions.AddAgentProxy"/> inside the <paramref name="configure"/> delegate.
+    /// using <see cref="TemporalAgentsOptions.AddAgentProxy(string, TimeSpan?)"/> inside the
+    /// <paramref name="configure"/> delegate.
     /// </remarks>
     /// <param name="services">The service collection.</param>
     /// <param name="configure">Delegate to declare proxy agent names and optional TTLs.</param>
@@ -77,11 +78,12 @@ public static class ServiceCollectionExtensions
 
         // Register a keyed proxy for every declared agent name.
         // The real agent implementation lives in the worker process — no factory needed here.
-        foreach (var (name, _) in options.GetAgentFactories())
+        foreach (var name in options.GetRegisteredAgentNames())
         {
-            services.AddKeyedSingleton<AIAgent>(name, (sp, _) =>
+            var captured = name;
+            services.AddKeyedSingleton<AIAgent>(captured, (sp, _) =>
                 new TemporalAIAgentProxy(
-                    name,
+                    captured,
                     sp.GetRequiredService<ITemporalAgentClient>(),
                     sp.GetService<ILogger<TemporalAIAgentProxy>>()));
         }
@@ -92,11 +94,11 @@ public static class ServiceCollectionExtensions
     /// <summary>Validates that the named agent is registered.</summary>
     internal static void ValidateAgentIsRegistered(IServiceProvider services, string agentName)
     {
-        var agents = services.GetService<IReadOnlyDictionary<string, Func<IServiceProvider, AIAgent>>>()
+        var options = services.GetService<TemporalAgentsOptions>()
             ?? throw new InvalidOperationException(
                 "Temporal agents have not been configured. Call AddTemporalAgents() on the worker builder first.");
 
-        if (!agents.ContainsKey(agentName))
+        if (!options.IsAgentRegistered(agentName))
         {
             throw new AgentNotRegisteredException(agentName);
         }

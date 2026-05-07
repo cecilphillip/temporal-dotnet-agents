@@ -65,7 +65,7 @@ public sealed class IntegrationTestFixture : IAsyncLifetime
 
         builder.Services
             .AddHostedTemporalWorker(TaskQueue)
-            .AddTemporalAgents(options => options.AddAIAgent(new EchoAIAgent("EchoAgent")));
+            .AddTemporalAgents(options => options.AddDurableAgent("EchoAgent", a => a.ChatClient = _ => new Helpers.EchoChatClient()));
 
         return builder.Build();
     }
