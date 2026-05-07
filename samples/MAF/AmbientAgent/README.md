@@ -83,14 +83,47 @@ dotnet run --project samples/MAF/AmbientAgent/AmbientAgent.csproj
 
 ### Expected Output
 
-The sample sends 20 health readings with a spike at readings 13–15. You should see 4 analysis passes (every 5 readings), an anomaly detected during the spike, and an alert composed by the AlertAgent:
+The logging level is set to `Warning` in `Program.cs`, so workflow-internal log lines (`Workflow.Logger.LogInformation`) are suppressed. Only the `Console.WriteLine` calls in `Program.cs` are visible on the console.
+
+The sample sends 20 health readings with a spike at readings 13–15. There are 4 analysis passes (every 5 readings), an anomaly detected during the spike window, and an alert notification composed by the AlertAgent. The exact metric values and LLM response text vary per run; the structure and section headers are fixed:
 
 ```
-[Monitor] Received reading 5 — triggering analysis...
-[Monitor] Analysis: No anomalies detected.
-...
-[Monitor] Received reading 15 — triggering analysis...
-[Monitor] Analysis: ANOMALY detected — CPU spike and elevated temperature.
-[Alert] Notification: Elevated CPU and temperature detected between readings 13–15...
+Worker started. Launching ambient agent workflows...
+
+AlertWorkflow started: ambient-alert-001
+MonitorWorkflow started: ambient-monitor-001
+
+── Sending simulated health readings ───────────────────────
+  Reading  1: CPU= 33.2% Mem= 51.3% Temp= 56.8°C
+  Reading  2: CPU= 52.1% Mem= 47.6% Temp= 61.2°C
+  ...
+  Reading 13: CPU= 97.8% Mem= 98.3% Temp= 91.4°C ⚠️ SPIKE
+  Reading 14: CPU= 96.1% Mem= 97.0% Temp= 89.7°C ⚠️ SPIKE
+  Reading 15: CPU= 99.2% Mem= 99.5% Temp= 93.1°C ⚠️ SPIKE
+  ...
+  Reading 20: CPU= 41.5% Mem= 58.9% Temp= 52.3°C
+
+Waiting for LLM analyses to complete...
+
+── Monitor Status ──────────────────────────────────────────
+  Buffer size: 20
+  Total readings: 20
+  Analyses performed: 4
+
+  Analysis: NORMAL: CPU and memory usage are within acceptable ranges...
+
+  Analysis: NORMAL: All metrics stable...
+
+  Analysis: ANOMALY: CPU spiked to 95–100% with sustained high temperature...
+
+  Analysis: NORMAL: Metrics have returned to normal ranges...
+
+── Alert Notifications ─────────────────────────────────────
+
+  URGENT - System Anomaly Detected
+  Severity: HIGH ...
+
+── Shutting down ───────────────────────────────────────────
+  Shutdown signals sent.
 Done.
 ```
