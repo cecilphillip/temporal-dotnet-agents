@@ -1,14 +1,14 @@
-// ConfigurableAgent — two-tier customer support demo using AddAIAgentFactory.
+// ConfigurableAgent — two-tier customer support demo using DI factories on the
+// AddDurableAgent builder.
 //
-// Demonstrates AddAIAgentFactory: both agents need DI-registered services
-// (IOptions<T>, OrderService, EscalationPolicyService) that are only available
-// after Host.Build(). AddAIAgent would require pre-constructing the agent before DI
-// is built, which is impossible without bypassing the container. The factory overload
-// receives the fully-built IServiceProvider at first activity dispatch.
+// Demonstrates the v0.3 DI-factory-per-slot pattern: every tool resolves its
+// backing service via sp.GetRequiredService<T>() at first activity dispatch.
+// No BuildServiceProvider() bootstrap is needed — the library invokes each
+// factory once with the worker's runtime IServiceProvider.
 //
-// Demo story: a TriageAgent handles incoming customer messages. If it cannot resolve
-// the case, it signals escalation by appending [ESCALATE: summary] to its response.
-// The SupportWorkflow detects the marker, extracts the summary, and hands off to
+// Demo story: a TriageAgent handles incoming customer messages. If it cannot
+// resolve the case, it appends [ESCALATE: summary] to its response. The
+// SupportWorkflow detects the marker, extracts the summary, and hands off to
 // the EscalationAgent — agent-to-agent communication orchestrated by the workflow.
 //
 // Run:  dotnet run --project samples/MAF/ConfigurableAgent/ConfigurableAgent.csproj
@@ -20,25 +20,24 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using OpenAI;
 using OpenAI.Chat;
 using Temporalio.Client;
-// Alias to resolve ChatMessage ambiguity between Microsoft.Extensions.AI and OpenAI.Chat
-using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Hosting;
 using Temporalio.Workflows;
 using static Temporalio.Extensions.Agents.TemporalWorkflowExtensions;
 
+// Alias to resolve ChatMessage ambiguity between Microsoft.Extensions.AI and OpenAI.Chat
+using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
+
 // ── Step 1: Build the application host ───────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
-// Keep the SDK's own infrastructure quiet; show Information only for things we care about.
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 builder.Logging.AddFilter("SupportWorkflow", LogLevel.Information);          // workflow routing decisions
 builder.Logging.AddFilter("Temporalio.Extensions.Agents", LogLevel.Information); // agent activity dispatch
 
-// ── Step 2: Load configuration ────────────────────────────────────────────────
+// ── Step 2: Load configuration ───────────────────────────────────────────────
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
@@ -50,75 +49,80 @@ if (string.IsNullOrEmpty(apiKey))
         "OPENAI_API_KEY is not configured. Set it with: " +
         "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/ConfigurableAgent");
 
-var endpoint = new Uri(apiBaseUrl);
-var openAiOptions = new OpenAIClientOptions() { Endpoint = endpoint };
-var model = "gpt-4o-mini";
+const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
-ApiKeyCredential credential = new(apiKey);
-OpenAIClient openAiClient = new(credential, openAiOptions);
+var openAiClient = new OpenAIClient(
+    new ApiKeyCredential(apiKey),
+    new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) });
 
-// ── Step 3: Register DI services ─────────────────────────────────────────────
-// IOptions<T> bindings for agent configuration — resolved inside each factory.
+// ── Step 3: Bind agent options from configuration ────────────────────────────
+// These options drive each agent's instruction template. We bind them eagerly so
+// the templated text can flow into agent.Instructions at registration time.
+var triageOptions = builder.Configuration
+    .GetSection("TriageAgent").Get<TriageAgentOptions>() ?? new TriageAgentOptions();
+var escalationOptions = builder.Configuration
+    .GetSection("EscalationAgent").Get<EscalationAgentOptions>() ?? new EscalationAgentOptions();
+
+var triageInstructions = triageOptions.Instructions
+    .Replace("{CompanyName}", triageOptions.CompanyName);
+var escalationInstructions = escalationOptions.Instructions
+    .Replace("{CompanyName}", triageOptions.CompanyName);
+
+// Make the bound options available to anything else that wants IOptions<T>.
 builder.Services.Configure<TriageAgentOptions>(builder.Configuration.GetSection("TriageAgent"));
 builder.Services.Configure<EscalationAgentOptions>(builder.Configuration.GetSection("EscalationAgent"));
 
-// Singleton services that carry domain state used as agent tools.
+// ── Step 4: Register DI services ─────────────────────────────────────────────
+// Tool services live in DI and are resolved by the AddTool factory at first dispatch.
 builder.Services.AddSingleton<OrderService>();
 builder.Services.AddSingleton<EscalationPolicyService>();
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient());
 
-// ── Step 4: Register Temporal Client and Worker ───────────────────────────────
+// ── Step 5: Register the durable agents ──────────────────────────────────────
+// Both agents pull their tool services from DI via the AddTool factory. The
+// factory runs once per worker at first activity dispatch and the result is
+// cached for the worker's lifetime — equivalent to the v0.2 AddAIAgentFactory
+// path, but with one DI hop per slot rather than one factory per agent.
 builder.Services.AddTemporalClient(temporalAddress, "default");
 
 builder.Services
     .AddHostedTemporalWorker("configurable-agent")
     .AddTemporalAgents(opts =>
     {
-        // AddAIAgentFactory is required for both agents: IOptions<T> and the tool
-        // services live in DI and are not available until after Host.Build().
-        // AddAIAgent would require having the constructed agent in hand here — which
-        // would mean manually newing up services (defeating DI) or calling Build()
-        // early (antipattern). The factory receives the fully-built IServiceProvider
-        // at first activity dispatch, so everything resolves cleanly.
-
-        // Phase 5 placeholder — Phase 7 rewrites samples to the v0.3 idiomatic shape.
-        opts.AddDurableAgent("TriageAgent", a =>
+        opts.AddDurableAgent("TriageAgent", agent =>
         {
-            a.Description = "First-line support — handles order lookups and common questions.";
-            a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient();
-            a.AddTool("LookupOrder", sp =>
-            {
-                var orderService = sp.GetRequiredService<OrderService>();
-                return AIFunctionFactory.Create(
-                    orderService.LookupOrder,
-                    "LookupOrder",
-                    "Look up the current status of a customer order by order ID.");
-            });
+            agent.Description = "First-line support — handles order lookups and common questions.";
+            agent.Instructions = triageInstructions;
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+
+            agent.AddTool("LookupOrder", sp => AIFunctionFactory.Create(
+                sp.GetRequiredService<OrderService>().LookupOrder,
+                name: "LookupOrder",
+                description: "Look up the current status of a customer order by order ID."));
         });
 
-        opts.AddDurableAgent("EscalationAgent", a =>
+        opts.AddDurableAgent("EscalationAgent", agent =>
         {
-            a.Description = "Specialist for complaints, refunds, and complex cases.";
-            a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient();
-            a.AddTool("GetReturnPolicy", sp =>
-            {
-                var policyService = sp.GetRequiredService<EscalationPolicyService>();
-                return AIFunctionFactory.Create(
-                    policyService.GetReturnPolicy,
-                    "GetReturnPolicy",
-                    "Returns Acme Store's return and refund policy.");
-            });
+            agent.Description = "Specialist for complaints, refunds, and complex cases.";
+            agent.Instructions = escalationInstructions;
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+
+            agent.AddTool("GetReturnPolicy", sp => AIFunctionFactory.Create(
+                sp.GetRequiredService<EscalationPolicyService>().GetReturnPolicy,
+                name: "GetReturnPolicy",
+                description: "Returns Acme Store's return and refund policy."));
         });
     })
     .AddWorkflow<SupportWorkflow>();
 
-// ── Step 5: Start the host (worker runs as IHostedService) ────────────────────
+// ── Step 6: Start the host ───────────────────────────────────────────────────
 var host = builder.Build();
 await host.StartAsync();
 
 Console.WriteLine("Worker started. Submitting support workflows...\n");
 
-// ── Step 6: Submit workflows ──────────────────────────────────────────────────
+// ── Step 7: Submit workflows ─────────────────────────────────────────────────
 var client = host.Services.GetRequiredService<ITemporalClient>();
 
 // Case 1: Simple order lookup — TriageAgent resolves it directly, no escalation.
@@ -140,7 +144,7 @@ var complexHandle = await client.StartWorkflowAsync(
         TaskQueue = "configurable-agent"
     });
 
-// ── Step 7: Await and display results ────────────────────────────────────────
+// ── Step 8: Await and display results ────────────────────────────────────────
 Console.WriteLine("─── Case 1: Simple order lookup ─────────────────────────────");
 Console.WriteLine("User: Where is my order ORD-001?");
 try
@@ -165,7 +169,7 @@ catch (Exception ex)
     Console.WriteLine($"Workflow failed: {ex.Message}\n");
 }
 
-// ── Step 8: Graceful shutdown ─────────────────────────────────────────────────
+// ── Step 9: Graceful shutdown ────────────────────────────────────────────────
 try { await host.StopAsync(); } catch (OperationCanceledException) { }
 Console.WriteLine("Done.");
 
@@ -177,10 +181,10 @@ Console.WriteLine("Done.");
 /// Two-tier customer support workflow.
 /// <para>
 /// TriageAgent handles the first pass. If it appends <c>[ESCALATE: summary]</c>
-/// the workflow extracts the summary and forwards both the customer message and the
-/// triage summary to EscalationAgent. Both agent invocations are durable Temporal
-/// activities — a crash between the two calls replays from cached history and the
-/// first agent is never re-executed.
+/// the workflow extracts the summary and forwards both the customer message and
+/// the triage summary to EscalationAgent. Both agent invocations are durable
+/// Temporal activities — a crash between the two calls replays from cached history
+/// and the first agent is never re-executed.
 /// </para>
 /// </summary>
 [Workflow("ConfigurableAgent.SupportWorkflow")]
@@ -223,8 +227,6 @@ public class SupportWorkflow
             "[TriageAgent] Escalating → EscalationAgent. Summary: \"{Summary}\"", caseSummary);
 
         // ── Handoff to EscalationAgent ────────────────────────────────────────
-        // Pass triage's summary alongside the original message so EscalationAgent
-        // has full context without re-reading the conversation history.
         Workflow.Logger.LogInformation(
             "[EscalationAgent] Taking over with triage context.");
 
@@ -261,7 +263,7 @@ public sealed class EscalationAgentOptions
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DOMAIN SERVICES (registered in DI, injected via factory)
+// DOMAIN SERVICES (registered in DI, injected via AddTool factories)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// <summary>

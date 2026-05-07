@@ -10,12 +10,11 @@
 
   <ItemGroup>
     <!--
-      Step mode requires both libraries:
-        • Temporalio.Extensions.Agents — AddTemporalAgents, EnablePerToolActivities, agent factory
-        • Temporalio.Extensions.AI     — AddDurableAI, AddDurableTools (DurableFunctionRegistry)
+      Per-tool Temporal activities are implicit when using AddDurableAgent — no
+      separate Extensions.AI reference is needed (Extensions.Agents transitively
+      pulls it in).
     -->
     <ProjectReference Include="../../../src/Temporalio.Extensions.Agents/Temporalio.Extensions.Agents.csproj" />
-    <ProjectReference Include="../../../src/Temporalio.Extensions.AI/Temporalio.Extensions.AI.csproj" />
   </ItemGroup>
 
   <ItemGroup>

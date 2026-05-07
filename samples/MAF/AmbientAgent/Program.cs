@@ -3,9 +3,9 @@
 //
 // Run:  dotnet run --project samples/MAF/AmbientAgent/AmbientAgent.csproj
 
-using Microsoft.Extensions.AI;
 using System.ClientModel;
 using AmbientAgent;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -21,65 +21,62 @@ using Temporalio.Extensions.Hosting;
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
-// ── Step 2: Load configuration ────────────────────────────────────────────────
+// ── Step 2: Load configuration ───────────────────────────────────────────────
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
 if (string.IsNullOrEmpty(apiBaseUrl))
-{
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
-}
 
 if (string.IsNullOrEmpty(apiKey))
-{
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/AmbientAgent");
-}
+    throw new InvalidOperationException(
+        "OPENAI_API_KEY is not configured. Set it with: " +
+        "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/AmbientAgent");
 
-var endpoint = new Uri(apiBaseUrl);
-var openAiOptions = new OpenAIClientOptions() { Endpoint = endpoint };
-var model = "gpt-4o-mini";
+const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
-ApiKeyCredential credential = new(apiKey!);
-OpenAIClient openAiClient = new(credential, openAiOptions);
+var openAiClient = new OpenAIClient(
+    new ApiKeyCredential(apiKey),
+    new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) });
 
-// ── Step 3: Create the AnalysisAgent and AlertAgent ──────────────────────────
-var analysisAgent = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "AnalysisAgent",
-        instructions:
-            "You are a system health analyst. You receive time-series health metrics " +
-            "(CPU%, Memory%, Temperature) and must assess whether the readings are normal or anomalous. " +
-            "Respond with 'NORMAL: <brief summary>' if all metrics are within acceptable ranges, " +
-            "or 'ANOMALY: <description of the concerning pattern>' if you detect spikes, " +
-            "sustained high usage, or temperature warnings. Be concise.");
+// ── Step 3: Register the IChatClient in DI ───────────────────────────────────
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient());
 
-var alertAgent = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "AlertAgent",
-        instructions:
-            "You are an alert notification composer. Given anomaly details and recent system " +
-            "readings, compose a concise, actionable alert notification suitable for an operations " +
-            "team. Include: severity assessment, affected metrics, and recommended next steps. " +
-            "Keep it under 100 words.");
-
-// ── Step 4: Register ITemporalClient for AlertActivities ─────────────────────
-// AlertActivities needs ITemporalClient to signal the alert workflow.
+// ── Step 4: Register the Temporal client (AlertActivities needs ITemporalClient) ─
 builder.Services.AddTemporalClient(opts =>
 {
     opts.TargetHost = temporalAddress;
     opts.Namespace = "default";
 });
 
-// ── Step 5: Register the hosted worker with agents and workflows ─────────────
+// ── Step 5: Register the hosted worker with both ambient agents ──────────────
 builder.Services
     .AddHostedTemporalWorker("ambient-agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddDurableAgent("AnalysisAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
-        opts.AddDurableAgent("AlertAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
+        opts.AddDurableAgent("AnalysisAgent", agent =>
+        {
+            agent.Instructions =
+                "You are a system health analyst. You receive time-series health metrics " +
+                "(CPU%, Memory%, Temperature) and must assess whether the readings are normal or anomalous. " +
+                "Respond with 'NORMAL: <brief summary>' if all metrics are within acceptable ranges, " +
+                "or 'ANOMALY: <description of the concerning pattern>' if you detect spikes, " +
+                "sustained high usage, or temperature warnings. Be concise.";
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            agent.TimeToLive = TimeSpan.FromHours(1);
+        });
+
+        opts.AddDurableAgent("AlertAgent", agent =>
+        {
+            agent.Instructions =
+                "You are an alert notification composer. Given anomaly details and recent system " +
+                "readings, compose a concise, actionable alert notification suitable for an operations " +
+                "team. Include: severity assessment, affected metrics, and recommended next steps. " +
+                "Keep it under 100 words.";
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            agent.TimeToLive = TimeSpan.FromHours(1);
+        });
     })
     .AddWorkflow<MonitorWorkflow>()
     .AddWorkflow<AlertWorkflow>()
@@ -96,7 +93,7 @@ var client = host.Services.GetRequiredService<ITemporalClient>();
 const string monitorWorkflowId = "ambient-monitor-001";
 const string alertWorkflowId = "ambient-alert-001";
 
-// ── Step 7: Start the AlertWorkflow (must exist before MonitorWorkflow signals it)
+// ── Step 7: Start the AlertWorkflow (must exist before MonitorWorkflow signals it) ─
 await client.StartWorkflowAsync(
     (AlertWorkflow wf) => wf.RunAsync(),
     new WorkflowOptions
@@ -125,7 +122,7 @@ var monitorHandle = await client.StartWorkflowAsync(
 
 Console.WriteLine($"MonitorWorkflow started: {monitorWorkflowId}\n");
 
-// ── Step 9: Simulate 20 health-check readings ───────────────────────────────
+// ── Step 9: Simulate 20 health-check readings ────────────────────────────────
 // Normal readings for most, with a spike window at readings 13-15.
 Console.WriteLine("── Sending simulated health readings ───────────────────────");
 

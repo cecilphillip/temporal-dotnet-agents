@@ -429,7 +429,7 @@ Desktop.ini
 !.env.example
 
 # claude
-.clans/
-.claude/
+#.clans/
+#.claude/
 #.claude/agents/clans-*.md
 #.claude/skills/*

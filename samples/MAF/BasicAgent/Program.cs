@@ -1,24 +1,28 @@
-// BasicAgent — single durable agent session via Temporalio.Extensions.Agents.
+// BasicAgent — single durable agent session via Temporalio.Extensions.Agents (v0.3).
+//
+// Demonstrates the canonical AddDurableAgent registration: an IChatClient registered
+// in DI, an agent registered via opts.AddDurableAgent("name", agent => { ... }), and
+// a tool added via agent.AddTool(...). The library composes the chat pipeline
+// internally — do NOT call .UseFunctionInvocation() on the IChatClient.
 //
 // Run:  dotnet run --project samples/MAF/BasicAgent/BasicAgent.csproj
 
 using System.ClientModel;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenAI;
 using OpenAI.Chat;
-using Microsoft.Extensions.DependencyInjection;
 using Temporalio.Extensions.Agents;
+using Temporalio.Extensions.Hosting;
 
 // ── Step 1: Build the application host ───────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.SetMinimumLevel(LogLevel.Warning); // suppress Temporal SDK noise in the sample
 
-// ── Step 2: Provide an IChatClient ───────────────────────────────────────────
-// This sample uses a local stub that echoes back every message so you can run it
-// without any API credentials.  Swap it for a real client when you're ready:
+// ── Step 2: Load configuration ───────────────────────────────────────────────
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
@@ -26,61 +30,56 @@ if (string.IsNullOrEmpty(apiBaseUrl))
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 if (string.IsNullOrEmpty(apiKey))
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/BasicAgent");
+    throw new InvalidOperationException(
+        "OPENAI_API_KEY is not configured. Set it with: " +
+        "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/BasicAgent");
 
-var endpoint = new Uri(apiBaseUrl);
-var openAiOptions = new OpenAIClientOptions()
-{
-    Endpoint = endpoint
-};
-var model = "gpt-4o-mini";
+const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
-ApiKeyCredential credential = new(apiKey);
-OpenAIClient openAiClient = new(credential, openAiOptions);
+var openAiClient = new OpenAIClient(
+    new ApiKeyCredential(apiKey),
+    new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) });
 
+// ── Step 3: Define the agent's tool ──────────────────────────────────────────
 static string GetCurrentWeather() => Random.Shared.NextDouble() > 0.5 ? "It's sunny" : "It's raining";
-var weatherTool = AIFunctionFactory.Create(GetCurrentWeather, "get_weather", "Returns the current weather conditions.");
+var weatherTool = AIFunctionFactory.Create(
+    GetCurrentWeather,
+    name: "get_weather",
+    description: "Returns the current weather conditions.");
 
-// ── Step 3: Create the agent ──────────────────────────────────────────────────
-// ChatClientAgent wraps any IChatClient as a full Microsoft Agent Framework agent.
-var agent = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "Assistant",
-        instructions: "You are a helpful assistant.",
-        tools: [weatherTool],
-        clientFactory: client => client.AsBuilder()
-            .UseFunctionInvocation().Build()
-    );
+// ── Step 4: Register the IChatClient in DI ───────────────────────────────────
+// Register a bare IChatClient — the durable-agent path composes its own pipeline
+// internally. Calling .UseFunctionInvocation() here would short-circuit Temporal's
+// per-tool activity dispatch.
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient());
 
-// ── Step 4: Register Temporal Agents ─────────────────────────────────────────
-// AddTemporalClient registers ITemporalClient in DI (required by ITemporalAgentClient).
-// AddHostedTemporalWorker registers the hosted worker on the given task queue.
-// AddTemporalAgents registers:
-//   • AgentWorkflow    — long-lived workflow that is the durable agent session
-//   • AgentActivities  — activity that calls the real IChatClient (preserves determinism)
-//   • ITemporalAgentClient — sends messages via Temporal Update (no polling required)
-//   • Keyed AIAgent proxy — the object your code actually calls
+// ── Step 5: Register the durable agent ───────────────────────────────────────
+// AddDurableAgent is the single registration entry point in v0.3:
+//   • agent.ChatClient   — DI factory for the agent's IChatClient (required)
+//   • agent.AddTool(...) — registers a tool against this agent's local registry
+//   • agent.TimeToLive   — per-agent override of opts.DefaultTimeToLive (14 days)
 builder.Services.AddTemporalClient(temporalAddress, "default");
 builder.Services
     .AddHostedTemporalWorker("agents")
-    .AddTemporalAgents(options => options.AddDurableAgent("Assistant", a =>
+    .AddTemporalAgents(opts =>
     {
-        // Phase 5 placeholder — Phase 7 rewrites samples to the v0.3 idiomatic shape.
-        a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient();
-        a.Instructions = "You are a helpful assistant.";
-        a.AddTool(weatherTool);
-        a.TimeToLive = TimeSpan.FromHours(1);
-    }));
+        opts.AddDurableAgent("Assistant", agent =>
+        {
+            agent.Instructions = "You are a helpful assistant.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+            agent.AddTool(weatherTool);
+            agent.TimeToLive   = TimeSpan.FromHours(1);
+        });
+    });
 
-// ── Step 5: Start the host (worker runs as IHostedService) ────────────────────
+// ── Step 6: Start the host (worker runs as IHostedService) ───────────────────
 var host = builder.Build();
 await host.StartAsync();
 
 Console.WriteLine("Worker started. Sending messages...\n");
 
-// ── Step 6: Resolve the proxy and open a session ─────────────────────────────
+// ── Step 7: Resolve the proxy and open a session ─────────────────────────────
 // GetTemporalAgentProxy returns the keyed TemporalAIAgentProxy registered for "Assistant".
 // Under the hood it will start (or resume) an AgentWorkflow in Temporal.
 var proxy = host.Services.GetTemporalAgentProxy("Assistant");
@@ -88,18 +87,18 @@ var session = await proxy.CreateSessionAsync();
 
 Console.WriteLine($"Session workflow ID: {session}\n");
 
-// ── Step 7: Multi-turn conversation ──────────────────────────────────────────
+// ── Step 8: Multi-turn conversation ──────────────────────────────────────────
 // Each RunAsync call is a Temporal WorkflowUpdate — a durable, acknowledged
-// request/response round-trip.  Conversation history is preserved in the workflow.
+// request/response round-trip. Conversation history is preserved in the workflow.
 var r1 = await proxy.RunAsync("What is the capital of France?", session);
-Console.WriteLine($"User : What is the capital of France?");
+Console.WriteLine("User : What is the capital of France?");
 Console.WriteLine($"Agent: {r1.Text}\n");
 
 var r2 = await proxy.RunAsync("What is its population?", session);
-Console.WriteLine($"User : What is its population?");
+Console.WriteLine("User : What is its population?");
 Console.WriteLine($"Agent: {r2.Text}\n");
 
-// ── Step 8: Graceful shutdown ─────────────────────────────────────────────────
+// ── Step 9: Graceful shutdown ────────────────────────────────────────────────
 // TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException when its
 // stoppingToken is cancelled — that exception propagates through BackgroundService and
 // may surface here depending on the .NET hosting version. Swallow it: it is expected.

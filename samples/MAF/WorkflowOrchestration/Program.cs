@@ -1,5 +1,5 @@
-// WorkflowOrchestration — a Temporal workflow that calls an AI agent as a sub-agent
-// via TemporalWorkflowExtensions.GetAgent().
+// WorkflowOrchestration — a Temporal workflow that calls a durable AI agent as a
+// sub-agent via TemporalWorkflowExtensions.GetAgent().
 //
 // Run:  dotnet run --project samples/MAF/WorkflowOrchestration/WorkflowOrchestration.csproj
 
@@ -21,7 +21,7 @@ using static Temporalio.Extensions.Agents.TemporalWorkflowExtensions;
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
-// ── Step 2: Provide an IChatClient ───────────────────────────────────────────
+// ── Step 2: Load configuration ───────────────────────────────────────────────
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
@@ -29,55 +29,50 @@ if (string.IsNullOrEmpty(apiBaseUrl))
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 if (string.IsNullOrEmpty(apiKey))
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/WorkflowOrchestration");
+    throw new InvalidOperationException(
+        "OPENAI_API_KEY is not configured. Set it with: " +
+        "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/WorkflowOrchestration");
 
-var endpoint = new Uri(apiBaseUrl);
-var openAiOptions = new OpenAIClientOptions() { Endpoint = endpoint };
-var model = "gpt-4o-mini";
+const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
-ApiKeyCredential credential = new(apiKey);
-OpenAIClient openAiClient = new(credential, openAiOptions);
+var openAiClient = new OpenAIClient(
+    new ApiKeyCredential(apiKey),
+    new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) });
 
-// Simple tool for the agent: get current weather
+// ── Step 3: Define the weather tool ──────────────────────────────────────────
 static string GetCurrentWeather() => Random.Shared.NextDouble() > 0.5 ? "sunny" : "rainy";
 var weatherTool = AIFunctionFactory.Create(
     GetCurrentWeather,
-    "get_weather",
-    "Returns the current weather conditions.");
+    name: "get_weather",
+    description: "Returns the current weather conditions.");
 
-// ── Step 3: Create the agent ──────────────────────────────────────────────────
-var agent = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "WeatherAssistant",
-        instructions: "You are a helpful weather assistant. Use the get_weather tool to answer questions.",
-        tools: [weatherTool],
-        clientFactory: client => client.AsBuilder()
-            .UseFunctionInvocation().Build()
-    );
+// ── Step 4: Register the IChatClient in DI ───────────────────────────────────
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient());
 
-// ── Step 4: Register Temporal Client and Agents using the NEW fluent API ────────────────
-// The fluent AddTemporalAgents() method composes with the worker setup:
-builder.Services
-    .AddTemporalClient(temporalAddress, "default");
-
+// ── Step 5: Register the worker, durable agent, and orchestrating workflow ───
+builder.Services.AddTemporalClient(temporalAddress, "default");
 builder.Services
     .AddHostedTemporalWorker("orchestration")
-    .AddTemporalAgents(options =>
+    .AddTemporalAgents(opts =>
     {
-        // Register the agent (or factory for DI-resolved agents)
-        options.AddDurableAgent("Assistant", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
+        opts.AddDurableAgent("WeatherAssistant", agent =>
+        {
+            agent.Instructions = "You are a helpful weather assistant. Use the get_weather tool to answer questions.";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+            agent.AddTool(weatherTool);
+            agent.TimeToLive   = TimeSpan.FromHours(1);
+        });
     })
     .AddWorkflow<WeatherOrchestrationWorkflow>();
 
-// ── Step 5: Start the host (worker runs as IHostedService) ────────────────────
+// ── Step 6: Start the host ───────────────────────────────────────────────────
 var host = builder.Build();
 await host.StartAsync();
 
 Console.WriteLine("Worker started. Submitting orchestration workflow...\n");
 
-// ── Step 6: Submit the orchestrating workflow to Temporal ─────────────────────
+// ── Step 7: Submit the orchestrating workflow ────────────────────────────────
 var client = host.Services.GetRequiredService<ITemporalClient>();
 
 var weatherOrchestrationId = $"weather-orchestration-{Guid.NewGuid()}";
@@ -91,7 +86,7 @@ var handle = await client.StartWorkflowAsync(
 
 Console.WriteLine($"Orchestration workflow started: {weatherOrchestrationId}\n");
 
-// ── Step 7: Wait for the workflow to complete ────────────────────────────────
+// ── Step 8: Wait for the workflow to complete ────────────────────────────────
 try
 {
     var result = await handle.GetResultAsync();
@@ -102,8 +97,7 @@ catch (Exception ex)
     Console.WriteLine($"Workflow failed: {ex.Message}\n");
 }
 
-// ── Step 8: Graceful shutdown ─────────────────────────────────────────────────
-// TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException on shutdown.
+// ── Step 9: Graceful shutdown ────────────────────────────────────────────────
 try { await host.StopAsync(); } catch (OperationCanceledException) { }
 Console.WriteLine("Done.");
 
@@ -112,7 +106,7 @@ Console.WriteLine("Done.");
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// <summary>
-/// An orchestrating workflow that calls an AI agent to answer a question.
+/// An orchestrating workflow that calls a durable agent to answer a question.
 /// </summary>
 [Workflow("WorkflowOrchestration.WeatherOrchestration")]
 public class WeatherOrchestrationWorkflow
@@ -121,25 +115,16 @@ public class WeatherOrchestrationWorkflow
     /// Runs the orchestration: receives a question, calls the agent, returns the answer.
     /// </summary>
     /// <remarks>
-    /// Inside a workflow, you use TemporalAIAgent to call other agents.
-    /// The agent activity is executed via Workflow.ExecuteActivityAsync(), which ensures
-    /// determinism (the activity result is cached, so replays get the same value).
+    /// Inside a workflow, use <c>TemporalWorkflowExtensions.GetAgent</c> to obtain a
+    /// <c>TemporalAIAgent</c>. Each call to <c>RunAsync</c> dispatches activities
+    /// (RunDurableAgentStep + InvokeAgentTool per tool call) so results are durable and
+    /// replay-cached.
     /// </remarks>
     [WorkflowRun]
     public async Task<string> RunAsync(string userQuestion)
     {
-        // Create a TemporalAIAgent that calls the "WeatherAssistant" agent
-        // Use the GetAgent extension method from TemporalWorkflowExtensions
         var agent = GetAgent("WeatherAssistant");
-
-        // Create a session for the conversation
         var session = await agent.CreateSessionAsync();
-
-        // Call the agent with the user's question
-        // This internally:
-        //   1. Creates a RunRequest from the user question
-        //   2. Executes AgentActivities.ExecuteAgentAsync() via Workflow.ExecuteActivityAsync
-        //   3. Preserves conversation history in the workflow state
         var response = await agent.RunAsync(userQuestion, session);
 
         return response.Text ?? "No response";

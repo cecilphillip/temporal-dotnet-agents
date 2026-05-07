@@ -119,10 +119,10 @@ the store implementation.
 
 ## Reduction Strategy
 
-When `UseExternalHistory = true`, the in-process `HistoryReducer` delegate is
-**not** applied — the reducer is `[JsonIgnore]` and cannot cross the activity
-boundary. The recommended pattern is to implement reduction inside the store
-itself:
+When `opts.HistoryStore` (or `agent.HistoryStore`) is configured, the
+in-process `HistoryReducer` delegate is **not** applied — the reducer is
+`[JsonIgnore]` and cannot cross the activity boundary. The recommended pattern
+is to implement reduction inside the store itself:
 
 | Pattern | Where | Trade-off |
 |--------|-------|-----------|

@@ -174,14 +174,14 @@ DynamicRoutingWorkflow
 ### Why This is Truly Dynamic
 
 - **No hardcoded agent names** in the routing workflow — it discovers what's available at runtime
-- **Add a new agent** via `AddAIAgent` and it's automatically picked up by `GetRegisteredAgentNames()`
+- **Add a new agent** via `AddDurableAgent` and it's automatically picked up by `GetRegisteredAgentNames()` / `GetAgentDescriptors()`
 - **Remove an agent** and the validation activity falls back gracefully
 - **The Classifier adapts** — its prompt is built from the live agent list, not a static enum
 - **Replay-safe** — both activity results (agent list + validation) are recorded in history
 
 ### Auto-Extracted Descriptions
 
-Agents registered with a `description:` parameter in their `AsAIAgent()` call carry that metadata for documentation and tooling purposes. In this sample, however, the routing activity maintains its own description map — routing metadata is a concern of the routing activity, not the core agent registry. This keeps the agent definitions focused on their AI behavior and the routing logic self-contained in `RoutingActivities`.
+Agents registered with `agent.Description = "..."` on their `AddDurableAgent` builder appear in `opts.GetAgentDescriptors()` for routing prompts. The dynamic-routing activity calls `GetAgentDescriptors()` directly to discover specialists at runtime — agents without a description (e.g. the Classifier) are excluded automatically. This keeps the agent definitions focused on their AI behavior and the routing logic self-contained in `RoutingActivities`.
 
 ### Files
 

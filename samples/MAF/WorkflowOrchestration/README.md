@@ -8,7 +8,7 @@ This sample demonstrates:
 - A custom `[Workflow]` (`WeatherOrchestrationWorkflow`) driving an agent call
 - `GetAgent("WeatherAssistant")` resolving a registered agent by name inside workflow code
 - Deterministic agent execution via `Workflow.ExecuteActivityAsync()` under the hood
-- A weather tool with `UseFunctionInvocation()` middleware inside the sub-agent
+- A weather tool registered via `agent.AddTool(weatherTool)` on the durable-agent builder
 
 ## Highlights
 

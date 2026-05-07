@@ -1,12 +1,14 @@
 # PerToolActivities — Per-Tool Temporal Activity Granularity
 
-This sample demonstrates **step mode** in `Temporalio.Extensions.Agents`: every LLM
-call becomes its own `RunAgentStep` Temporal activity, and every tool call becomes
-its own `InvokeFunction` activity. Per-tool retry policies make write-style tools
-safe to use without risking double-fire on transient failure.
+This sample demonstrates **per-tool Temporal activities** in v0.3 of
+`Temporalio.Extensions.Agents`. Every LLM call is its own
+`Temporalio.Extensions.Agents.RunDurableAgentStep` activity, and every tool call
+is its own `Temporalio.Extensions.Agents.InvokeAgentTool` activity. Per-tool
+retry policies make write-style tools safe to use without risking double-fire on
+transient failure.
 
 For the conceptual background, see
-[`docs/how-to/MAF/per-tool-activities.md`](../../../docs/how-to/MAF/per-tool-activities.md).
+[`docs/how-to/MAF/durable-agents.md`](../../../docs/how-to/MAF/durable-agents.md).
 
 ---
 
@@ -30,8 +32,7 @@ The same workflow runs twice:
    are **not** re-run.
 
 The console output of scenario 2 prints `LookupCalls = 2, RefundCalls = 1, SendCalls = 1`,
-proving that retries are scoped to the failing tool and do not cascade across the
-entire turn the way they would in default-mode (single-`ExecuteAgent`-per-turn) execution.
+proving that retries are scoped to the failing tool.
 
 ---
 
@@ -55,11 +56,11 @@ dotnet run --project samples/MAF/PerToolActivities/PerToolActivities.csproj
 ```
 
 After both scenarios complete, open the Temporal Web UI at
-<http://localhost:8233> and inspect either workflow's history. Each `RunAgentStep`
-and each `InvokeFunction` shows up as a distinct activity row with the tool name
-in its summary — clicking into the failed `lookup_order` row in the second
-workflow shows two attempts, while the `apply_refund` and `send_email` rows show
-exactly one attempt each.
+<http://localhost:8233> and inspect either workflow's history. Each
+`RunDurableAgentStep` and each `InvokeAgentTool` shows up as a distinct activity
+row with the tool name in its summary — clicking into the failed `lookup_order`
+row in the second workflow shows two attempts, while the `apply_refund` and
+`send_email` rows show exactly one attempt each.
 
 ---
 
@@ -95,67 +96,75 @@ tools exactly 1 each.
 
 ---
 
-## How It Wires Together
+## How It Wires Together (v0.3)
 
-### Agent registration: NO `UseFunctionInvocation()`
-
-This is the constraint that makes step mode work. In default mode, the agent's
-`IChatClient` pipeline includes `UseFunctionInvocation()` middleware, which
-auto-executes tool calls inside a single `ExecuteAgent` activity. In step mode,
-the workflow needs to see raw `FunctionCallContent` from the model so it can
-dispatch each tool call as its own activity. Therefore:
+### One registration call — `AddDurableAgent`
 
 ```csharp
-// Register the inner IChatClient WITHOUT UseFunctionInvocation
+builder.Services.AddSingleton<OrderService>();
+builder.Services.AddSingleton<RefundService>();
+builder.Services.AddSingleton<EmailService>();
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient());
+
 builder.Services
-    .AddChatClient(openAiClient.GetChatClient(model).AsIChatClient())
-    .Build();
+    .AddHostedTemporalWorker(taskQueue)
+    .AddTemporalAgents(opts =>
+    {
+        opts.AddDurableAgent("RefundAgent", agent =>
+        {
+            agent.Instructions = "You are a customer refund specialist...";
+            agent.ChatClient   = sp => sp.GetRequiredService<IChatClient>();
+            agent.MaxToolCallsPerTurn = 10;
 
-// The agent factory uses .AsAIAgent(...) WITHOUT a clientFactory parameter — the
-// default pipeline does NOT include UseFunctionInvocation, which is what step mode
-// requires. The tools[] list is schema-only; the workflow dispatches them.
-opts.AddAIAgentFactory("RefundAgent", sp =>
-    sp.GetRequiredService<IChatClient>().AsAIAgent(
-        name: "RefundAgent",
-        instructions: "...",
-        tools: [lookupTool, refundTool, emailTool]));
+            // Read tool — inherits worker default retry policy.
+            agent.AddTool("lookup_order", sp => AIFunctionFactory.Create(
+                sp.GetRequiredService<OrderService>().LookupOrder,
+                "lookup_order"));
+
+            // Write tools — opts.NoRetry() binds MaximumAttempts = 1 to the AIFunction
+            // reference. No string-keyed PerToolActivityOptions dictionary, no
+            // name-typo footgun.
+            agent.AddTool(
+                "apply_refund",
+                sp => AIFunctionFactory.Create(
+                    sp.GetRequiredService<RefundService>().ApplyRefund,
+                    "apply_refund"),
+                opts => opts.NoRetry().WithTimeout(TimeSpan.FromSeconds(30)));
+
+            agent.AddTool(
+                "send_email",
+                sp => AIFunctionFactory.Create(
+                    sp.GetRequiredService<EmailService>().SendEmail,
+                    "send_email"),
+                opts => opts.NoRetry().WithTimeout(TimeSpan.FromSeconds(30)));
+        });
+    })
+    .AddWorkflow<RefundWorkflow>();
 ```
 
-### Tool registration: both schema and registry
+What v0.3 simplifies away:
 
-The same three `AIFunction` instances are passed to two places:
+- **No `BuildServiceProvider()` bootstrap** — the `AddTool(string, sp => ...)`
+  factory runs at first activity dispatch with the worker's runtime
+  `IServiceProvider`. Tool services resolve cleanly without an early DI build.
+- **No `AddDurableAI(_ => { })`** + **no `AddDurableTools(...)`** — the durable
+  agent path subsumes both. (MEAI's `DurableChatWorkflow` users still need them.)
+- **No `EnablePerToolActivities = true`** — every `AddDurableAgent` is durable
+  by definition.
+- **No `PerToolActivityOptions["..."]` dictionary** — per-tool retry policy is
+  bound to the `AIFunction` reference at registration via `opts => opts.NoRetry()`.
+- **No "must not call `UseFunctionInvocation()`"** caveat — the library
+  composes the chat pipeline internally with `UseProvidedChatClientAsIs = true`.
 
-- **Agent's `tools:` parameter** — exposes the JSON schema to the LLM so it knows
-  what calls it may emit.
-- **`AddDurableTools(...)`** — registers them in `DurableFunctionRegistry` keyed
-  by name, so `DurableFunctionActivities.InvokeFunction` can resolve them when
-  the workflow dispatches a tool call.
+### `DurableToolOptions` fluent sugar
 
-### Per-tool retry policy
+| Method                       | What it does                                           |
+| ---------------------------- | ------------------------------------------------------ |
+| `opts.NoRetry()`             | Sets `RetryPolicy = new() { MaximumAttempts = 1 }`     |
+| `opts.WithMaxAttempts(n)`    | Sets a fixed-attempt retry policy                       |
+| `opts.WithTimeout(t)`        | Sets `StartToCloseTimeout`                              |
 
-```csharp
-opts.PerToolActivityOptions = new()
-{
-    ["apply_refund"] = new ActivityOptions
-    {
-        StartToCloseTimeout = TimeSpan.FromSeconds(30),
-        RetryPolicy = new RetryPolicy { MaximumAttempts = 1 },
-    },
-    ["send_email"] = new ActivityOptions
-    {
-        StartToCloseTimeout = TimeSpan.FromSeconds(30),
-        RetryPolicy = new RetryPolicy { MaximumAttempts = 1 },
-    },
-    // lookup_order: omitted — falls through to TemporalAgentsOptions.RetryPolicy
-    //                          (the SDK default, unbounded retry).
-};
-```
-
-When `InvokeFunction(toolName)` is dispatched, the workflow looks the name up in
-this dictionary case-insensitively. A miss falls back to the worker's default
-`ActivityTimeout`, `HeartbeatTimeout`, and `RetryPolicy`. See
-[`docs/how-to/MAF/per-tool-activities.md`](../../../docs/how-to/MAF/per-tool-activities.md#per-tool-activityoptions)
-for the full fallback table.
+These compose: `opts => opts.NoRetry().WithTimeout(TimeSpan.FromSeconds(30))` is valid.
 
 ---
 
@@ -164,20 +173,20 @@ for the full fallback table.
 Scenario 1 (happy path) workflow history:
 
 ```
-RunAgentStep                               ← LLM call #1 → returns lookup_order
-InvokeFunction (Summary: "lookup_order")   ← 1 attempt, succeeds
-RunAgentStep                               ← LLM call #2 → returns apply_refund
-InvokeFunction (Summary: "apply_refund")   ← 1 attempt, succeeds (MaximumAttempts = 1)
-RunAgentStep                               ← LLM call #3 → returns send_email
-InvokeFunction (Summary: "send_email")     ← 1 attempt, succeeds (MaximumAttempts = 1)
-RunAgentStep                               ← LLM call #4 → final assistant message
+RunDurableAgentStep                                  ← LLM call #1 → returns lookup_order
+InvokeAgentTool:RefundAgent:lookup_order             ← 1 attempt, succeeds
+RunDurableAgentStep                                  ← LLM call #2 → returns apply_refund
+InvokeAgentTool:RefundAgent:apply_refund             ← 1 attempt, succeeds (MaximumAttempts = 1)
+RunDurableAgentStep                                  ← LLM call #3 → returns send_email
+InvokeAgentTool:RefundAgent:send_email               ← 1 attempt, succeeds (MaximumAttempts = 1)
+RunDurableAgentStep                                  ← LLM call #4 → final assistant message
 ```
 
 Scenario 2 (transient lookup failure) — the difference shows up on the first
-`InvokeFunction` row:
+`InvokeAgentTool` row:
 
 ```
-InvokeFunction (Summary: "lookup_order")   ← 2 attempts: 1 failure, 1 success
+InvokeAgentTool:RefundAgent:lookup_order             ← 2 attempts: 1 failure, 1 success
 ```
 
 The write-tool rows are unchanged: still one attempt each. That is the per-tool
@@ -187,6 +196,7 @@ retry granularity benefit.
 
 ## See Also
 
-- Conceptual guide: [`docs/how-to/MAF/per-tool-activities.md`](../../../docs/how-to/MAF/per-tool-activities.md)
-- Step-mode workflow loop: [`docs/architecture/MAF/agent-sessions-and-workflow-loop.md`](../../../docs/architecture/MAF/agent-sessions-and-workflow-loop.md)
+- Conceptual guide: [`docs/how-to/MAF/durable-agents.md`](../../../docs/how-to/MAF/durable-agents.md)
+- Workflow loop architecture: [`docs/architecture/MAF/agent-sessions-and-workflow-loop.md`](../../../docs/architecture/MAF/agent-sessions-and-workflow-loop.md)
+- v0.2 → v0.3 migration: [`MIGRATION-v0.3.md`](../../../MIGRATION-v0.3.md)
 - The MEAI counterpart for tool durability: [`samples/MEAI/DurableTools/`](../../MEAI/DurableTools/)

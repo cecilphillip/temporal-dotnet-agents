@@ -24,8 +24,9 @@ public class RoutingActivities(TemporalAgentsOptions options)
     [Activity("WorkflowRouting.GetAvailableAgents")]
     public AgentInfo[] GetAvailableAgents()
     {
-        // Descriptions are registered alongside the agent via AddAIAgent() — no local
-        // dictionary needed. Agents without a description (e.g. the Classifier) are excluded.
+        // Descriptions are registered alongside the agent via AddDurableAgent() — no
+        // local dictionary needed. Agents without a description (e.g. the Classifier)
+        // are excluded.
         return options.GetAgentDescriptors()
             .Select(d => new AgentInfo(d.Name, d.Description))
             .ToArray();

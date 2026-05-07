@@ -469,3 +469,57 @@ Single commit covering code removal, test rewrites, and doc updates per the plan
 - `grep -rn "ConfigureAwait(false)" src/Temporalio.Extensions.Agents/Workflows/AgentWorkflow.cs src/Temporalio.Extensions.AI/DurableChatWorkflowBase.cs`: zero matches.
 - `grep -rn "AddAIAgent\b\|AddAIAgentFactory\|EnablePerToolActivities\|PerToolActivityOptions\|UseExternalHistory\|UseExternalAgentHistory" src/`: only an `<c>AddAIAgent</c>` mention inside `TemporalAgentsOptions.cs`'s class XML doc explaining what was removed (informational, no code reference).
 - Old worker-level property accesses (`agentsOptions.TimeToLive` etc.) in `src/`: zero matches.
+
+---
+
+## Phase 7 — Rewrite all MAF samples to v0.3 idiomatic shape
+
+After Phases 1-6 landed (last commit: `1d09c71`, MIGRATION-v0.3.md), the 11 MAF samples carried a mix of Phase 5 minimal placeholders and v0.2-era helper code (constructed-but-unused `AsAIAgent` agents, leftover `BuildServiceProvider()` bootstrap dance in `PerToolActivities` and `ExternalHistoryStore`, dead `clientFactory: c => c.UseFunctionInvocation()` wiring). Phase 7 rewrote all 11 to the canonical v0.3 idiom — `AddChatClient` in DI, `opts.AddDurableAgent("name", agent => { ... })` for registration, `agent.AddTool(sp => ...)` for DI-resolved tools, `opts.NoRetry()` for write tools.
+
+### Samples rewritten (single commit)
+
+1. **BasicAgent** — straightforward AddDurableAgent + agent.AddTool(weatherTool).
+2. **WorkflowOrchestration** — fixed agent name mismatch (placeholder registered "Assistant", workflow looked up "WeatherAssistant"). Now both align as "WeatherAssistant".
+3. **EvaluatorOptimizer** — dropped two unused `AsAIAgent`-constructed local variables that were dead code in the placeholder.
+4. **MultiAgentRouting** — same dead-code cleanup × 3 specialist agents.
+5. **WorkflowRouting** — same cleanup × 4 (Classifier + 3 specialists). Specialist `Description` properties moved from the constructed `AsAIAgent` call to `agent.Description = "..."` on the builder so `GetAgentDescriptors()` introspection still works for `DynamicRoutingWorkflow`.
+6. **HumanInTheLoop** — fixed agent-name bug (placeholder registered "EmailAgent", proxy lookup used "EmailAssistant"). Moved the `sendEmailTool` registration onto the agent builder via `agent.AddTool(sendEmailTool)` so HITL `RequestApprovalAsync` from inside the tool body works end-to-end. Demonstrated `agent.ApprovalTimeout` per-agent override.
+7. **SplitWorkerClient/Worker** — Worker only (Client unchanged). Same pattern as BasicAgent.
+8. **ConfigurableAgent** — bound `IOptions<T>` config eagerly at host-build time so `agent.Instructions` could receive the templated string (per Phase 5 plan, `Instructions` is set at registration, not resolved per dispatch). Tools route through `agent.AddTool("Name", sp => ...)` factories. The `[ESCALATE: ...]` triage workflow logic stays unchanged.
+9. **PerToolActivities** — the showpiece. Dropped `BuildServiceProvider()` bootstrap (lines 67-83 in v0.2). Dropped the `Microsoft.Extensions.AI` import comment about `UseFunctionInvocation`. Dropped the explicit `.Build()` on `AddChatClient`. Updated activity-name guidance in the operator-help block (`InvokeFunction:foo` → `InvokeAgentTool:RefundAgent:foo`, `RunAgentStep` → `RunDurableAgentStep`). Line count: 247 → 215 (13% overall, but the registration block proper went from ~50 lines to ~30 lines — about 40% reduction in the foot-gun-prone surface).
+10. **ExternalHistoryStore** — Dropped the explicit `var store = new InMemoryHistoryStore(...); builder.Services.AddSingleton(store); builder.Services.AddSingleton<IAgentHistoryStore>(store);` pattern. Now: `builder.Services.AddSingleton<InMemoryHistoryStore>(_ => new InMemoryHistoryStore(maxRecentEntries: 4))` + `opts.HistoryStore = sp => sp.GetRequiredService<InMemoryHistoryStore>()`. Demo driver still resolves the concrete store via DI for stat inspection. Updated activity-name in payload-inspection check from `Temporalio.Extensions.Agents.ExecuteAgent` (legacy) to `Temporalio.Extensions.Agents.RunDurableAgentStep` (current — the prior placeholder still had the v0.2 activity name and would have silently reported "no activity found").
+11. **AmbientAgent** — same dead-code cleanup (constructed-but-unused `analysisAgent` / `alertAgent` locals).
+
+### Other touches
+
+- **`samples/MAF/PerToolActivities/PerToolActivities.csproj`** — dropped the `Temporalio.Extensions.AI` `<ProjectReference>` (transitively pulled by Extensions.Agents now that `AddDurableTools` is no longer needed for the MAF agent path). Updated the comment block to reflect the new dependency story.
+- **`samples/MAF/PerToolActivities/RefundWorkflow.cs`** — class-doc comment updated `EnablePerToolActivities = true` → `AddDurableAgent` and `RunAgentStep` / `InvokeFunction` → `RunDurableAgentStep` / `InvokeAgentTool`.
+- **`samples/MAF/WorkflowRouting/RoutingActivities.cs`** — comment update `AddAIAgent()` → `AddDurableAgent()`.
+- **READMEs** — updated:
+  - `BasicAgent/README.md` — bullet list rewritten to match v0.3 surface; "tool calls are durable" → "tool calls are durable per-tool activities".
+  - `WorkflowOrchestration/README.md` — dropped `UseFunctionInvocation` middleware bullet.
+  - `WorkflowRouting/README.md` — `AddAIAgent` → `AddDurableAgent`; descriptor-extraction prose updated to match `agent.Description` slot.
+  - `ExternalHistoryStore/README.md` — `UseExternalHistory = true` → `opts.HistoryStore` / `agent.HistoryStore` configured.
+  - `PerToolActivities/README.md` — full rewrite: "step mode" terminology gone, expected-output activity names updated, registration code block shows the canonical v0.3 form, "What V0.3 simplifies away" section enumerates the removed boilerplate.
+
+### Discoveries / Notes
+
+- **The Phase 5 placeholder for HumanInTheLoop registered the wrong agent name.** Proxy lookup said "EmailAssistant"; placeholder registration said "EmailAgent". Build was clean because agent-name resolution happens at runtime. This would have failed end-to-end with no clear error. Phase 7 fixed it.
+- **The Phase 5 placeholder for WorkflowOrchestration had the same bug** — registration said "Assistant", workflow lookup said "WeatherAssistant". Same fix.
+- **The ExternalHistoryStore payload-inspection check was checking for a v0.2 activity name** (`Temporalio.Extensions.Agents.ExecuteAgent`). The activity is now `RunDurableAgentStep`. The check would have silently reported "no activity found" instead of validating the payload-omission claim. Phase 7 fixed it.
+- **`agent.AddTool` has two factory overloads** with different shapes: `AddTool(AIFunction tool, ...)` (concrete) and `AddTool(string name, Func<IServiceProvider, AIFunction> factory, ...)` (DI-resolved). The string `name` parameter is required on the factory overload — duplicate-name detection happens synchronously at registration without it. The MIGRATION-v0.3.md doc was slightly off (omitted the `name` parameter in the second example, line 137); did NOT fix that as part of Phase 7 since the doc is owned by Oracle.
+
+### Exit gate
+
+- `just build`: 0 warnings, 0 errors.
+- `just test-unit-all`: 478/478 pass (288 Agents + 190 AI).
+- `just test-integration`: 64/67 pass — same 3 failures as on `main` immediately before Phase 7 (`DurableAgent_LegacyAddAIAgent_UsesLegacyPath`, `SingleTurn_ResponseAgentIdMatchesWorkflowId`, `EmptyAgentResponse_RoundTripsWithoutCrash`). Verified via `git stash` that these failed on the unmodified Phase 6 tip; not Phase 7 regressions. Worth Trinity flagging — `LegacyAddAIAgent_UsesLegacyPath` looks like a stale test that survived Phase 5 (legacy path is gone).
+- `just test-integration-ai`: 13/13 pass.
+- `grep -rn "BuildServiceProvider" samples/MAF/`: 2 matches, both intentional (one explanatory comment in ConfigurableAgent's header, one bullet in PerToolActivities README explaining what v0.3 removed).
+- `grep -rn "AddAIAgent\b\|AddAIAgentFactory\|EnablePerToolActivities\|UseFunctionInvocation" samples/MAF/`: 2 matches, both intentional (header comment in ConfigurableAgent referring to the v0.2 API by name; PerToolActivities README "no `EnablePerToolActivities`" callout).
+- `grep -rn "RegisterDefaultWorkflow = false" samples/MAF/`: zero matches.
+
+### Why one commit, not 11
+
+The plan permitted either approach. Bundled because: (a) every sample touches one file (`Program.cs`) plus optional README; (b) the changes are mechanical and follow the same pattern; (c) review of "all 11 samples follow the same v0.3 shape" benefits from seeing them together; (d) reviewers checking a single commit's `git show` get the full v0.3 sample-set picture in one read.
+

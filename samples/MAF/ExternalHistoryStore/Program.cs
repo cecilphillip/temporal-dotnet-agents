@@ -12,7 +12,6 @@
 using System.ClientModel;
 using System.Text;
 using ExternalHistoryStore;
-using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +21,7 @@ using OpenAI;
 using OpenAI.Chat;
 using Temporalio.Client;
 using Temporalio.Extensions.Agents;
+using Temporalio.Extensions.Agents.HistoryStore;
 using Temporalio.Extensions.Hosting;
 using Temporalio.Workflows;
 using static Temporalio.Extensions.Agents.TemporalWorkflowExtensions;
@@ -30,7 +30,7 @@ using static Temporalio.Extensions.Agents.TemporalWorkflowExtensions;
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
-// ── Step 2: Load configuration ────────────────────────────────────────────────
+// ── Step 2: Load configuration ───────────────────────────────────────────────
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
@@ -42,44 +42,46 @@ if (string.IsNullOrEmpty(apiKey))
         "OPENAI_API_KEY is not configured. Set it with: " +
         "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/ExternalHistoryStore");
 
-var endpoint = new Uri(apiBaseUrl);
-var openAiOptions = new OpenAIClientOptions { Endpoint = endpoint };
 const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
-var credential = new ApiKeyCredential(apiKey);
-var openAiClient = new OpenAIClient(credential, openAiOptions);
+var openAiClient = new OpenAIClient(
+    new ApiKeyCredential(apiKey),
+    new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) });
 
-// ── Step 3: Register tenant directory + Layer 2 provider singleton ────────────
-// The provider is a singleton so the demo driver can read its InvokingCalls counter
-// after the conversation. The Layer 1 store is registered separately by
-// UseExternalAgentHistory<TStore>() in step 5.
+// ── Step 3: Register supporting singletons ───────────────────────────────────
+// The Layer 1 store and Layer 2 provider are both DI singletons:
+//   • InMemoryHistoryStore — registered as both the concrete type (so the demo
+//     driver can inspect the LoadCalls / ReductionEvents counters after the run)
+//     and as IAgentHistoryStore (so opts.HistoryStore can resolve it).
+//   • TenantContextProvider — singleton so the demo driver can read InvokingCalls.
+//   • TenantDirectory — loaded from configuration once.
 builder.Services.AddSingleton(sp => TenantDirectory.LoadFromConfig(builder.Configuration));
 builder.Services.AddSingleton<TenantContextProvider>();
+builder.Services.AddSingleton<InMemoryHistoryStore>(_ => new InMemoryHistoryStore(maxRecentEntries: 4));
 
-// Pre-build the singleton store ourselves so we can read its statistics later.
-// We register both the concrete type (so the demo can read the counters) and the
-// IAgentHistoryStore service (which the activity resolves at runtime).
-var store = new InMemoryHistoryStore(maxRecentEntries: 4);
-builder.Services.AddSingleton(store);
-builder.Services.AddSingleton<Temporalio.Extensions.Agents.HistoryStore.IAgentHistoryStore>(store);
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient());
 
-// ── Step 4: Register Temporal client ──────────────────────────────────────────
+// ── Step 4: Register Temporal client ─────────────────────────────────────────
 builder.Services.AddTemporalClient(temporalAddress, "default");
 
-// ── Step 5: Wire BOTH layers on the worker ────────────────────────────────────
+// ── Step 5: Wire BOTH layers on the worker ───────────────────────────────────
+// • opts.HistoryStore — Layer 1 worker default factory. Presence of a non-null
+//   factory is the opt-in (no boolean flag in v0.3).
+// • agent.AddContextProvider — Layer 2 per-agent provider. The factory runs once
+//   at first activity dispatch and the resolved instance is cached for the life
+//   of the worker process.
 const string taskQueue = "external-history-store";
 builder.Services
     .AddHostedTemporalWorker(taskQueue)
     .AddTemporalAgents(opts =>
     {
-        // Phase 5 placeholder — Phase 7 rewrites the sample to v0.3 idiomatic shape.
-        opts.HistoryStore = sp => sp.GetRequiredService<Temporalio.Extensions.Agents.HistoryStore.IAgentHistoryStore>();
+        opts.HistoryStore = sp => sp.GetRequiredService<InMemoryHistoryStore>();
 
-        opts.AddDurableAgent("SupportAgent", a =>
+        opts.AddDurableAgent("SupportAgent", agent =>
         {
-            a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient();
-            a.Instructions =
+            agent.Description = "Multi-tenant customer support — exercises external history + tenant context.";
+            agent.Instructions =
                 "You are a multi-tenant customer support agent. Use the tenant " +
                 "metadata supplied in system context to tailor responses (mention " +
                 "the tenant tier or SLA when relevant). Treat order IDs of the form " +
@@ -87,7 +89,8 @@ builder.Services
                 "(this is a demo). If a question references information you don't see " +
                 "in the current messages, say you don't have visibility into that " +
                 "earlier part of the conversation.";
-            a.AddContextProvider(sp => sp.GetRequiredService<TenantContextProvider>());
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            agent.AddContextProvider(sp => sp.GetRequiredService<TenantContextProvider>());
         });
     })
     .AddWorkflow<SupportSessionWorkflow>();
@@ -101,6 +104,7 @@ Console.WriteLine();
 
 var directory = host.Services.GetRequiredService<TenantDirectory>();
 var tenantProvider = host.Services.GetRequiredService<TenantContextProvider>();
+var store = host.Services.GetRequiredService<InMemoryHistoryStore>();
 var temporalClient = host.Services.GetRequiredService<ITemporalClient>();
 
 var activeTenant = directory.TryGet("acme")
@@ -155,34 +159,35 @@ Console.WriteLine(
     $"(turns where full history > 4 entries triggered the recent-N truncation).");
 Console.WriteLine();
 
-// Inspect the most recent ExecuteAgent activity payload from the workflow's history.
-// Confirms turn-1's question is NOT carried in the late-turn ActivityScheduled event.
+// Inspect the most recent RunDurableAgentStep activity payload from the workflow's
+// history. Confirms turn-1's question is NOT carried in the late-turn
+// ActivityScheduled event — Layer 1 keeps PII out of Temporal events.
 Console.WriteLine($"=== Temporal Activity Payload Inspection ===");
-string? lastExecuteAgentPayload = null;
+string? lastStepPayload = null;
 await foreach (var ev in handle.FetchHistoryEventsAsync())
 {
     if (ev.ActivityTaskScheduledEventAttributes is { } attrs &&
-        attrs.ActivityType.Name == "Temporalio.Extensions.Agents.ExecuteAgent" &&
+        attrs.ActivityType.Name == "Temporalio.Extensions.Agents.RunDurableAgentStep" &&
         attrs.Input?.Payloads_.Count >= 1)
     {
-        lastExecuteAgentPayload = Encoding.UTF8.GetString(
+        lastStepPayload = Encoding.UTF8.GetString(
             attrs.Input.Payloads_[0].Data.ToByteArray());
     }
 }
 
-if (lastExecuteAgentPayload is not null)
+if (lastStepPayload is not null)
 {
-    var hasConvHistoryKey = lastExecuteAgentPayload.Contains("ConversationHistory", StringComparison.OrdinalIgnoreCase);
-    var hasTurn1Question = lastExecuteAgentPayload.Contains("ORD-001", StringComparison.Ordinal);
-    Console.WriteLine($"  Last ExecuteAgent input contains 'ConversationHistory' key: {hasConvHistoryKey}");
-    Console.WriteLine($"  Last ExecuteAgent input contains turn-1 marker (ORD-001):    {hasTurn1Question}");
+    var hasConvHistoryKey = lastStepPayload.Contains("ConversationHistory", StringComparison.OrdinalIgnoreCase);
+    var hasTurn1Question = lastStepPayload.Contains("ORD-001", StringComparison.Ordinal);
+    Console.WriteLine($"  Last RunDurableAgentStep input contains 'ConversationHistory' key: {hasConvHistoryKey}");
+    Console.WriteLine($"  Last RunDurableAgentStep input contains turn-1 marker (ORD-001):    {hasTurn1Question}");
     Console.WriteLine(hasConvHistoryKey
         ? "  ⚠ Unexpected: payload still carries ConversationHistory."
         : "  ✓ Payload omits ConversationHistory — PII / O(n²) growth mitigated.");
 }
 else
 {
-    Console.WriteLine("  (no ExecuteAgent activity found in workflow history)");
+    Console.WriteLine("  (no RunDurableAgentStep activity found in workflow history)");
 }
 Console.WriteLine();
 

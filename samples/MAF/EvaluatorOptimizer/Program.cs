@@ -3,9 +3,9 @@
 //
 // Run:  dotnet run --project samples/MAF/EvaluatorOptimizer/EvaluatorOptimizer.csproj
 
-using Microsoft.Extensions.AI;
 using System.ClientModel;
 using EvaluatorOptimizer;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -20,64 +20,60 @@ using Temporalio.Extensions.Hosting;
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
-// ── Step 2: Load configuration ────────────────────────────────────────────────
+// ── Step 2: Load configuration ───────────────────────────────────────────────
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
 if (string.IsNullOrEmpty(apiBaseUrl))
-{
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
-}
 
 if (string.IsNullOrEmpty(apiKey))
-{
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/EvaluatorOptimizer");
-}
+    throw new InvalidOperationException(
+        "OPENAI_API_KEY is not configured. Set it with: " +
+        "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/EvaluatorOptimizer");
 
-var endpoint = new Uri(apiBaseUrl);
-var openAiOptions = new OpenAIClientOptions() { Endpoint = endpoint };
-var model = "gpt-4o-mini";
+const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
-ApiKeyCredential credential = new(apiKey!);
-OpenAIClient openAiClient = new(credential, openAiOptions);
+var openAiClient = new OpenAIClient(
+    new ApiKeyCredential(apiKey),
+    new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) });
 
-// ── Step 3: Create the Generator and Evaluator agents ─────────────────────────
-var generator = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "Generator",
-        instructions:
-            "You are a skilled technical writer. Produce clear, concise, and well-structured " +
-            "content based on the task description. When given revision feedback, incorporate it faithfully.");
+// ── Step 3: Register the IChatClient in DI ───────────────────────────────────
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient());
 
-var evaluator = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "Evaluator",
-        instructions:
-            "You are a precise reviewer. Evaluate the given draft critically. " +
-            "If it meets high standards of clarity, accuracy, and completeness, reply with EXACTLY 'APPROVED'. " +
-            "Otherwise, provide a numbered list of specific, actionable improvements.");
-
-// ── Step 4: Register agents and the orchestrating workflow ────────────────────
+// ── Step 4: Register the two collaborating agents and the orchestrating workflow ─
 builder.Services.AddTemporalClient(temporalAddress, "default");
 builder.Services
     .AddHostedTemporalWorker("evaluator-optimizer")
     .AddTemporalAgents(opts =>
     {
-        opts.AddDurableAgent("Generator", a => a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient());
-        opts.AddDurableAgent("Evaluator", a => a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient());
+        opts.AddDurableAgent("Generator", agent =>
+        {
+            agent.Instructions =
+                "You are a skilled technical writer. Produce clear, concise, and well-structured " +
+                "content based on the task description. When given revision feedback, incorporate it faithfully.";
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+        });
+
+        opts.AddDurableAgent("Evaluator", agent =>
+        {
+            agent.Instructions =
+                "You are a precise reviewer. Evaluate the given draft critically. " +
+                "If it meets high standards of clarity, accuracy, and completeness, reply with EXACTLY 'APPROVED'. " +
+                "Otherwise, provide a numbered list of specific, actionable improvements.";
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+        });
     })
     .AddWorkflow<EvaluatorOptimizerWorkflow>();
 
-// ── Step 5: Start the host ────────────────────────────────────────────────────
+// ── Step 5: Start the host ───────────────────────────────────────────────────
 var host = builder.Build();
 await host.StartAsync();
 
 Console.WriteLine("Worker started. Submitting EvaluatorOptimizer workflow...\n");
 
-// ── Step 6: Submit the workflow ───────────────────────────────────────────────
+// ── Step 6: Submit the workflow ──────────────────────────────────────────────
 var client = host.Services.GetRequiredService<ITemporalClient>();
 
 var task = "Write a concise (100-word) explanation of how Temporal workflows achieve fault tolerance.";
@@ -107,7 +103,6 @@ catch (Exception ex)
     Console.WriteLine($"Workflow failed: {ex.Message}\n");
 }
 
-// ── Step 8: Graceful shutdown ─────────────────────────────────────────────────
-// TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException on shutdown.
+// ── Step 8: Graceful shutdown ────────────────────────────────────────────────
 try { await host.StopAsync(); } catch (OperationCanceledException) { }
 Console.WriteLine("Done.");

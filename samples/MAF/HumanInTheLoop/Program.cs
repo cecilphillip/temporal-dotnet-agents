@@ -22,22 +22,25 @@ using Temporalio.Extensions.Hosting;
 using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using ChatRole = Microsoft.Extensions.AI.ChatRole;
 
-// ── Configuration ──────────────────────────────────────────────────────────────
+// ── Configuration ────────────────────────────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 var apiKey     = builder.Configuration.GetValue<string>("OPENAI_API_KEY")
-    ?? throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/HumanInTheLoop");
+    ?? throw new InvalidOperationException(
+        "OPENAI_API_KEY is not configured. Set it with: " +
+        "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/HumanInTheLoop");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL")
     ?? throw new InvalidOperationException("OPENAI_API_BASE_URL is required in appsettings.json.");
-var model           = "gpt-4o-mini";
+
+const string model    = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
-// ── AI client ──────────────────────────────────────────────────────────────────
-var openAiOptions = new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) };
-OpenAIClient openAiClient = new(new ApiKeyCredential(apiKey), openAiOptions);
+var openAiClient = new OpenAIClient(
+    new ApiKeyCredential(apiKey),
+    new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) });
 
-// ── send_email tool — the heart of this sample ────────────────────────────────
+// ── send_email tool — the heart of this sample ───────────────────────────────
 // Before sending, the tool suspends the activity by sending a structured
 // DurableApprovalRequest to the workflow. Execution resumes only when a human
 // submits a decision via ITemporalAgentClient.SubmitApprovalAsync.
@@ -72,36 +75,35 @@ var sendEmailTool = AIFunctionFactory.Create(
     name: "send_email",
     description: "Sends an email to the specified recipient. Requires human approval before delivery.");
 
-// ── EmailAssistant agent ───────────────────────────────────────────────────────
-// Explicitly typed as ChatClient (not IChatClient) so the compiler selects the
-// OpenAIChatClientExtensions.AsAIAgent overload, which exposes the clientFactory
-// parameter needed to inject middleware (UseFunctionInvocation).
-ChatClient chatClient = openAiClient.GetChatClient(model);
-var emailAgent = chatClient.AsAIAgent(
-    name: "EmailAssistant",
-    instructions: """
-        You are a helpful email assistant. Help users compose and send emails.
-        When the user wants to send an email, use the send_email tool.
-        Confirm the recipient, subject, and body content before calling the tool.
-        If a send is rejected, explain what happened and offer to revise.
-        """,
-    tools: [sendEmailTool],
-    clientFactory: client => client.AsBuilder().UseFunctionInvocation().Build());
+// ── Worker registration ──────────────────────────────────────────────────────
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient());
+builder.Services.AddTemporalClient(temporalAddress, "default");
 
-// ── Worker registration ────────────────────────────────────────────────────────
-builder.Services
-    .AddTemporalClient(temporalAddress, "default");
 builder.Services
     .AddHostedTemporalWorker("hitl-sample")
     .AddTemporalAgents(opts =>
     {
-        // HITL requires a timeout that covers the full human review window.
-        // The underlying activity heartbeats during this period so the worker
-        // won't treat it as stuck — as long as HeartbeatTimeout < ActivityTimeout.
+        // HITL requires timeouts that cover the full human review window. The
+        // underlying activity heartbeats during this period so the worker won't
+        // treat it as stuck — as long as DefaultHeartbeatTimeout < DefaultActivityTimeout.
         opts.DefaultActivityTimeout  = TimeSpan.FromHours(24);
         opts.DefaultHeartbeatTimeout = TimeSpan.FromMinutes(5);
 
-        opts.AddDurableAgent("EmailAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(2); });
+        opts.AddDurableAgent("EmailAssistant", agent =>
+        {
+            agent.Instructions = """
+                You are a helpful email assistant. Help users compose and send emails.
+                When the user wants to send an email, use the send_email tool.
+                Confirm the recipient, subject, and body content before calling the tool.
+                If a send is rejected, explain what happened and offer to revise.
+                """;
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            agent.AddTool(sendEmailTool);
+
+            // Per-agent override of opts.DefaultApprovalTimeout. Demonstrates the v0.3
+            // builder slot — not required (would inherit otherwise).
+            agent.ApprovalTimeout = TimeSpan.FromHours(24);
+        });
     });
 
 using var host = builder.Build();
@@ -118,16 +120,16 @@ Console.WriteLine("║  Type 'quit' to exit.                             ║");
 Console.WriteLine("╚═══════════════════════════════════════════════════╝");
 Console.WriteLine();
 
-// ── Resolve services ───────────────────────────────────────────────────────────
+// ── Resolve services ─────────────────────────────────────────────────────────
 var proxy  = host.Services.GetTemporalAgentProxy("EmailAssistant");
 var client = host.Services.GetRequiredService<ITemporalAgentClient>();
 
-// ── Conversation session ───────────────────────────────────────────────────────
+// ── Conversation session ─────────────────────────────────────────────────────
 // A single session means the agent remembers context across turns.
 var session   = await proxy.CreateSessionAsync();
 var sessionId = session.GetService<TemporalAgentSessionId>()!;
 
-// ── Main conversation loop ─────────────────────────────────────────────────────
+// ── Main conversation loop ───────────────────────────────────────────────────
 while (true)
 {
     Console.Write("You: ");

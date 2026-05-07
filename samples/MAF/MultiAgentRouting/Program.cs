@@ -3,8 +3,8 @@
 //
 // Run:  dotnet run --project samples/MAF/MultiAgentRouting/MultiAgentRouting.csproj
 
-using Microsoft.Extensions.AI;
 using System.ClientModel;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -19,7 +19,7 @@ using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Hosting;
 using Temporalio.Extensions.OpenTelemetry;
 
-// ── Step 1: Configure OpenTelemetry ─────────────────────────────────────────
+// ── Step 1: Configure OpenTelemetry ──────────────────────────────────────────
 // Register all four activity sources:
 //   • TracingInterceptor.ClientSource      — client outbound spans
 //   • TracingInterceptor.WorkflowsSource   — workflow inbound/outbound spans
@@ -37,53 +37,27 @@ using var tracerProvider = Sdk.CreateTracerProviderBuilder()
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
-// ── Step 3: Load configuration ────────────────────────────────────────────────
+// ── Step 3: Load configuration ───────────────────────────────────────────────
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
 if (string.IsNullOrEmpty(apiBaseUrl))
-{
     throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
-}
 
 if (string.IsNullOrEmpty(apiKey))
-{
-    throw new InvalidOperationException("OPENAI_API_KEY is not configured. Set it with: dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/MultiAgentRouting");
-}
+    throw new InvalidOperationException(
+        "OPENAI_API_KEY is not configured. Set it with: " +
+        "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/MultiAgentRouting");
 
-var endpoint = new Uri(apiBaseUrl);
-var openAiOptions = new OpenAIClientOptions() { Endpoint = endpoint };
-var model = "gpt-4o-mini";
+const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
-ApiKeyCredential credential = new(apiKey!);
-OpenAIClient openAiClient = new(credential, openAiOptions);
+var openAiClient = new OpenAIClient(
+    new ApiKeyCredential(apiKey),
+    new OpenAIClientOptions { Endpoint = new Uri(apiBaseUrl) });
 
-// ── Step 4: Create the three specialist agents ────────────────────────────────
-var weatherAgent = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "WeatherAgent",
-        instructions:
-            "You are a weather specialist. Answer questions about weather conditions, forecasts, " +
-            "climate patterns, and meteorological phenomena. Keep responses concise and informative.");
-
-var billingAgent = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "BillingAgent",
-        instructions:
-            "You are a billing and payments specialist. Answer questions about invoices, charges, " +
-            "payment methods, refunds, and account billing. Keep responses concise and informative.");
-
-var techSupportAgent = openAiClient
-    .GetChatClient(model)
-    .AsAIAgent(
-        name: "TechSupportAgent",
-        instructions:
-            "You are a technical support specialist. Answer questions about software issues, " +
-            "hardware problems, troubleshooting steps, and technical configurations. " +
-            "Keep responses concise and informative.");
+// ── Step 4: Register the IChatClient in DI ───────────────────────────────────
+builder.Services.AddChatClient(openAiClient.GetChatClient(model).AsIChatClient());
 
 // ── Step 5: Register ITemporalClient with TracingInterceptor ─────────────────
 // The TracingInterceptor propagates OTel context across Temporal calls.
@@ -94,14 +68,38 @@ builder.Services.AddTemporalClient(opts =>
     opts.Interceptors = new[] { new TracingInterceptor() };
 });
 
-// ── Step 6: Register the hosted worker with all agents ────────────────────────
+// ── Step 6: Register the hosted worker with all three specialist agents ──────
 builder.Services
     .AddHostedTemporalWorker("agents")
     .AddTemporalAgents(opts =>
     {
-        opts.AddDurableAgent("WeatherAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
-        opts.AddDurableAgent("BillingAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
-        opts.AddDurableAgent("TechSupportAgent", a => { a.ChatClient = _ => openAiClient.GetChatClient(model).AsIChatClient(); a.TimeToLive = TimeSpan.FromHours(1); });
+        opts.AddDurableAgent("WeatherAgent", agent =>
+        {
+            agent.Instructions =
+                "You are a weather specialist. Answer questions about weather conditions, forecasts, " +
+                "climate patterns, and meteorological phenomena. Keep responses concise and informative.";
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            agent.TimeToLive = TimeSpan.FromHours(1);
+        });
+
+        opts.AddDurableAgent("BillingAgent", agent =>
+        {
+            agent.Instructions =
+                "You are a billing and payments specialist. Answer questions about invoices, charges, " +
+                "payment methods, refunds, and account billing. Keep responses concise and informative.";
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            agent.TimeToLive = TimeSpan.FromHours(1);
+        });
+
+        opts.AddDurableAgent("TechSupportAgent", agent =>
+        {
+            agent.Instructions =
+                "You are a technical support specialist. Answer questions about software issues, " +
+                "hardware problems, troubleshooting steps, and technical configurations. " +
+                "Keep responses concise and informative.";
+            agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
+            agent.TimeToLive = TimeSpan.FromHours(1);
+        });
     })
     .AddWorkflow<RoutingWorkflow>()
     .AddWorkflow<ParallelAgentWorkflow>()
@@ -109,13 +107,13 @@ builder.Services
     // instance is safe and avoids unnecessary allocations on every activity execution.
     .AddSingletonActivities<RoutingActivities>();
 
-// ── Step 7: Start the host ────────────────────────────────────────────────────
+// ── Step 7: Start the host ───────────────────────────────────────────────────
 var host = builder.Build();
 await host.StartAsync();
 
 Console.WriteLine("Worker started.\n");
 
-// ── Step 8: Demonstrate workflow-based routing ────────────────────────────────
+// ── Step 8: Demonstrate workflow-based routing ───────────────────────────────
 // Each question is dispatched to a RoutingWorkflow. The routing decision runs
 // inside a RoutingActivities.ClassifyRequest activity — it is recorded in the
 // workflow event history and is fully durable.
@@ -150,7 +148,7 @@ foreach (var (sessionId, question) in routingExamples)
     }
 }
 
-// ── Step 9: Demonstrate parallel execution ────────────────────────────────────
+// ── Step 9: Demonstrate parallel execution ───────────────────────────────────
 Console.WriteLine("\n── Demonstrating parallel agent execution ──────────────────");
 
 var parallelQuery = "Briefly introduce yourself and what you can help with.";
@@ -183,8 +181,7 @@ for (var i = 0; i < parallelResults.Length; i++)
     Console.WriteLine($"\n[{agentNames[i]}]: {parallelResults[i]}");
 }
 
-// ── Step 10: Graceful shutdown ────────────────────────────────────────────────
-// TemporalWorker.ExecuteAsync intentionally throws TaskCanceledException on shutdown.
+// ── Step 10: Graceful shutdown ───────────────────────────────────────────────
 try { await host.StopAsync(); } catch (OperationCanceledException) { }
 tracerProvider?.ForceFlush();
 Console.WriteLine("\nDone.");
