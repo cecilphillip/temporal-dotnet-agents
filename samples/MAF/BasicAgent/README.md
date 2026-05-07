@@ -9,12 +9,13 @@ This sample demonstrates:
 - Resolving the agent's `IChatClient` via `agent.ChatClient = sp => ...`
 - Adding a tool with `agent.AddTool(weatherTool)`
 - Opening a session with `CreateSessionAsync()` and sending turns with `RunAsync()`
-- Multi-turn context: follow-up questions reference earlier answers without re-sending history
+- Multi-turn context: the caller sends only the new message — the library retrieves full conversation history from workflow state and includes it in each LLM call automatically
 
 ## Highlights
 
 - **WorkflowUpdate as request/response.** Each `RunAsync()` call is a Temporal `[WorkflowUpdate]` — the caller blocks until the agent responds, with no polling loop required.
 - **History lives in the workflow.** Conversation context is stored in `AgentWorkflow` state, not in the client. Any process with the session ID can send a follow-up.
+- **Sessions are lazy.** `CreateSessionAsync()` creates a local session token — no Temporal workflow exists yet. The `AgentWorkflow` starts on the first `RunAsync()` call. Querying the workflow handle before sending any message will return "workflow not found".
 - **Tool calls are durable per-tool activities.** `get_weather` executes inside its own `InvokeAgentTool` activity. If the worker restarts between the tool call and the model response, the tool result is replayed from history.
 - **Single-process simplicity.** Worker, agent, and caller all live in the same `IHost` — the minimum viable setup before splitting into separate processes.
 
@@ -51,6 +52,9 @@ Agent: The capital of France is Paris.
 
 User : What is its population?
 Agent: Paris has a population of approximately 2.1 million in the city proper...
+
+User : What is the weather like there right now?
+Agent: The current weather in Paris is sunny. (result is random — get_weather returns "It's sunny" or "It's raining")
 
 Done.
 ```
