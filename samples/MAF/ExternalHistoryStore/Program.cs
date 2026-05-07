@@ -173,14 +173,17 @@ Console.WriteLine(
 Console.WriteLine();
 
 // Inspect the most recent RunDurableAgentStep activity payload from the
-// AGENT-SESSION workflow's history (NOT the parent's — RunDurableAgentStep is
-// scheduled on the inner agent-session workflow). Confirms turn-1's question is
-// NOT carried in the late-turn ActivityScheduled event — Layer 1 keeps PII out
-// of Temporal events.
+// orchestrating workflow's history. In this sample's pattern (an orchestrating
+// workflow that calls GetAgent("SupportAgent")), the agent's RunDurableAgentStep
+// activities are scheduled on the parent SupportSessionWorkflow itself —
+// TemporalAIAgent dispatches activities directly, no child workflow is created.
+// The agent-session ID (ta-supportagent-{key}) is purely a logical key for the
+// IAgentHistoryStore; it is NOT a real Temporal workflow ID. Confirms turn-1's
+// question is NOT carried in the late-turn ActivityScheduled event — Layer 1
+// keeps PII out of Temporal events.
 Console.WriteLine($"=== Temporal Activity Payload Inspection ===");
 string? lastStepPayload = null;
-var agentSessionHandle = temporalClient.GetWorkflowHandle(agentSessionWorkflowId);
-await foreach (var ev in agentSessionHandle.FetchHistoryEventsAsync())
+await foreach (var ev in handle.FetchHistoryEventsAsync())
 {
     if (ev.ActivityTaskScheduledEventAttributes is { } attrs &&
         attrs.ActivityType.Name == "Temporalio.Extensions.Agents.RunDurableAgentStep" &&
