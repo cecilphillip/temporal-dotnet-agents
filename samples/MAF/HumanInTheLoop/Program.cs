@@ -5,6 +5,7 @@
 
 using System.ClientModel;
 using System.ComponentModel;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,14 +27,14 @@ using ChatRole = Microsoft.Extensions.AI.ChatRole;
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
-var apiKey     = builder.Configuration.GetValue<string>("OPENAI_API_KEY")
+var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY")
     ?? throw new InvalidOperationException(
         "OPENAI_API_KEY is not configured. Set it with: " +
         "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/HumanInTheLoop");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL")
-    ?? throw new InvalidOperationException("OPENAI_API_BASE_URL is required in appsettings.json.");
+    ?? throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
-const string model    = "gpt-4o-mini";
+const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
 var openAiClient = new OpenAIClient(
@@ -47,16 +48,17 @@ var openAiClient = new OpenAIClient(
 var sendEmailTool = AIFunctionFactory.Create(
     async (
         [Description("Recipient email address")] string to,
-        [Description("Email subject")]           string subject,
-        [Description("Full email body")]         string body) =>
+        [Description("Email subject")] string subject,
+        [Description("Full email body")] string body) =>
     {
         var ctx = TemporalAgentContext.Current;
 
         // This call sends a [WorkflowUpdate] and blocks until SubmitApprovalAsync
-        // is called from the approval console below.
+        // is called from the approval console below, or until agent.ApprovalTimeout
+        // (effective: 23 h) elapses — at which point a rejected decision is returned.
         var decision = await ctx.RequestApprovalAsync(new DurableApprovalRequest
         {
-            RequestId   = Guid.NewGuid().ToString("N"),
+            RequestId = Guid.NewGuid().ToString("N"),
             Description = $"Send email to {to}\nSubject: {subject}\n\nBody:\n{body}"
         });
 
@@ -88,6 +90,7 @@ builder.Services
         // treat it as stuck — as long as DefaultHeartbeatTimeout < DefaultActivityTimeout.
         opts.DefaultActivityTimeout  = TimeSpan.FromHours(24);
         opts.DefaultHeartbeatTimeout = TimeSpan.FromMinutes(5);
+        opts.DefaultApprovalTimeout  = TimeSpan.FromHours(23); // must be < DefaultActivityTimeout so the activity outlives the approval window
 
         opts.AddDurableAgent("EmailAssistant", agent =>
         {
@@ -98,16 +101,19 @@ builder.Services
                 If a send is rejected, explain what happened and offer to revise.
                 """;
             agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
-            agent.AddTool(sendEmailTool);
+            agent.AddTool(sendEmailTool, opts => opts.NoRetry());
 
             // Per-agent override of opts.DefaultApprovalTimeout. Demonstrates the v0.3
-            // builder slot — not required (would inherit otherwise).
-            agent.ApprovalTimeout = TimeSpan.FromHours(24);
+            // builder slot — not required (would inherit opts.DefaultApprovalTimeout otherwise).
+            agent.ApprovalTimeout = TimeSpan.FromHours(23);
         });
     });
 
-using var host = builder.Build();
+var host = builder.Build();
 await host.StartAsync();
+
+var appLifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+var ct = appLifetime.ApplicationStopping;
 
 Console.WriteLine();
 Console.WriteLine("╔═══════════════════════════════════════════════════╗");
@@ -121,13 +127,15 @@ Console.WriteLine("╚═══════════════════�
 Console.WriteLine();
 
 // ── Resolve services ─────────────────────────────────────────────────────────
-var proxy  = host.Services.GetTemporalAgentProxy("EmailAssistant");
+var proxy = host.Services.GetTemporalAgentProxy("EmailAssistant");
 var client = host.Services.GetRequiredService<ITemporalAgentClient>();
 
 // ── Conversation session ─────────────────────────────────────────────────────
 // A single session means the agent remembers context across turns.
-var session   = await proxy.CreateSessionAsync();
-var sessionId = session.GetService<TemporalAgentSessionId>()!;
+var session = await proxy.CreateSessionAsync();
+if (session is not TemporalAgentSession temporalSession)
+    throw new InvalidOperationException("Failed to retrieve TemporalAgentSessionId from the created session.");
+var sessionId = temporalSession.SessionId;
 
 // ── Main conversation loop ───────────────────────────────────────────────────
 while (true)
@@ -138,11 +146,11 @@ while (true)
     if (string.IsNullOrWhiteSpace(input)) continue;
     if (input.Equals("quit", StringComparison.OrdinalIgnoreCase)) break;
 
-    var userMessages = new List<ChatMessage> { new(ChatRole.User, input) };
+    IList<ChatMessage> userMessages = [new(ChatRole.User, input)];
 
     // Start the agent call without awaiting — it may block inside the tool
     // while waiting for human approval, so we need to stay responsive.
-    var agentTask = proxy.RunAsync(userMessages, session);
+    var agentTask = proxy.RunAsync(userMessages, session, null, ct);
 
     Console.WriteLine("Assistant: (thinking...)");
 
@@ -153,12 +161,13 @@ while (true)
     {
         await Task.Delay(TimeSpan.FromSeconds(1));
 
+        // Guard before the network call: the task may have completed during the delay.
         if (agentTask.IsCompleted) break;
 
         DurableApprovalRequest? pending = null;
         try
         {
-            pending = await client.GetPendingApprovalAsync(sessionId);
+            pending = await client.GetPendingApprovalAsync(sessionId, ct);
         }
         catch (Temporalio.Exceptions.RpcException ex) when (ex.Code == Temporalio.Exceptions.RpcException.StatusCode.NotFound)
         {
@@ -179,7 +188,10 @@ while (true)
         if (pending.Description is { } desc)
         {
             foreach (var line in desc.Split('\n'))
-                Console.WriteLine($"  ║  {line,-44}║");
+            {
+                var display = line.Length > 44 ? line[..41] + "..." : line;
+                Console.WriteLine($"  ║  {display,-44}║");
+            }
         }
         Console.WriteLine("  ╚══════════════════════════════════════════════╝");
 
@@ -204,8 +216,8 @@ while (true)
         await client.SubmitApprovalAsync(sessionId, new DurableApprovalDecision
         {
             RequestId = pending.RequestId,
-            Approved  = choice == "approve",
-            Reason    = comment
+            Approved = choice == "approve",
+            Reason = comment
         });
 
         Console.WriteLine(choice == "approve"
@@ -214,9 +226,17 @@ while (true)
         Console.WriteLine();
     }
 
-    var response = await agentTask;
+    AgentResponse response;
+    try
+    {
+        response = await agentTask;
+    }
+    catch (OperationCanceledException)
+    {
+        break;
+    }
     Console.WriteLine($"Assistant: {response.Text}");
     Console.WriteLine();
 }
 
-await host.StopAsync();
+try { await host.StopAsync(); } catch (OperationCanceledException) { }
