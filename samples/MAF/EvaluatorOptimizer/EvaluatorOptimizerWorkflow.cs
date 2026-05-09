@@ -20,7 +20,7 @@ namespace EvaluatorOptimizer;
 [Workflow("EvaluatorOptimizer.EvaluatorOptimizerWorkflow")]
 public class EvaluatorOptimizerWorkflow
 {
-    private const string ApprovedSignal = "APPROVED";
+    private const string ApprovalToken = "APPROVED";
 
     /// <summary>
     /// Runs the evaluator-optimizer loop for a given <paramref name="task"/>.
@@ -37,22 +37,27 @@ public class EvaluatorOptimizerWorkflow
         var generator = GetAgent("Generator");
         var evaluator = GetAgent("Evaluator");
 
-        var genSession = await generator.CreateSessionAsync();
-        var evalSession = await evaluator.CreateSessionAsync();
+        var genSession = await generator.CreateSessionAsync().ConfigureAwait(true);
+        var evalSession = await evaluator.CreateSessionAsync().ConfigureAwait(true);
 
-        string draft = string.Empty;
-        string feedback = string.Empty;
+        var draft = string.Empty;
+        var feedback = string.Empty;
 
         for (int i = 0; i < maxIterations; i++)
         {
             // ── Generation turn ────────────────────────────────────────────
+            // Note: on revisions, the session history already contains the previous
+            // draft as the assistant's last response. The explicit "Previous draft:"
+            // re-injection below is intentional for pedagogical clarity — it makes
+            // the full context visible in the prompt without requiring the reader to
+            // infer what the session carries.
             var genPrompt = i == 0
                 ? task
                 : $"Revise your previous draft based on this feedback:\n\n{feedback}\n\nPrevious draft:\n{draft}";
 
             var genResponse = await generator.RunAsync(
                 [new ChatMessage(ChatRole.User, genPrompt)],
-                genSession);
+                genSession).ConfigureAwait(true);
 
             draft = genResponse.Text ?? string.Empty;
 
@@ -60,13 +65,13 @@ public class EvaluatorOptimizerWorkflow
             var evalResponse = await evaluator.RunAsync(
                 [new ChatMessage(ChatRole.User,
                     $"Evaluate the following draft. " +
-                    $"Reply with '{ApprovedSignal}' if it is ready, " +
+                    $"Reply with '{ApprovalToken}' if it is ready, " +
                     $"or give concise, specific feedback for improvement.\n\n{draft}")],
-                evalSession);
+                evalSession).ConfigureAwait(true);
 
             feedback = evalResponse.Text ?? string.Empty;
 
-            if (feedback.Contains(ApprovedSignal, StringComparison.OrdinalIgnoreCase))
+            if (feedback.Contains(ApprovalToken, StringComparison.OrdinalIgnoreCase))
             {
                 break;
             }
