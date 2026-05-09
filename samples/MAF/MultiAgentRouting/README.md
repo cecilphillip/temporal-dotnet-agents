@@ -49,7 +49,9 @@ Sdk.CreateTracerProviderBuilder()
 ## Highlights
 
 - **Routing decision as activity.** `ClassifyRequest` runs in a `RoutingActivities` activity, not inline in the workflow. The result is cached in event history — a crash after classification won't re-invoke the classifier, and the decision is visible in the Temporal Web UI.
-- **`ExecuteAgentsInParallelAsync` for fan-out.** The workflow-safe equivalent of `Task.WhenAll` — dispatches multiple agent activities concurrently and returns results in input order.
+- **Consistent fallback agent.** `ClassifyRequest` returns `TechSupportAgent` for both empty input and for input where no keywords match any specialist. This makes `TechSupportAgent` the single general-purpose fallback in all unresolved cases.
+- **`ExecuteAgentsInParallelAsync` for fan-out.** The workflow-safe equivalent of `Task.WhenAll` — dispatches multiple agent activities concurrently and returns results in input order. Each agent runs in its own session; results come back as `IReadOnlyList<AgentResponse>` in the same order the agents were passed in.
+- **`.ConfigureAwait(true)` on all workflow awaits.** All `await` calls inside `[Workflow]`-attributed classes use `.ConfigureAwait(true)`. This is required to keep the Temporal workflow task scheduler active — omitting it can cause the workflow context to be lost during replay.
 - **`TracingInterceptor` propagates context.** Registered on `ITemporalClient` via `opts.Interceptors`, it propagates OTel trace context across Temporal's RPC boundary so spans from client to workflow to activity form a single trace.
 - **Three registered specialists.** `WeatherAgent`, `BillingAgent`, and `TechSupportAgent` are all added via `AddTemporalAgents()` on the same worker, demonstrating multi-agent registration.
 
@@ -62,6 +64,8 @@ Sdk.CreateTracerProviderBuilder()
 - An OpenAI-compatible API key
 
 ### Configure API credentials
+
+`OPENAI_API_KEY` is required and validated first on startup. `OPENAI_API_BASE_URL` is also required.
 
 ```bash
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/MultiAgentRouting

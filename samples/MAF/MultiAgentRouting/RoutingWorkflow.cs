@@ -21,6 +21,9 @@ namespace MultiAgentRouting;
 [Workflow("MultiAgentRouting.RoutingWorkflow")]
 public class RoutingWorkflow
 {
+    private static readonly ActivityOptions ClassifyActivityOptions =
+        new() { StartToCloseTimeout = TimeSpan.FromSeconds(30) };
+
     /// <summary>
     /// Receives a user question, classifies intent via an activity, and routes to the
     /// appropriate specialist agent.
@@ -36,14 +39,14 @@ public class RoutingWorkflow
         //   • Retries apply if the classification activity fails transiently.
         var agentName = await Workflow.ExecuteActivityAsync(
             (RoutingActivities a) => a.ClassifyRequest(userQuestion),
-            new ActivityOptions { StartToCloseTimeout = TimeSpan.FromSeconds(30) });
+            ClassifyActivityOptions).ConfigureAwait(true);
 
         // ── Step 2: Dispatch to the chosen specialist ────────────────────────
         var specialist = GetAgent(agentName);
-        var session = await specialist.CreateSessionAsync();
+        var session = await specialist.CreateSessionAsync().ConfigureAwait(true);
         var response = await specialist.RunAsync(
             [new ChatMessage(ChatRole.User, userQuestion)],
-            session);
+            session).ConfigureAwait(true);
 
         return response.Text ?? string.Empty;
     }
@@ -68,21 +71,18 @@ public class ParallelAgentWorkflow
         var billing     = GetAgent("BillingAgent");
         var techSupport = GetAgent("TechSupportAgent");
 
-        var wSession = await weather.CreateSessionAsync();
-        var bSession = await billing.CreateSessionAsync();
-        var tSession = await techSupport.CreateSessionAsync();
+        var wSession = await weather.CreateSessionAsync().ConfigureAwait(true);
+        var bSession = await billing.CreateSessionAsync().ConfigureAwait(true);
+        var tSession = await techSupport.CreateSessionAsync().ConfigureAwait(true);
 
-        var messages = new List<ChatMessage>
-        {
-            new(ChatRole.User, userQuery)
-        };
+        IList<ChatMessage> messages = [new ChatMessage(ChatRole.User, userQuery)];
 
         var results = await ExecuteAgentsInParallelAsync(
         [
-            (weather,     (IList<ChatMessage>)messages, wSession),
+            (weather,     messages, wSession),
             (billing,     messages, bSession),
             (techSupport, messages, tSession)
-        ]);
+        ]).ConfigureAwait(true);
 
         return results.Select(r => r.Text ?? string.Empty).ToArray();
     }

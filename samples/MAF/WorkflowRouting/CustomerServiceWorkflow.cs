@@ -31,13 +31,13 @@ public class CustomerServiceWorkflow
     {
         // ── Step 1: Classify the user's intent ──────────────────────────────
         var classifier = GetAgent("Classifier");
-        var classifierSession = await classifier.CreateSessionAsync();
+        var classifierSession = await classifier.CreateSessionAsync().ConfigureAwait(true);
 
         var classifierResponse = await classifier.RunAsync(
             [new ChatMessage(ChatRole.User, userQuestion)],
-            classifierSession);
+            classifierSession).ConfigureAwait(true);
 
-        var classification = classifierResponse.Text.Trim().ToUpperInvariant();
+        var classification = (classifierResponse.Text ?? string.Empty).Trim().ToUpperInvariant();
 
         // ── Step 2: Route to the correct specialist ─────────────────────────
         var specialistName = classification switch
@@ -54,11 +54,11 @@ public class CustomerServiceWorkflow
 
         // ── Step 3: Call the specialist agent ────────────────────────────────
         var specialist = GetAgent(specialistName);
-        var specialistSession = await specialist.CreateSessionAsync();
+        var specialistSession = await specialist.CreateSessionAsync().ConfigureAwait(true);
 
         var specialistResponse = await specialist.RunAsync(
             [new ChatMessage(ChatRole.User, userQuestion)],
-            specialistSession);
+            specialistSession).ConfigureAwait(true);
 
         return specialistResponse.Text ?? string.Empty;
     }

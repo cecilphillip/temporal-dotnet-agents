@@ -24,14 +24,15 @@ public class RoutingActivities
     /// <summary>
     /// Inspects <paramref name="userQuestion"/> and returns the name of the
     /// best-matching registered specialist agent.
-    /// Falls back to <c>WeatherAgent</c> when no keywords match.
+    /// Falls back to <c>TechSupportAgent</c> when the input is empty or no keywords match.
     /// </summary>
     [Activity]
     public string ClassifyRequest(string userQuestion)
     {
+        // Empty or whitespace — use the same general-purpose fallback
         if (string.IsNullOrWhiteSpace(userQuestion))
         {
-            return "WeatherAgent";
+            return "TechSupportAgent";
         }
 
         var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);

@@ -11,7 +11,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MultiAgentRouting;
 using OpenAI;
-using OpenAI.Chat;
 using OpenTelemetry;
 using OpenTelemetry.Trace;
 using Temporalio.Client;
@@ -41,13 +40,13 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning);
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
-if (string.IsNullOrEmpty(apiBaseUrl))
-    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
-
 if (string.IsNullOrEmpty(apiKey))
     throw new InvalidOperationException(
         "OPENAI_API_KEY is not configured. Set it with: " +
         "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/MultiAgentRouting");
+
+if (string.IsNullOrEmpty(apiBaseUrl))
+    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
@@ -65,7 +64,7 @@ builder.Services.AddTemporalClient(opts =>
 {
     opts.TargetHost = temporalAddress;
     opts.Namespace = "default";
-    opts.Interceptors = new[] { new TracingInterceptor() };
+    opts.Interceptors = [new TracingInterceptor()];
 });
 
 // ── Step 6: Register the hosted worker with all three specialist agents ──────
@@ -79,7 +78,7 @@ builder.Services
                 "You are a weather specialist. Answer questions about weather conditions, forecasts, " +
                 "climate patterns, and meteorological phenomena. Keep responses concise and informative.";
             agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
-            agent.TimeToLive = TimeSpan.FromHours(1);
+            agent.TimeToLive = TimeSpan.FromHours(1); // shortened for demo; production default is 14 days
         });
 
         opts.AddDurableAgent("BillingAgent", agent =>
@@ -88,7 +87,7 @@ builder.Services
                 "You are a billing and payments specialist. Answer questions about invoices, charges, " +
                 "payment methods, refunds, and account billing. Keep responses concise and informative.";
             agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
-            agent.TimeToLive = TimeSpan.FromHours(1);
+            agent.TimeToLive = TimeSpan.FromHours(1); // shortened for demo; production default is 14 days
         });
 
         opts.AddDurableAgent("TechSupportAgent", agent =>
@@ -98,7 +97,7 @@ builder.Services
                 "hardware problems, troubleshooting steps, and technical configurations. " +
                 "Keep responses concise and informative.";
             agent.ChatClient = sp => sp.GetRequiredService<IChatClient>();
-            agent.TimeToLive = TimeSpan.FromHours(1);
+            agent.TimeToLive = TimeSpan.FromHours(1); // shortened for demo; production default is 14 days
         });
     })
     .AddWorkflow<RoutingWorkflow>()

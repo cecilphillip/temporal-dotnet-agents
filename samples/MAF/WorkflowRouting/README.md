@@ -41,11 +41,13 @@ Every agent call runs as a durable Temporal activity. If the worker crashes afte
 
 1. **Workflow as router.** All routing logic lives in `CustomerServiceWorkflow.RunAsync` as a plain `switch` expression. No framework abstractions to learn or configure.
 
-2. **Graceful default.** Unrecognized classifications fall through to `GeneralAgent` via the `_` discard pattern, so unexpected LLM output doesn't crash the workflow.
+2. **Graceful default.** Unrecognized classifications fall through to `GeneralAgent` via the `_` discard pattern, so unexpected LLM output doesn't crash the workflow. The specialist response uses a null-safe access (`?? string.Empty`) to guard against edge cases where the LLM returns no text.
 
-3. **Live agent list, locally-mapped descriptions.** The dynamic routing workflow asks an activity for the live registered agent names via `TemporalAgentsOptions.GetRegisteredAgentNames()`, then combines those names with a description map declared inside the activity. The result drives a context-aware prompt for the Classifier. Routing metadata is a routing-activity concern, not state on the agent registry.
+3. **`.ConfigureAwait(true)` on all workflow awaits.** All `await` calls inside `[Workflow]`-attributed classes use `.ConfigureAwait(true)`. This is required to keep the Temporal workflow task scheduler active — omitting it can cause the workflow context to be lost during replay.
 
-4. **Independent sessions per agent.** Each agent call gets its own session (`CreateSessionAsync`), keeping conversation histories isolated between the classifier and specialist.
+4. **Live agent list, locally-mapped descriptions.** The dynamic routing workflow asks an activity for the live registered agent names via `TemporalAgentsOptions.GetRegisteredAgentNames()`, then combines those names with a description map declared inside the activity. The result drives a context-aware prompt for the Classifier. Routing metadata is a routing-activity concern, not state on the agent registry.
+
+5. **Independent sessions per agent.** Each agent call gets its own session (`CreateSessionAsync`), keeping conversation histories isolated between the classifier and specialist.
 
 ## Getting Started
 
@@ -63,7 +65,7 @@ temporal server start-dev
 
 ### 2. Configure API credentials
 
-Set your API key with:
+`OPENAI_API_KEY` is required and validated first on startup. `OPENAI_API_BASE_URL` is also required (used to point at the OpenAI-compatible endpoint).
 
 ```bash
 dotnet user-secrets set "OPENAI_API_KEY" "sk-..." --project samples/MAF/WorkflowRouting

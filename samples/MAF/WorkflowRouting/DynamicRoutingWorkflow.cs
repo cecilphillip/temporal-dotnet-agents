@@ -30,6 +30,9 @@ namespace WorkflowRouting;
 [Workflow("WorkflowRouting.DynamicRoutingWorkflow")]
 public class DynamicRoutingWorkflow
 {
+    private static readonly ActivityOptions RegistryActivityOptions =
+        new() { StartToCloseTimeout = TimeSpan.FromSeconds(10) };
+
     private const string FallbackAgent = "GeneralAgent";
 
     [WorkflowRun]
@@ -40,12 +43,12 @@ public class DynamicRoutingWorkflow
         // This is the only place the workflow learns what specialists exist.
         var availableAgents = await Workflow.ExecuteActivityAsync(
             (RoutingActivities a) => a.GetAvailableAgents(),
-            new ActivityOptions { StartToCloseTimeout = TimeSpan.FromSeconds(10) });
+            RegistryActivityOptions).ConfigureAwait(true);
 
         if (availableAgents.Length == 0)
         {
             Workflow.Logger.LogWarning("No agent descriptors registered — falling back to {Agent}", FallbackAgent);
-            return await CallAgent(FallbackAgent, userQuestion);
+            return await CallAgent(FallbackAgent, userQuestion).ConfigureAwait(true);
         }
 
         // ── Step 2: Build a routing prompt from the discovered descriptors ─────
@@ -59,9 +62,9 @@ public class DynamicRoutingWorkflow
             $"Respond with the agent name only. No explanation, no punctuation.";
 
         var classifier = GetAgent("Classifier");
-        var classifierSession = await classifier.CreateSessionAsync();
+        var classifierSession = await classifier.CreateSessionAsync().ConfigureAwait(true);
         var classifierResponse = await classifier.RunAsync(
-            [new ChatMessage(ChatRole.User, routingPrompt)], classifierSession);
+            [new ChatMessage(ChatRole.User, routingPrompt)], classifierSession).ConfigureAwait(true);
 
         var chosenAgent = (classifierResponse.Text ?? string.Empty).Trim();
 
@@ -70,22 +73,22 @@ public class DynamicRoutingWorkflow
         // falling back to GeneralAgent if not.
         var agentName = await Workflow.ExecuteActivityAsync(
             (RoutingActivities a) => a.ValidateAgent(chosenAgent, FallbackAgent),
-            new ActivityOptions { StartToCloseTimeout = TimeSpan.FromSeconds(10) });
+            RegistryActivityOptions).ConfigureAwait(true);
 
         Workflow.Logger.LogInformation(
             "Dynamic routing: LLM chose '{ChosenAgent}', validated as '{Agent}'",
             chosenAgent, agentName);
 
         // ── Step 4: Call the resolved specialist ────────────────────────────────
-        return await CallAgent(agentName, userQuestion);
+        return await CallAgent(agentName, userQuestion).ConfigureAwait(true);
     }
 
-    private static async Task<string> CallAgent(string agentName, string userQuestion)
+    private async Task<string> CallAgent(string agentName, string userQuestion)
     {
         var specialist = GetAgent(agentName);
-        var specialistSession = await specialist.CreateSessionAsync();
+        var specialistSession = await specialist.CreateSessionAsync().ConfigureAwait(true);
         var response = await specialist.RunAsync(
-            [new ChatMessage(ChatRole.User, userQuestion)], specialistSession);
+            [new ChatMessage(ChatRole.User, userQuestion)], specialistSession).ConfigureAwait(true);
         return response.Text ?? string.Empty;
     }
 }
