@@ -14,6 +14,7 @@
 // Run:  dotnet run --project samples/MAF/ConfigurableAgent/ConfigurableAgent.csproj
 
 using System.ClientModel;
+using System.Collections.Frozen;
 using System.ComponentModel;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
@@ -21,15 +22,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenAI;
-using OpenAI.Chat;
 using Temporalio.Client;
 using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Hosting;
 using Temporalio.Workflows;
 using static Temporalio.Extensions.Agents.TemporalWorkflowExtensions;
-
-// Alias to resolve ChatMessage ambiguity between Microsoft.Extensions.AI and OpenAI.Chat
-using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
 // ── Step 1: Build the application host ───────────────────────────────────────
 var builder = Host.CreateApplicationBuilder(args);
@@ -41,13 +38,13 @@ builder.Logging.AddFilter("Temporalio.Extensions.Agents", LogLevel.Information);
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
-if (string.IsNullOrEmpty(apiBaseUrl))
-    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
-
 if (string.IsNullOrEmpty(apiKey))
     throw new InvalidOperationException(
         "OPENAI_API_KEY is not configured. Set it with: " +
         "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/ConfigurableAgent");
+
+if (string.IsNullOrEmpty(apiBaseUrl))
+    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
@@ -66,6 +63,8 @@ var escalationOptions = builder.Configuration
 
 var triageInstructions = triageOptions.Instructions
     .Replace("{CompanyName}", triageOptions.CompanyName);
+// EscalationAgentOptions has no CompanyName — the company name is intentionally
+// shared and lives on TriageAgentOptions as the single source of truth.
 var escalationInstructions = escalationOptions.Instructions
     .Replace("{CompanyName}", triageOptions.CompanyName);
 
@@ -198,9 +197,9 @@ public class SupportWorkflow
             "[TriageAgent] Handling: \"{Message}\"", customerMessage);
 
         var triage = GetAgent("TriageAgent");
-        var triageSession = await triage.CreateSessionAsync();
+        var triageSession = await triage.CreateSessionAsync().ConfigureAwait(true);
         var triageResponse = await triage.RunAsync(
-            [new ChatMessage(ChatRole.User, customerMessage)], triageSession);
+            [new ChatMessage(ChatRole.User, customerMessage)], triageSession).ConfigureAwait(true);
 
         var responseText = triageResponse.Text ?? string.Empty;
 
@@ -211,6 +210,9 @@ public class SupportWorkflow
         if (markerIndex < 0)
         {
             // Resolved by triage — no escalation needed.
+            // Note: if the LLM was expected to escalate but didn't include the [ESCALATE: ...]
+            // marker, this branch silently returns the triage response. For production use,
+            // prefer structured output (ChatResponseFormat.ForJson) over free-text markers.
             Workflow.Logger.LogInformation(
                 "[TriageAgent] Resolved directly — no escalation.");
             return responseText.Trim();
@@ -221,7 +223,7 @@ public class SupportWorkflow
         var summaryEnd = responseText.IndexOf(']', summaryStart);
         var caseSummary = summaryEnd > summaryStart
             ? responseText[summaryStart..summaryEnd].Trim()
-            : "escalated case";
+            : "(triage summary unavailable)";
 
         Workflow.Logger.LogInformation(
             "[TriageAgent] Escalating → EscalationAgent. Summary: \"{Summary}\"", caseSummary);
@@ -231,13 +233,13 @@ public class SupportWorkflow
             "[EscalationAgent] Taking over with triage context.");
 
         var escalation = GetAgent("EscalationAgent");
-        var escalationSession = await escalation.CreateSessionAsync();
+        var escalationSession = await escalation.CreateSessionAsync().ConfigureAwait(true);
 
         var handoffMessage =
             $"[Triage summary: {caseSummary}]\n\nCustomer's original message: {customerMessage}";
 
         var escalationResponse = await escalation.RunAsync(
-            [new ChatMessage(ChatRole.User, handoffMessage)], escalationSession);
+            [new ChatMessage(ChatRole.User, handoffMessage)], escalationSession).ConfigureAwait(true);
 
         Workflow.Logger.LogInformation("[EscalationAgent] Responded.");
 
@@ -272,13 +274,14 @@ public sealed class EscalationAgentOptions
 /// </summary>
 public sealed class OrderService
 {
-    private static readonly Dictionary<string, string> Orders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["ORD-001"] = "Shipped — estimated delivery in 2 days",
-        ["ORD-002"] = "Delivered on April 28",
-        ["ORD-003"] = "Processing — not yet shipped",
-        ["ORD-004"] = "Delayed — carrier exception reported",
-    };
+    private static readonly FrozenDictionary<string, string> Orders =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ORD-001"] = "Shipped — estimated delivery in 2 days",
+            ["ORD-002"] = "Delivered on April 28",
+            ["ORD-003"] = "Processing — not yet shipped",
+            ["ORD-004"] = "Delayed — carrier exception reported",
+        }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
     [Description("Look up the current status of a customer order by order ID.")]
     public string LookupOrder(string orderId) =>
