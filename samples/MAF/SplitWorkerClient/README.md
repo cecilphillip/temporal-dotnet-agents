@@ -80,7 +80,7 @@ Agent: The capital of France is Paris.
 User : What is its population?
 Agent: Paris has a population of approximately 2.1 million...
 
-User : What's the current weather condition
+User : What's the current weather condition?
 Agent: The current weather is sunny.
 
 User : Summarize what we discussed.

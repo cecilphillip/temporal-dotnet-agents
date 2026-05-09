@@ -28,6 +28,9 @@ builder.Services.AddTemporalAgentProxies(
         // AddAgentProxy registers only the name + optional TTL — no factory needed.
         // The TTL here must match (or be compatible with) what the Worker registers,
         // since it is used when this client starts a brand-new session workflow.
+        // TimeToLive here must match the worker's agent.TimeToLive registration.
+        // The client-side TTL wins when starting a new session workflow; the worker-side
+        // TTL applies on continue-as-new. Keep them in sync to avoid split lifetimes.
         options.AddAgentProxy("Assistant", timeToLive: TimeSpan.FromHours(1));
     },
     taskQueue: "agents",           // must match the Worker's task queue
@@ -60,13 +63,17 @@ Console.WriteLine($"User : What is its population?");
 Console.WriteLine($"Agent: {r2.Text}\n");
 
 var r3 = await proxy.RunAsync("What's the current weather condition?", session);
-Console.WriteLine($"User : What's the current weather condition");
+Console.WriteLine($"User : What's the current weather condition?");
 Console.WriteLine($"Agent: {r3.Text}\n");
 
 // ── Step 5: Reuse the session from a new client instance ─────────────────────
 // Sessions are durable: you can reconnect to an existing session from its workflow ID.
 // session.ToString() returns the Temporal workflow ID (e.g. "ta-assistant-abc123").
 // This simulates a second client process picking up where the first left off.
+// TemporalAgentSession.ToString() returns SessionId.WorkflowId — never null at runtime.
+// The ! suppresses the compiler's string? inference on object.ToString(). The string
+// round-trip is intentional: it simulates a second process that has only the workflow
+// ID (e.g. stored in a database) and needs to reconstruct the session handle from it.
 var sessionId = TemporalAgentSessionId.Parse(session.ToString()!);
 var resumedSession = new TemporalAgentSession(sessionId);
 
