@@ -24,7 +24,7 @@ namespace PerToolActivities;
 /// </para>
 /// </summary>
 [Workflow("PerToolActivities.RefundWorkflow")]
-public class RefundWorkflow
+public sealed class RefundWorkflow
 {
     [WorkflowRun]
     public async Task<string> RunAsync(string customerComplaint)
@@ -36,6 +36,6 @@ public class RefundWorkflow
             [new ChatMessage(ChatRole.User, customerComplaint)],
             session).ConfigureAwait(true);
 
-        return response.Text ?? "(no response)";
+        return response.Text ?? string.Empty;
     }
 }

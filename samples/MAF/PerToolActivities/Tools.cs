@@ -1,10 +1,11 @@
 // Tools.cs — three tool services demonstrating the read-vs-write retry policy split.
 //
 // All three are registered as DI singletons. Each method becomes an AIFunction via
-// AIFunctionFactory.Create, registered both with the agent (for the LLM schema) and
-// in DurableFunctionRegistry (so DurableFunctionActivities.InvokeFunction can resolve
-// them by name when the workflow dispatches a tool call as its own activity).
+// AIFunctionFactory.Create and is registered with the agent via agent.AddTool(). The
+// durable-agent loop dispatches each tool call as a separate InvokeAgentTool activity;
+// per-tool retry policy is bound to the AIFunction reference at registration time.
 
+using System.Collections.Frozen;
 using System.ComponentModel;
 
 namespace PerToolActivities;
@@ -15,19 +16,20 @@ namespace PerToolActivities;
 /// retry policy from <c>TemporalAgentsOptions.RetryPolicy</c>.
 /// <para>
 /// <see cref="FailOnceEnabled"/> is the demo toggle for scenario 2: when set, the
-/// first call throws so we can observe Temporal retrying just <c>InvokeFunction:lookup_order</c>
+/// first call throws so we can observe Temporal retrying just <c>InvokeAgentTool:RefundAgent:lookup_order</c>
 /// without re-running the write-tool activities.
 /// </para>
 /// </summary>
 public sealed class OrderService
 {
-    private readonly Dictionary<string, string> _orders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["ORD-001"] = "Shipped — estimated delivery in 2 days",
-        ["ORD-002"] = "Delivered on April 28",
-        ["ORD-003"] = "Processing — not yet shipped",
-        ["ORD-004"] = "Delayed — carrier exception reported",
-    };
+    private static readonly FrozenDictionary<string, string> _orders =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ORD-001"] = "Shipped — estimated delivery in 2 days",
+            ["ORD-002"] = "Delivered on April 28",
+            ["ORD-003"] = "Processing — not yet shipped",
+            ["ORD-004"] = "Delayed — carrier exception reported",
+        }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
     private int _lookupCalls;
     private int _failArmed;
@@ -46,7 +48,7 @@ public sealed class OrderService
     /// </remarks>
     public bool FailOnceEnabled
     {
-        get => Interlocked.CompareExchange(ref _failArmed, 0, 0) == 1;
+        get => Volatile.Read(ref _failArmed) == 1;
         set => Interlocked.Exchange(ref _failArmed, value ? 1 : 0);
     }
 
@@ -59,7 +61,7 @@ public sealed class OrderService
         Interlocked.Increment(ref _lookupCalls);
 
         // Atomically consume the one-shot latch. If armed, swap to disarmed and throw;
-        // Temporal retries the InvokeFunction activity automatically (default unbounded
+        // Temporal retries the InvokeAgentTool activity automatically (default unbounded
         // retry) and the second attempt sees the latch already consumed.
         if (Interlocked.CompareExchange(ref _failArmed, 0, 1) == 1)
         {
