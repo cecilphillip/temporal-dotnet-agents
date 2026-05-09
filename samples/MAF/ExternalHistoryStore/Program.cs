@@ -18,7 +18,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenAI;
-using OpenAI.Chat;
 using Temporalio.Client;
 using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Agents.HistoryStore;
@@ -34,13 +33,13 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning);
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
-if (string.IsNullOrEmpty(apiBaseUrl))
-    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
-
 if (string.IsNullOrEmpty(apiKey))
     throw new InvalidOperationException(
         "OPENAI_API_KEY is not configured. Set it with: " +
         "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/ExternalHistoryStore");
+
+if (string.IsNullOrEmpty(apiBaseUrl))
+    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
@@ -51,9 +50,10 @@ var openAiClient = new OpenAIClient(
 
 // ── Step 3: Register supporting singletons ───────────────────────────────────
 // The Layer 1 store and Layer 2 provider are both DI singletons:
-//   • InMemoryHistoryStore — registered as both the concrete type (so the demo
-//     driver can inspect the LoadCalls / ReductionEvents counters after the run)
-//     and as IAgentHistoryStore (so opts.HistoryStore can resolve it).
+//   • InMemoryHistoryStore — registered as the concrete type so the demo driver
+//     can inspect LoadCalls / ReductionEvents counters after the run.
+//     IAgentHistoryStore resolution is handled by the factory on opts.HistoryStore
+//     (which resolves the concrete type), not by a separate interface registration.
 //   • TenantContextProvider — singleton so the demo driver can read InvokingCalls.
 //   • TenantDirectory — loaded from configuration once.
 builder.Services.AddSingleton(sp => TenantDirectory.LoadFromConfig(builder.Configuration));
@@ -267,7 +267,12 @@ namespace ExternalHistoryStore
         public async Task<string> AskAsync(AskInput input)
         {
             var agent = GetAgent("SupportAgent");
-            _session ??= (TemporalAgentSession)await agent.CreateSessionAsync();
+            if (_session is null)
+            {
+                if (await agent.CreateSessionAsync().ConfigureAwait(true) is not TemporalAgentSession s)
+                    throw new InvalidOperationException("CreateSessionAsync returned an unexpected session type.");
+                _session = s;
+            }
 
             // Stamp the active tenant ID onto the user message — the
             // TenantContextProvider running in the activity reads this off
@@ -280,7 +285,7 @@ namespace ExternalHistoryStore
                 },
             };
 
-            var response = await agent.RunAsync([userMessage], _session);
+            var response = await agent.RunAsync([userMessage], _session).ConfigureAwait(true);
             return response.Text ?? string.Empty;
         }
 

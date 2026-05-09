@@ -52,16 +52,16 @@ Agent: I don't have visibility into the earlier part of our conversation ...
 Session 'support-acme-...': 12 entries (6 request + 6 response)
 
 === Reduction Statistics ===
-[Reduction] LoadAsync called 6 times. Window applied 4 times ...
+[Reduction] LoadAsync called 6 times. Window applied 3 times ...
 
 === Temporal Activity Payload Inspection ===
-  Last ExecuteAgent input contains 'ConversationHistory' key: False
-  Last ExecuteAgent input contains turn-1 marker (ORD-001):    False
+  Last RunDurableAgentStep input contains 'ConversationHistory' key: False
+  Last RunDurableAgentStep input contains turn-1 marker (ORD-001):    False
   ✓ Payload omits ConversationHistory — PII / O(n²) growth mitigated.
 
 === Layer Cooperation ===
 [Layer 1]  IAgentHistoryStore.LoadAsync       called 6 times
-[Layer 1]  IAgentHistoryStore reductions       applied 4 times
+[Layer 1]  IAgentHistoryStore reductions       applied 3 times
 [Layer 1]  IAgentHistoryStore.SnapshotFull     12 entries retained for audit
 [Layer 2]  TenantContextProvider.InvokingAsync called 6 times
 ```

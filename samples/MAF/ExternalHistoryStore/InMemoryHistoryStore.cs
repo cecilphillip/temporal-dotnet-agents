@@ -110,10 +110,16 @@ public sealed class InMemoryHistoryStore : IAgentHistoryStore
     /// by the recent-N reduction window. Useful for compliance reporting and for the
     /// demo driver to print "store has 12 entries; agent saw 4".
     /// </summary>
-    public IReadOnlyList<DurableSessionEntry> SnapshotFull(string sessionId) =>
-        _full.TryGetValue(sessionId, out var all)
-            ? all.ToArray()
-            : [];
+    public IReadOnlyList<DurableSessionEntry> SnapshotFull(string sessionId)
+    {
+        if (!_full.TryGetValue(sessionId, out var all))
+            return [];
+
+        lock (all)
+        {
+            return all.ToArray();
+        }
+    }
 
     /// <summary>Count of <see cref="LoadAsync"/> invocations across all sessions.</summary>
     public long LoadCalls => Interlocked.Read(ref _loadCalls);
