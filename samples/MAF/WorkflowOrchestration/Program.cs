@@ -10,7 +10,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenAI;
-using OpenAI.Chat;
 using Temporalio.Client;
 using Temporalio.Extensions.Agents;
 using Temporalio.Extensions.Hosting;
@@ -25,13 +24,13 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning);
 var apiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY");
 var apiBaseUrl = builder.Configuration.GetValue<string>("OPENAI_API_BASE_URL");
 
-if (string.IsNullOrEmpty(apiBaseUrl))
-    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
-
 if (string.IsNullOrEmpty(apiKey))
     throw new InvalidOperationException(
         "OPENAI_API_KEY is not configured. Set it with: " +
         "dotnet user-secrets set \"OPENAI_API_KEY\" \"sk-...\" --project samples/MAF/WorkflowOrchestration");
+
+if (string.IsNullOrEmpty(apiBaseUrl))
+    throw new InvalidOperationException("OPENAI_API_BASE_URL is not configured in appsettings.json.");
 
 const string model = "gpt-4o-mini";
 var temporalAddress = builder.Configuration.GetValue<string>("TEMPORAL_ADDRESS") ?? "localhost:7233";
@@ -108,7 +107,7 @@ Console.WriteLine("Done.");
 /// <summary>
 /// An orchestrating workflow that calls a durable agent to answer a question.
 /// </summary>
-[Workflow("WorkflowOrchestration.WeatherOrchestration")]
+[Workflow("WorkflowOrchestration.WeatherOrchestrationWorkflow")]
 public class WeatherOrchestrationWorkflow
 {
     /// <summary>
@@ -124,9 +123,11 @@ public class WeatherOrchestrationWorkflow
     public async Task<string> RunAsync(string userQuestion)
     {
         var agent = GetAgent("WeatherAssistant");
-        var session = await agent.CreateSessionAsync();
-        var response = await agent.RunAsync(userQuestion, session);
+        var session = await agent.CreateSessionAsync().ConfigureAwait(true);
+        var response = await agent.RunAsync(
+            [new ChatMessage(ChatRole.User, userQuestion)],
+            session).ConfigureAwait(true);
 
-        return response.Text ?? "No response";
+        return response.Text ?? string.Empty;
     }
 }
