@@ -196,6 +196,8 @@ internal sealed class DefaultTemporalAgentClient(
                 effectiveRetryPolicy);
         }
 
+        var effectiveMaxToolCalls = jobRegistration?.MaxToolCallsPerTurn ?? 20;
+
         var action = ScheduleActionStartWorkflow.Create(
             (AgentJobWorkflow wf) => wf.RunAsync(new AgentJobInput
             {
@@ -206,6 +208,7 @@ internal sealed class DefaultTemporalAgentClient(
                 HeartbeatTimeout = effectiveHeartbeatTimeout,
                 RetryPolicy = effectiveRetryPolicy,
                 DurableAgentToolActivityOptions = toolActivityOptions,
+                MaxToolCallsPerTurn = effectiveMaxToolCalls,
             }),
             new WorkflowOptions(workflowId, taskQueue));
 

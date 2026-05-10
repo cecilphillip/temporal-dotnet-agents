@@ -129,7 +129,7 @@ public sealed class TemporalAIAgent : AIAgent
 
         var allTurnMessages = new List<ChatMessage>();
         UsageDetails? totalUsage = null;
-        const int maxIterations = 20;
+        var maxIterations = 20;  // resolved from worker registration on the first step
 
         for (var iteration = 0; iteration < maxIterations; iteration++)
         {
@@ -141,11 +141,17 @@ public sealed class TemporalAIAgent : AIAgent
                 SerializedStateBag = null,
                 SessionId = sessionId,
                 IsFirstStep = iteration == 0,
+                NeedsWorkerSettingsResolution = iteration == 0,
             };
 
             var stepResult = await Workflow.ExecuteActivityAsync(
                 (AgentActivities a) => a.RunDurableAgentStepAsync(stepInput),
                 _activityOptions);
+
+            if (iteration == 0 && stepResult.ResolvedMaxToolCallsPerTurn.HasValue)
+            {
+                maxIterations = stepResult.ResolvedMaxToolCallsPerTurn.Value;
+            }
 
             if (stepResult.Usage is not null)
             {

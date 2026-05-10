@@ -33,7 +33,7 @@ internal partial class DurableAIJsonContext : JsonSerializerContext;
 /// <summary>
 /// JSON serialization utilities for the durable AI library.
 /// </summary>
-internal static class DurableAIJsonUtilities
+public static class DurableAIJsonUtilities
 {
     /// <summary>
     /// Gets the default <see cref="JsonSerializerOptions"/> configured with MEAI type support.

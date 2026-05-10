@@ -313,6 +313,12 @@ internal sealed class AgentActivities(
             var serializedStateBag = session.SerializeStateBag();
             var isFinal = toolCalls.Count == 0;
 
+
+            int? resolvedMaxToolCalls = input.NeedsWorkerSettingsResolution
+                ? cached.Registration.MaxToolCallsPerTurn
+                : null;
+
+
             return new AgentStepResult
             {
                 IsFinal = isFinal,
@@ -322,6 +328,7 @@ internal sealed class AgentActivities(
                 Usage = response.Usage,
                 ResolvedUseExternalStoreMode = resolvedExternalStore,
                 ResolvedToolActivityOptions = resolvedToolOpts,
+                ResolvedMaxToolCallsPerTurn = resolvedMaxToolCalls,
             };
         }
         catch (Exception ex)

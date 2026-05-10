@@ -39,6 +39,6 @@ public static class DurableAIDataConverter
     /// which correctly handles polymorphic <see cref="AIContent"/> types.
     /// </summary>
     public static DataConverter Instance { get; } = new(
-        new DefaultPayloadConverter(AIJsonUtilities.DefaultOptions),
+        new DefaultPayloadConverter(DurableAIJsonUtilities.DefaultOptions),
         new DefaultFailureConverter());
 }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.AI;
 using Xunit;
 
@@ -184,5 +185,16 @@ public class SerializationTests
         Assert.Equal("gpt-4o", deserialized.ModelId);
         Assert.Equal(0.9f, deserialized.TopP);
         Assert.Equal(42, deserialized.Seed);
+    }
+
+    [Fact]
+    public void DurableAIDataConverter_UsesSourceGenContext_ForDurableChatInput()
+    {
+        // DurableAIJsonUtilities.DefaultOptions chains DurableAIJsonContext.Default,
+        // so GetTypeInfo for library types must be source-gen backed (not a reflection fallback).
+        var options = DurableAIJsonUtilities.DefaultOptions;
+        var typeInfo = options.GetTypeInfo(typeof(DurableChatInput));
+        Assert.NotNull(typeInfo);
+        Assert.NotEqual(JsonTypeInfoKind.None, typeInfo.Kind);
     }
 }

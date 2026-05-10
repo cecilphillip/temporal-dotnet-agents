@@ -64,4 +64,12 @@ internal sealed class AgentStepResult
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, ActivityOptions>? ResolvedToolActivityOptions { get; init; }
+
+    /// <summary>
+    /// Resolved <c>MaxToolCallsPerTurn</c> from the worker's <c>DurableAgentRegistration</c>.
+    /// Only populated when <see cref="AgentStepInput.NeedsWorkerSettingsResolution"/> was
+    /// <see langword="true"/>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ResolvedMaxToolCallsPerTurn { get; init; }
 }

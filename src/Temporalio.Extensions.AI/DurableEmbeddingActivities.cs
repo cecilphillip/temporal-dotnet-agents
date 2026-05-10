@@ -27,6 +27,7 @@ internal sealed class DurableEmbeddingActivities(
 
         _logger.LogDebug("Executing durable embedding activity for {Count} inputs", input.Values.Count);
 
+        ctx.Heartbeat();   // reset heartbeat timer before blocking on the embedding call
         var embeddings = await generator.GenerateAsync(
             input.Values,
             input.Options,

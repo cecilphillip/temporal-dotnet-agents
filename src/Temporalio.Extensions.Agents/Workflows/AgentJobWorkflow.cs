@@ -28,7 +28,7 @@ internal sealed class AgentJobWorkflow
         };
 
         var accumulated = new List<ChatMessage>(input.Request.Messages);
-        const int maxIterations = 20;
+        var maxIterations = input.MaxToolCallsPerTurn;
 
         for (var iteration = 0; iteration < maxIterations; iteration++)
         {

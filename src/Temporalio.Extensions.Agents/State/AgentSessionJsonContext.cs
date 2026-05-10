@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Temporalio.Extensions.Agents.Workflows;
 using Temporalio.Extensions.AI;
 
 namespace Temporalio.Extensions.Agents.State;
@@ -11,6 +12,13 @@ namespace Temporalio.Extensions.Agents.State;
 [JsonSerializable(typeof(DurableSessionResponse))]
 [JsonSerializable(typeof(AgentSessionRequest))]
 [JsonSerializable(typeof(AgentSessionResponse))]
+// Activity I/O types — workflow ↔ activity boundary
+[JsonSerializable(typeof(AgentStepInput))]
+[JsonSerializable(typeof(AgentStepResult))]
+[JsonSerializable(typeof(InvokeAgentToolInput))]
+[JsonSerializable(typeof(InvokeAgentToolResult))]
+[JsonSerializable(typeof(AppendAgentTurnInput))]
+[JsonSerializable(typeof(ReduceHistoryInStoreInput))]
 [JsonSerializable(typeof(IReadOnlyList<DurableSessionEntry>))]
 [JsonSerializable(typeof(List<DurableSessionEntry>))]
 // Function call and result content

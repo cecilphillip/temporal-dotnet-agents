@@ -48,4 +48,10 @@ internal sealed record AgentJobInput
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, ActivityOptions>? DurableAgentToolActivityOptions { get; init; }
+
+    /// <summary>
+    /// Maximum number of tool-call iterations per turn. Mirrors
+    /// <see cref="DurableAgentBuilder.MaxToolCallsPerTurn"/>. Defaults to 20.
+    /// </summary>
+    public int MaxToolCallsPerTurn { get; init; } = 20;
 }

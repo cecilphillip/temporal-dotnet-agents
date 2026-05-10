@@ -23,7 +23,7 @@ public static class TemporalAgentJsonUtilities
 
     private static JsonSerializerOptions CreateDefaultOptions()
     {
-        var options = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions);
+        var options = new JsonSerializerOptions(DurableAIJsonUtilities.DefaultOptions);
         options.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
         options.TypeInfoResolverChain.Add(AgentSessionJsonContext.Default);
