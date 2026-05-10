@@ -48,4 +48,13 @@ internal sealed class AgentStepInput
     /// see the loaded history through <see cref="AccumulatedMessages"/>).
     /// </summary>
     public bool IsFirstStep { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/>, the activity resolves and returns worker-side durable-agent
+    /// settings (<c>UseExternalStoreMode</c>, per-tool <see cref="ActivityOptions"/> dictionary)
+    /// so the workflow can patch its input on the first turn of a proxy-started session.
+    /// Only set on the first step of the first turn when <see cref="AgentWorkflowInput.WorkerSettingsResolved"/>
+    /// is <see langword="false"/>. Defaults to <see langword="false"/> for all existing callers.
+    /// </summary>
+    public bool NeedsWorkerSettingsResolution { get; init; }
 }

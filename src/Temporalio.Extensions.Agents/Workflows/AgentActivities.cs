@@ -10,6 +10,7 @@ using Temporalio.Extensions.Agents.HistoryStore;
 using Temporalio.Extensions.Agents.Session;
 using Temporalio.Extensions.Agents.State;
 using Temporalio.Extensions.AI;
+using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
@@ -22,7 +23,8 @@ internal sealed record CachedDurableAgent(
     IReadOnlyDictionary<string, AIFunction> Tools,
     DurableAgentRegistration Registration,
     IAgentHistoryStore? HistoryStore,
-    IReadOnlyList<AIContextProvider> ContextProviders);
+    IReadOnlyList<AIContextProvider> ContextProviders,
+    TemporalAgentsOptions AgentsOptions);
 
 /// <summary>
 /// Temporal activities that perform the actual AI inference for agent sessions.
@@ -72,13 +74,61 @@ internal sealed class AgentActivities(
         var ct = ActivityExecutionContext.Current.CancellationToken;
         var prior = await cached.HistoryStore.LoadAsync(input.SessionId, ct).ConfigureAwait(false);
 
-        if (prior.Count <= input.MaxEntryCount)
+        // Resolve effective reducer: per-agent first, then worker default.
+        var reducer = cached.Registration.HistoryReducer
+                   ?? cached.AgentsOptions.DefaultHistoryReducer;
+
+        IReadOnlyList<DurableSessionEntry> reduced;
+        if (reducer is not null)
+        {
+            // HistoryReducer signature expects IList<DurableSessionEntry>; materialize prior.
+            // Materialize the result as a List<T> which satisfies both IList and IReadOnlyList.
+            reduced = reducer(prior.ToList()).ToList();
+        }
+        else
+        {
+            if (prior.Count <= input.MaxEntryCount)
+            {
+                return;
+            }
+
+            reduced = prior.Skip(prior.Count - input.MaxEntryCount).ToList();
+        }
+
+        await cached.HistoryStore.ReplaceAsync(input.SessionId, reduced, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Appends the full turn — request entry + response entry carrying all messages accumulated
+    /// across every LLM step and tool call — to the agent's external history store.
+    /// Dispatched by <see cref="AgentWorkflow"/> after <c>ExecuteDurableAgentTurnAsync</c>
+    /// returns, replacing the former in-activity append that was limited to the final assistant
+    /// message and was skipped entirely when the iteration cap was hit.
+    /// </summary>
+    [Activity("Temporalio.Extensions.Agents.AppendAgentTurn")]
+    public async Task AppendAgentTurnAsync(AppendAgentTurnInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var cached = ResolveDurableAgent(input.AgentName);
+        if (cached.HistoryStore is null)
         {
             return;
         }
 
-        var trimmed = prior.Skip(prior.Count - input.MaxEntryCount).ToList();
-        await cached.HistoryStore.ReplaceAsync(input.SessionId, trimmed, ct).ConfigureAwait(false);
+        var ct = ActivityExecutionContext.Current.CancellationToken;
+        var now = DateTimeOffset.UtcNow;
+
+        var requestEntry = AgentSessionRequest.FromRunRequest(input.Request, now);
+        var responseEntry = AgentSessionResponse.FromAgentResponse(
+            input.Request.CorrelationId ?? string.Empty,
+            input.TurnResponse,
+            now);
+
+        await cached.HistoryStore.AppendAsync(
+            input.SessionId,
+            [requestEntry, responseEntry],
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -96,6 +146,29 @@ internal sealed class AgentActivities(
         var ct = ctx.CancellationToken;
 
         var cached = ResolveDurableAgent(input.AgentName);
+
+        // Fix 4 (P1-1 + P1-2): when the workflow was started by a proxy-only client, resolve
+        // and return worker-side settings so the workflow can patch its input on the first turn.
+        bool? resolvedExternalStore = null;
+        Dictionary<string, ActivityOptions>? resolvedToolOpts = null;
+        if (input.NeedsWorkerSettingsResolution)
+        {
+            resolvedExternalStore = cached.HistoryStore is not null
+                                 || cached.AgentsOptions.HistoryStore is not null;
+
+            var effectiveActivityTimeout = cached.Registration.ActivityTimeout
+                ?? cached.AgentsOptions.DefaultActivityTimeout;
+            var effectiveHeartbeatTimeout = cached.Registration.HeartbeatTimeout
+                ?? cached.AgentsOptions.DefaultHeartbeatTimeout;
+            var effectiveRetryPolicy = cached.Registration.RetryPolicy
+                ?? cached.AgentsOptions.DefaultRetryPolicy;
+
+            resolvedToolOpts = DefaultTemporalAgentClient.BuildDurableAgentToolActivityOptions(
+                cached.Registration,
+                effectiveActivityTimeout,
+                effectiveHeartbeatTimeout,
+                effectiveRetryPolicy);
+        }
         var sessionId = input.SessionId ?? TemporalAgentSessionId.Parse(ctx.Info.WorkflowId!);
 
         // Restore the StateBag so AIContextProvider state survives across step iterations.
@@ -240,20 +313,6 @@ internal sealed class AgentActivities(
             var serializedStateBag = session.SerializeStateBag();
             var isFinal = toolCalls.Count == 0;
 
-            if (cached.HistoryStore is not null && isFinal)
-            {
-                var requestEntry = AgentSessionRequest.FromRunRequest(input.Request, DateTimeOffset.UtcNow);
-                var responseEntry = AgentSessionResponse.FromAgentResponse(
-                    input.Request.CorrelationId ?? string.Empty,
-                    new AgentResponse { Messages = new[] { assistantMessage } },
-                    DateTimeOffset.UtcNow);
-
-                await cached.HistoryStore.AppendAsync(
-                    sessionId.WorkflowId,
-                    new DurableSessionEntry[] { requestEntry, responseEntry },
-                    ct).ConfigureAwait(false);
-            }
-
             return new AgentStepResult
             {
                 IsFinal = isFinal,
@@ -261,6 +320,8 @@ internal sealed class AgentActivities(
                 ToolCalls = isFinal ? null : toolCalls,
                 UpdatedStateBag = serializedStateBag,
                 Usage = response.Usage,
+                ResolvedUseExternalStoreMode = resolvedExternalStore,
+                ResolvedToolActivityOptions = resolvedToolOpts,
             };
         }
         catch (Exception ex)
@@ -371,7 +432,7 @@ internal sealed class AgentActivities(
         var storeFactory = registration.HistoryStore ?? agentsOptions.HistoryStore;
         var resolvedStore = storeFactory?.Invoke(providerServices);
 
-        return new CachedDurableAgent(agent, resolvedTools, registration, resolvedStore, providers);
+        return new CachedDurableAgent(agent, resolvedTools, registration, resolvedStore, providers, agentsOptions);
     }
 
     /// <summary>

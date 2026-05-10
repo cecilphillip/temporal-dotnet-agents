@@ -57,13 +57,7 @@ internal sealed class AgentJobWorkflow
             var toolTasks = new List<Task<InvokeAgentToolResult>>(toolCalls.Count);
             foreach (var tc in toolCalls)
             {
-                var toolOptions = new ActivityOptions
-                {
-                    StartToCloseTimeout = input.ActivityTimeout,
-                    HeartbeatTimeout = input.HeartbeatTimeout,
-                    Summary = tc.Name,
-                    RetryPolicy = input.RetryPolicy,
-                };
+                var toolOptions = ResolveDurableToolActivityOptions(input, tc.Name);
 
                 var toolInput = new InvokeAgentToolInput
                 {
@@ -82,6 +76,7 @@ internal sealed class AgentJobWorkflow
 
             var toolResults = await Workflow.WhenAllAsync(toolTasks).ConfigureAwait(true);
 
+
             var functionResultContents = new List<AIContent>(toolCalls.Count);
             for (var i = 0; i < toolCalls.Count; i++)
             {
@@ -92,5 +87,28 @@ internal sealed class AgentJobWorkflow
 
             accumulated.Add(new ChatMessage(ChatRole.Tool, functionResultContents));
         }
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="ActivityOptions"/> for a per-tool dispatch. When
+    /// <see cref="AgentJobInput.DurableAgentToolActivityOptions"/> contains an entry for
+    /// <paramref name="toolName"/>, those options (with their per-tool retry policy and timeouts)
+    /// are used; otherwise a default is built from the flat job-level settings.
+    /// </summary>
+    private static ActivityOptions ResolveDurableToolActivityOptions(AgentJobInput input, string toolName)
+    {
+        if (input.DurableAgentToolActivityOptions is not null
+            && input.DurableAgentToolActivityOptions.TryGetValue(toolName, out var perTool))
+        {
+            return perTool;
+        }
+
+        return new ActivityOptions
+        {
+            StartToCloseTimeout = input.ActivityTimeout,
+            HeartbeatTimeout = input.HeartbeatTimeout,
+            Summary = toolName,
+            RetryPolicy = input.RetryPolicy,
+        };
     }
 }

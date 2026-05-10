@@ -177,15 +177,35 @@ internal sealed class DefaultTemporalAgentClient(
 
         var workflowId = $"ta-{agentName.ToLowerInvariant()}-scheduled-{scheduleId}";
 
+        // Resolve per-agent timeouts/retry and build the per-tool activity options dictionary
+        // so that write tools registered with opts.NoRetry() are respected in scheduled jobs.
+        var effectiveActivityTimeout = options.DefaultActivityTimeout;
+        var effectiveHeartbeatTimeout = options.DefaultHeartbeatTimeout;
+        var effectiveRetryPolicy = options.DefaultRetryPolicy;
+        Dictionary<string, ActivityOptions>? toolActivityOptions = null;
+
+        if (options.DurableAgentRegistrations.TryGetValue(agentName, out var jobRegistration))
+        {
+            effectiveActivityTimeout = jobRegistration.ActivityTimeout ?? options.DefaultActivityTimeout;
+            effectiveHeartbeatTimeout = jobRegistration.HeartbeatTimeout ?? options.DefaultHeartbeatTimeout;
+            effectiveRetryPolicy = jobRegistration.RetryPolicy ?? options.DefaultRetryPolicy;
+            toolActivityOptions = BuildDurableAgentToolActivityOptions(
+                jobRegistration,
+                effectiveActivityTimeout,
+                effectiveHeartbeatTimeout,
+                effectiveRetryPolicy);
+        }
+
         var action = ScheduleActionStartWorkflow.Create(
             (AgentJobWorkflow wf) => wf.RunAsync(new AgentJobInput
             {
                 AgentName = agentName,
                 TaskQueue = taskQueue,
                 Request = request,
-                ActivityTimeout = options.DefaultActivityTimeout,
-                HeartbeatTimeout = options.DefaultHeartbeatTimeout,
-                RetryPolicy = options.DefaultRetryPolicy,
+                ActivityTimeout = effectiveActivityTimeout,
+                HeartbeatTimeout = effectiveHeartbeatTimeout,
+                RetryPolicy = effectiveRetryPolicy,
+                DurableAgentToolActivityOptions = toolActivityOptions,
             }),
             new WorkflowOptions(workflowId, taskQueue));
 
@@ -292,6 +312,7 @@ internal sealed class DefaultTemporalAgentClient(
             UseExternalStoreMode = hasExternalStore,
             MaxToolCallsPerTurn = registration.MaxToolCallsPerTurn,
             DurableAgentToolActivityOptions = toolActivityOptions,
+            WorkerSettingsResolved = true,
         };
     }
 
@@ -333,7 +354,7 @@ internal sealed class DefaultTemporalAgentClient(
         };
     }
 
-    private static Dictionary<string, ActivityOptions> BuildDurableAgentToolActivityOptions(
+    internal static Dictionary<string, ActivityOptions> BuildDurableAgentToolActivityOptions(
         DurableAgentRegistration registration,
         TimeSpan defaultActivityTimeout,
         TimeSpan defaultHeartbeatTimeout,

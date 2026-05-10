@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
+using Temporalio.Workflows;
 
 namespace Temporalio.Extensions.Agents.Workflows;
 
@@ -46,4 +47,21 @@ internal sealed class AgentStepResult
     /// <summary>Optional usage metadata for the LLM call performed during this step.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public UsageDetails? Usage { get; init; }
+
+    /// <summary>
+    /// Resolved worker-side external-store mode flag. Only populated when
+    /// <see cref="AgentStepInput.NeedsWorkerSettingsResolution"/> was <see langword="true"/>.
+    /// <see langword="true"/> when the agent has an <c>IAgentHistoryStore</c> configured on
+    /// the worker; <see langword="null"/> otherwise (not a resolution-request step).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ResolvedUseExternalStoreMode { get; init; }
+
+    /// <summary>
+    /// Resolved per-tool <see cref="ActivityOptions"/> dictionary from the worker's
+    /// <c>DurableAgentRegistration</c>. Only populated when
+    /// <see cref="AgentStepInput.NeedsWorkerSettingsResolution"/> was <see langword="true"/>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, ActivityOptions>? ResolvedToolActivityOptions { get; init; }
 }

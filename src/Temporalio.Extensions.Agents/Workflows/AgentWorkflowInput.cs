@@ -69,4 +69,13 @@ internal sealed class AgentWorkflowInput : DurableChatWorkflowInput
     /// </remarks>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, ActivityOptions>? DurableAgentToolActivityOptions { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the workflow was started by a full <c>AddDurableAgent</c>
+    /// registration and worker-side settings (external-store mode, per-tool activity options)
+    /// are already baked into this input. <see langword="false"/> when started by
+    /// <c>AddAgentProxy</c> only — the workflow must resolve these settings from the worker on
+    /// the first step of the first turn.
+    /// </summary>
+    public bool WorkerSettingsResolved { get; init; }
 }

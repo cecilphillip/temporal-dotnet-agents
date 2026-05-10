@@ -52,7 +52,7 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
         {
             await base.RunAsync(input).ConfigureAwait(true);
         }
-        catch (ContinueAsNewException can) when (UseExternalStoreMode && input.HistoryReducer is not null)
+        catch (ContinueAsNewException can) when (UseExternalStoreMode)
         {
             var reduceInput = new ReduceHistoryInStoreInput
             {
@@ -160,6 +160,7 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             UseExternalStoreMode = useExternalStore,
             MaxToolCallsPerTurn = _input.MaxToolCallsPerTurn,
             DurableAgentToolActivityOptions = _input.DurableAgentToolActivityOptions,
+            WorkerSettingsResolved = _input.WorkerSettingsResolved,
 
             TimeToLive = input.TimeToLive,
             CarriedHistory = useExternalStore ? null : input.CarriedHistory,
@@ -286,6 +287,11 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
 
         for (var iteration = 0; iteration < maxIterations; iteration++)
         {
+            // Fix 4 (P1-1 + P1-2): proxy-started sessions have WorkerSettingsResolved=false.
+            // On the first step of the first turn, ask the activity to resolve worker-side
+            // settings (external-store mode, per-tool activity options) and return them.
+            var needsResolution = iteration == 0 && !_input!.WorkerSettingsResolved;
+
             var stepInput = new AgentStepInput
             {
                 AgentName = _input!.AgentName,
@@ -294,11 +300,38 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
                 SerializedStateBag = _currentStateBag,
                 SessionId = null,
                 IsFirstStep = iteration == 0,
+                NeedsWorkerSettingsResolution = needsResolution,
             };
 
             var stepResult = await Workflow.ExecuteActivityAsync(
                 (AgentActivities a) => a.RunDurableAgentStepAsync(stepInput),
                 stepActivityOptions).ConfigureAwait(true);
+
+            // Fix 4: apply resolved worker-side settings once and carry forward via CAN.
+            if (needsResolution && stepResult.ResolvedUseExternalStoreMode.HasValue)
+            {
+                _input = new AgentWorkflowInput
+                {
+                    AgentName = _input!.AgentName,
+                    TaskQueue = _input!.TaskQueue,
+                    CarriedStateBag = _currentStateBag,
+                    RetryPolicy = _input!.RetryPolicy,
+                    UseExternalStoreMode = stepResult.ResolvedUseExternalStoreMode.Value,
+                    MaxToolCallsPerTurn = _input!.MaxToolCallsPerTurn,
+                    DurableAgentToolActivityOptions = stepResult.ResolvedToolActivityOptions,
+                    WorkerSettingsResolved = true,
+
+                    TimeToLive = _input!.TimeToLive,
+                    CarriedHistory = _input!.CarriedHistory,
+                    ApprovalTimeout = _input!.ApprovalTimeout,
+                    EnableSearchAttributes = _input!.EnableSearchAttributes,
+                    MaxEntryCount = _input!.MaxEntryCount,
+                    HistoryReducer = _input!.HistoryReducer,
+                    OriginalCreatedAt = _input!.OriginalCreatedAt,
+                    ActivityTimeout = _input!.ActivityTimeout,
+                    HeartbeatTimeout = _input!.HeartbeatTimeout,
+                };
+            }
 
             _currentStateBag = stepResult.UpdatedStateBag;
 
@@ -316,12 +349,36 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             if (stepResult.IsFinal || stepResult.ToolCalls is null || stepResult.ToolCalls.Count == 0)
             {
                 Workflow.Logger.LogDurableAgentTurnCompleted(_input!.AgentName, iteration + 1);
-                return new AgentResponse
+                var finalResponse = new AgentResponse
                 {
                     Messages = allTurnMessages,
                     Usage = totalUsage,
                     CreatedAt = Workflow.UtcNow,
                 };
+
+                // Fix 2 (P1-3): append the full turn to the external store. This captures all
+                // messages accumulated during the turn (tool-call messages, tool-result messages,
+                // and the final assistant message) rather than just the final assistant message.
+                if (UseExternalStoreMode)
+                {
+                    await Workflow.ExecuteActivityAsync(
+                        (AgentActivities a) => a.AppendAgentTurnAsync(new AppendAgentTurnInput
+                        {
+                            AgentName = _input!.AgentName,
+                            SessionId = Workflow.Info.WorkflowId,
+                            Request = runRequest,
+                            TurnResponse = finalResponse,
+                        }),
+                        new ActivityOptions
+                        {
+                            StartToCloseTimeout = _input!.ActivityTimeout,
+                            HeartbeatTimeout = _input!.HeartbeatTimeout,
+                            Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
+                            RetryPolicy = _input!.RetryPolicy,
+                        }).ConfigureAwait(true);
+                }
+
+                return finalResponse;
             }
 
             var toolCalls = stepResult.ToolCalls;
@@ -371,12 +428,35 @@ internal class AgentWorkflow : DurableChatWorkflowBase<AgentResponse>
             "The agent did not converge on a final answer.");
         allTurnMessages.Add(errorMessage);
 
-        return new AgentResponse
+        var abortedResponse = new AgentResponse
         {
             Messages = allTurnMessages,
             Usage = totalUsage,
             CreatedAt = Workflow.UtcNow,
         };
+
+        // Fix 2 (P1-3): also append max-iteration turns. Previously isFinal was never true
+        // when the cap was hit, so nothing was written to the external store.
+        if (UseExternalStoreMode)
+        {
+            await Workflow.ExecuteActivityAsync(
+                (AgentActivities a) => a.AppendAgentTurnAsync(new AppendAgentTurnInput
+                {
+                    AgentName = _input!.AgentName,
+                    SessionId = Workflow.Info.WorkflowId,
+                    Request = runRequest,
+                    TurnResponse = abortedResponse,
+                }),
+                new ActivityOptions
+                {
+                    StartToCloseTimeout = _input!.ActivityTimeout,
+                    HeartbeatTimeout = _input!.HeartbeatTimeout,
+                    Summary = AgentActivities.BuildActivitySummary(_input!.AgentName),
+                    RetryPolicy = _input!.RetryPolicy,
+                }).ConfigureAwait(true);
+        }
+
+        return abortedResponse;
     }
 
     private List<ChatMessage> FlattenHistoryMessages()
