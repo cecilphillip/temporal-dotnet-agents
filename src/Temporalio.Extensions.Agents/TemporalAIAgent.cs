@@ -28,6 +28,11 @@ public sealed class TemporalAIAgent : AIAgent
     private readonly List<DurableSessionEntry> _history = [];
     private readonly ActivityOptions _activityOptions;
     private int _requestCount;
+    // Resolved from the worker registration on the first RunDurableAgentStep call.
+    // When true, cross-turn conversation history is owned by the external IAgentHistoryStore
+    // rather than being carried in-workflow. Each turn's request messages are still passed
+    // to the step activity; prior turns are loaded by the activity from the store.
+    private bool _useExternalStore;
 
     internal TemporalAIAgent(string agentName, ActivityOptions? activityOptions = null)
     {
@@ -118,12 +123,28 @@ public sealed class TemporalAIAgent : AIAgent
         // Drive the durable-agent dispatch loop for sub-agents inside an orchestrating workflow.
         // Mirrors the AgentWorkflow main loop but without continue-as-new / search attributes /
         // history reduction (the orchestrating workflow owns those concerns).
+        //
+        // When _useExternalStore is true (resolved from the worker registration on the first
+        // RunDurableAgentStep call), cross-turn history is owned by the external store.
+        // The step activity on IsFirstStep=true loads that history itself; we only pass
+        // the current request's messages so they aren't duplicated in the LLM context.
+        // When _useExternalStore is false, we flatten all _history into AccumulatedMessages
+        // as before (in-workflow state is the authoritative history).
         var accumulated = new List<ChatMessage>();
-        foreach (var entry in _history)
+        if (_useExternalStore)
         {
-            foreach (var m in entry.Messages)
-            {
+            // Only include the current request's messages. The activity loads prior turns
+            // from the external store and prepends them before sending to the LLM.
+            var currentEntry = _history[_history.Count - 1];
+            foreach (var m in currentEntry.Messages)
                 accumulated.Add(m);
+        }
+        else
+        {
+            foreach (var entry in _history)
+            {
+                foreach (var m in entry.Messages)
+                    accumulated.Add(m);
             }
         }
 
@@ -153,6 +174,14 @@ public sealed class TemporalAIAgent : AIAgent
                 maxIterations = stepResult.ResolvedMaxToolCallsPerTurn.Value;
             }
 
+            // Capture the resolved external-store flag from the first step so that
+            // subsequent turns build AccumulatedMessages correctly (only current-turn
+            // messages when the store owns cross-turn history).
+            if (iteration == 0 && stepResult.ResolvedUseExternalStoreMode.HasValue)
+            {
+                _useExternalStore = stepResult.ResolvedUseExternalStoreMode.Value;
+            }
+
             if (stepResult.Usage is not null)
             {
                 totalUsage ??= new UsageDetails();
@@ -175,6 +204,23 @@ public sealed class TemporalAIAgent : AIAgent
 
                 _history.Add(AgentSessionResponse.FromAgentResponse(
                     request.CorrelationId!, response, Workflow.UtcNow));
+
+                // Persist this turn to the external history store when configured.
+                // The session-based AgentWorkflow path does this via UseExternalStoreMode;
+                // TemporalAIAgent must dispatch the same AppendAgentTurn activity.
+                if (_useExternalStore && sessionId.HasValue)
+                {
+                    await Workflow.ExecuteActivityAsync(
+                        (AgentActivities a) => a.AppendAgentTurnAsync(new AppendAgentTurnInput
+                        {
+                            AgentName = _agentName,
+                            SessionId = sessionId.Value.WorkflowId,
+                            Request = request,
+                            TurnResponse = response,
+                        }),
+                        _activityOptions).ConfigureAwait(true);
+                }
+
                 return response;
             }
 
@@ -220,6 +266,21 @@ public sealed class TemporalAIAgent : AIAgent
         };
         _history.Add(AgentSessionResponse.FromAgentResponse(
             request.CorrelationId!, iterCapResponse, Workflow.UtcNow));
+
+        // Also persist iteration-cap turns to the external store.
+        if (_useExternalStore && sessionId.HasValue)
+        {
+            await Workflow.ExecuteActivityAsync(
+                (AgentActivities a) => a.AppendAgentTurnAsync(new AppendAgentTurnInput
+                {
+                    AgentName = _agentName,
+                    SessionId = sessionId.Value.WorkflowId,
+                    Request = request,
+                    TurnResponse = iterCapResponse,
+                }),
+                _activityOptions).ConfigureAwait(true);
+        }
+
         return iterCapResponse;
     }
 
