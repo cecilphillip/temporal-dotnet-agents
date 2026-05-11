@@ -57,8 +57,9 @@ internal sealed class AgentJobWorkflow
         };
 
         var accumulated = new List<ChatMessage>(input.Request.Messages);
+        var maxIterations = input.MaxToolCallsPerTurn;  // set from DurableAgentBuilder.MaxToolCallsPerTurn
 
-        for (var iteration = 0; iteration < 20; iteration++)
+        for (var iteration = 0; iteration < maxIterations; iteration++)
         {
             var stepInput = new AgentStepInput
             {
@@ -95,6 +96,8 @@ internal sealed class AgentJobWorkflow
 - No continue-as-new
 - Result is visible in the Temporal Web UI event history
 - Same per-step / per-tool activity dispatch as the long-lived `AgentWorkflow`, so retries, timeouts, and per-tool `DurableToolOptions` apply identically
+
+> **`MaxToolCallsPerTurn` propagation:** The iteration cap set on `DurableAgentBuilder.MaxToolCallsPerTurn` is read by `ScheduleAgentAsync` and stored in `AgentJobInput.MaxToolCallsPerTurn` before the workflow starts. You do not need to configure it separately for scheduled runs — if you set `agent.MaxToolCallsPerTurn = 5` on the agent definition, that cap applies in both session-based and scheduled runs. The default is `20` when not set.
 
 ### AgentWorkflow (Full Session)
 

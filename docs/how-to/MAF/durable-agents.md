@@ -70,6 +70,12 @@ For every tool dispatched as a Temporal activity (`InvokeAgentTool`), the effect
 
 The per-LLM-call activity (`RunDurableAgentStep`) follows the same chain, minus step 1.
 
+## Split-Deployment Behavior
+
+In a split-deployment setup — where a client process uses `GetTemporalAgentProxy` without a full `AddDurableAgent` registration and the worker process hosts the agent via `AddDurableAgent` — the workflow starts without access to the worker's per-tool configuration. On the first `RunDurableAgentStep` call of each turn, the activity detects this state and resolves per-tool retry and timeout options from the worker's `DurableAgentRegistration` in memory, returning them as part of the step result. The workflow then uses these resolved options for all subsequent tool dispatches in that turn.
+
+This means per-tool options set via `agent.AddTool(tool, opts => opts.NoRetry())` are honored correctly in split deployments — they do not need to be (and cannot be) configured on the client side.
+
 ## Sample
 
 See [`samples/MAF/PerToolActivities/`](../../../samples/MAF/PerToolActivities/) for an end-to-end demonstration with intentionally injected lookup failures.

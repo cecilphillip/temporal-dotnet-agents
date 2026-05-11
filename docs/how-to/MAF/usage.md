@@ -67,7 +67,7 @@ builder.Services
 | `TimeToLive`, `ApprovalTimeout`, `ActivityTimeout`, `HeartbeatTimeout` | Per-agent overrides. `null` inherits the worker-level default on `TemporalAgentsOptions`. |
 | `RetryPolicy` | Retry policy for the agent's `RunAgentStep` activity (the LLM call). Per-tool retry is configured separately via `DurableToolOptions`. |
 | `MaxEntryCount`, `HistoryReducer` | Per-agent continue-as-new bounds and reducer. Inherit worker defaults when unset. |
-| `MaxToolCallsPerTurn` | Cap on LLM-step iterations per agent turn (default `20`). No worker-level fallback. |
+| `MaxToolCallsPerTurn` | Cap on LLM-step iterations per agent turn (default `20` when not set). Applies across all three execution paths: session-based workflows, scheduled jobs, and sub-agent orchestration via `GetAgent()`. No worker-level fallback. |
 | `HistoryStore` | Per-agent `IAgentHistoryStore` factory. `null` inherits `opts.HistoryStore`; if both are `null`, history is carried in workflow state. |
 
 ### `DurableToolOptions` reference
@@ -93,7 +93,7 @@ For every scalar setting the rule is: **if you set it on the agent, it overrides
 | `agent.MaxEntryCount` | `opts.DefaultMaxEntryCount` |
 | `agent.HistoryReducer` | `opts.DefaultHistoryReducer` |
 | `agent.HistoryStore` | `opts.HistoryStore` |
-| `agent.MaxToolCallsPerTurn` | *no worker fallback — defaults to `20`* |
+| `agent.MaxToolCallsPerTurn` | *no worker fallback — defaults to `20`; propagates to scheduled jobs and sub-agent orchestration* |
 
 The retry-policy hierarchy adds one more layer specifically for tools. From most to least specific:
 
@@ -924,7 +924,7 @@ Every tool registered via `agent.AddTool(...)` is dispatched as a Temporal activ
 | `WithMaxAttempts(int n)` | Sugar for fixed-attempt retry. |
 | `WithTimeout(TimeSpan t)` | Sugar for `StartToCloseTimeout`. |
 
-`agent.MaxToolCallsPerTurn` (default `20`) caps step-loop iterations per single agent turn. When exceeded, the workflow returns a structured "iteration cap exceeded" assistant message rather than letting workflow history grow unbounded.
+`agent.MaxToolCallsPerTurn` (default `20` when not set) caps step-loop iterations per single agent turn. The value propagates from the agent's registration into session-based workflows, scheduled jobs, and sub-agent calls via `GetAgent()` — you configure it once on the builder and it takes effect everywhere. When exceeded, the workflow returns a structured "iteration cap exceeded" assistant message rather than letting workflow history grow unbounded.
 
 ```csharp
 builder.Services

@@ -176,7 +176,7 @@ public interface IAgentHistoryStore
 | Method | Called from | When |
 |---|---|---|
 | `LoadAsync` | `AgentActivities.RunDurableAgentStepAsync` | First step of every turn (`IsFirstStep == true`) — must return entries in append order |
-| `AppendAsync` | `AgentActivities.RunDurableAgentStepAsync` | Final step of every turn (when the LLM produces a non-tool-calling response) — appends `[requestEntry, responseEntry]` |
+| `AppendAsync` | `AgentActivities.AppendAgentTurnAsync` (dispatched by `AgentWorkflow` after the turn loop exits) | After every completed turn — appends `[requestEntry, responseEntry]` |
 | `ReplaceAsync` | `AgentActivities.ReduceHistoryInStoreAsync` (dispatched by `AgentWorkflow`) | Continue-as-new — replaces store contents with a tail-trim to `MaxEntryCount` |
 
 `sessionId` is `TemporalAgentSessionId.WorkflowId` (a string of the form `ta-{agentName}-{key}`). It is always provided by the library; you don't generate it.
@@ -319,22 +319,21 @@ If you need *zero* message content in Temporal events, including the current tur
 When external history is opted in:
 
 - `CarriedHistory` is set to `null` on the new run's `AgentWorkflowInput`. There is nothing to carry — the store owns it.
-- The workflow dispatches a `ReduceHistoryInStoreAsync` activity *before* throwing the continue-as-new exception. That activity loads the history from the store and, if `prior.Count > MaxEntryCount`, calls `IAgentHistoryStore.ReplaceAsync` with the **most recent `MaxEntryCount` entries** (a deterministic tail-trim — `prior.Skip(prior.Count - MaxEntryCount)`). If the store is already within `MaxEntryCount`, the activity is a no-op.
-- The activity does **not** apply the user's `TemporalAgentsOptions.DefaultHistoryReducer` (or per-agent `agent.HistoryReducer`) delegate to the external store. The reducer is annotated `[JsonIgnore]` and cannot be transported into a Temporal activity, so the external-store path performs a fixed tail-trim instead. The in-memory `HistoryReducer` delegate continues to work as documented in the [Usage Guide](./usage.md) for the in-memory mode (no `HistoryStore` set); only the external-store path differs.
+- The workflow dispatches a `ReduceHistoryInStoreAsync` activity *before* throwing the continue-as-new exception. That activity loads the history from the store and, if `prior.Count > MaxEntryCount`, calls `IAgentHistoryStore.ReplaceAsync` with the reduced list. The activity first attempts to apply the registered `HistoryReducer` delegate for the agent — resolved from the in-memory `DurableAgentRegistration` cache at runtime. If no reducer is registered, or if the store is still over `MaxEntryCount` after the reducer runs, the activity falls back to a deterministic tail-trim (`prior.Skip(prior.Count - MaxEntryCount)`). If the store is already within `MaxEntryCount`, the activity is a no-op. The `HistoryReducer` delegate is `[JsonIgnore]` and is not serialized into the activity input; instead, the activity resolves it from the in-memory registration at runtime.
 
-#### Workaround: custom store-side reduction
+#### Custom store-side reduction
 
-If you need richer reduction logic for the external store (summarisation, role-aware pruning, retention-by-CorrelationId, etc.), implement it in one of two places:
+If you need reduction logic beyond what the registered `HistoryReducer` provides (summarisation inside the store backend, role-aware pruning that requires re-reading backend state, retention-by-CorrelationId, etc.), you can implement it in one of two places:
 
-1. **Inside `IAgentHistoryStore.ReplaceAsync`** — the activity calls this with the tail-trimmed list, but your implementation is free to ignore the input list, re-load the full history from the underlying store, apply your own reduction strategy, and write the result. This is the simplest path and runs synchronously with continue-as-new.
+1. **Inside `IAgentHistoryStore.ReplaceAsync`** — the activity calls this with the already-reduced list, but your implementation is free to ignore the input list, re-load the full history from the underlying store, apply your own reduction strategy, and write the result. This supplements or replaces the registered reducer and runs synchronously with continue-as-new.
 
    ```csharp
    public async Task ReplaceAsync(
        string sessionId,
-       IReadOnlyList<DurableSessionEntry> trimmedEntries,
+       IReadOnlyList<DurableSessionEntry> reducedEntries,
        CancellationToken cancellationToken = default)
    {
-       // Ignore the library's tail-trim; apply our own summarisation policy instead.
+       // Ignore the library's reduced list; apply our own summarisation policy instead.
        var full = await LoadFromBackendAsync(sessionId, cancellationToken);
        var reduced = MyCustomReducer.Apply(full);
        await OverwriteBackendAsync(sessionId, reduced, cancellationToken);
@@ -342,6 +341,17 @@ If you need richer reduction logic for the external store (summarisation, role-a
    ```
 
 2. **From a separate background process** — schedule a periodic job (cron, Temporal schedule, etc.) that calls `LoadAsync` + `ReplaceAsync` against your store outside the agent workflow's continue-as-new path. Decoupling reduction from the agent loop avoids tying turn latency to your reducer's cost.
+
+### Sub-agent orchestration
+
+External history store works correctly for both the session-based path (`TemporalAIAgentProxy` / `AgentWorkflow`) and the sub-agent orchestration path (`TemporalAIAgent` via `TemporalWorkflowExtensions.GetAgent("Name")`).
+
+When a `TemporalAIAgent` sub-agent runs inside an orchestrating workflow and the agent has a configured `HistoryStore`:
+
+- On the first step of each request (`IsFirstStep == true`), the `RunDurableAgentStep` activity loads prior turns from the store via `LoadAsync`.
+- After each turn completes (both on normal exit when the model produces a final response, and on iteration-cap exit), the orchestrating workflow dispatches an `AppendAgentTurn` activity that writes the new `[requestEntry, responseEntry]` pair to the store via `AppendAsync`.
+
+Prior to commit `f0da244`, `TemporalAIAgent` performed the load on `IsFirstStep` but never dispatched the append activity, so the store was always empty for sub-agent sessions. This is now fixed. If you operate a sub-agent orchestration pattern with an external history store, session history will accumulate correctly across calls regardless of which entry path was used to start the session.
 
 ---
 
@@ -375,4 +385,4 @@ For sessions of fewer than ~50 turns with no PII concerns, the default path is t
 
 ---
 
-_Last updated: 2026-05-06_
+_Last updated: 2026-05-10_
