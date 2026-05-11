@@ -433,3 +433,7 @@ Desktop.ini
 #.claude/
 #.claude/agents/clans-*.md
 #.claude/skills/*
+
+# agent session memory — volatile per-session logs, not source
+.clans/agents/*/history.md
+.claude/agent-memory/
