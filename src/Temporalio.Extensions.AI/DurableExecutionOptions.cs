@@ -52,10 +52,10 @@ public sealed class DurableExecutionOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The library does not currently send periodic heartbeats during long-running LLM or
-    /// embedding inference. Set this value to be safely longer than the worst-case LLM response
-    /// time for your workload, or leave it at its default to rely on the
-    /// <see cref="ActivityTimeout"/> start-to-close deadline alone.
+    /// The library sends a heartbeat after each streaming chunk during LLM inference, keeping the
+    /// activity alive in Temporal's eyes during long model calls. Set this value to be safely longer
+    /// than the expected time between individual token chunks (typically a few seconds), not the
+    /// total call latency.
     /// </para>
     /// <para>
     /// Setting a heartbeat timeout that is shorter than the LLM call latency will cause the
