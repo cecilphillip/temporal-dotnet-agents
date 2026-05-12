@@ -46,10 +46,16 @@ internal sealed class DurableChatActivities(
 
         try
         {
-            var response = await chatClient.GetResponseAsync(
-                input.Messages,
-                input.Options,
-                ct).ConfigureAwait(false);
+            var collected = new List<ChatResponseUpdate>();
+            await foreach (var update in chatClient.GetStreamingResponseAsync(
+                    input.Messages, input.Options, ct)
+                .WithCancellation(ct)
+                .ConfigureAwait(false))
+            {
+                collected.Add(update);
+                ctx?.Heartbeat(update.Text);
+            }
+            var response = collected.ToChatResponse();
 
             span?.SetTag(DurableChatTelemetry.InputTokensAttribute, response.Usage?.InputTokenCount);
             span?.SetTag(DurableChatTelemetry.OutputTokensAttribute, response.Usage?.OutputTokenCount);

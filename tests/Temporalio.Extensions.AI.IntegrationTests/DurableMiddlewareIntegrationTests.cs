@@ -140,15 +140,59 @@ public class DurableMiddlewareIntegrationTests
         await host.StopAsync();
     }
 
-    // ── Test 6: Streaming ───────────────────────────────────────────────────
-    // DurableChatSessionClient does not expose a streaming API. It offers only
-    // ChatAsync (non-streaming). DurableChatClient.GetStreamingResponseAsync executes
-    // via Workflow.ExecuteActivityAsync internally — testing it end-to-end requires
-    // a custom workflow that holds an IChatClient pipeline with DurableChatClient,
-    // executes GetStreamingResponseAsync from the workflow body, and returns the
-    // collected updates as a workflow result. That setup duplicates the existing
-    // pass-through unit test (GetStreamingResponseAsync_PassesThroughWhenNotInWorkflow)
-    // without adding meaningful coverage of new code paths. Test 6 is skipped.
+    // ── Test 6: Heartbeat under tight HeartbeatTimeout ───────────────────────
+
+    /// <summary>
+    /// Verifies that DurableChatActivities.GetResponseAsync sends heartbeats
+    /// during the streaming loop, keeping the activity alive under a heartbeat
+    /// timeout that is shorter than the total activity duration.
+    ///
+    /// Architecture: ChatActivityTestWorkflow dispatches DurableChatActivities.GetResponseAsync
+    /// directly via Workflow.ExecuteActivityAsync with a HeartbeatTimeout of 3 seconds.
+    /// SlowStreamingChatClient yields 3 chunks, each preceded by a 1.5-second delay,
+    /// for a total streaming duration of ~4.5 seconds. Without per-chunk heartbeats the
+    /// activity would be force-failed at 3 seconds. Successful completion proves heartbeats
+    /// fired.
+    /// </summary>
+    [Fact]
+    public async Task DurableChatActivities_HeartbeatsKeepActivityAlive_UnderTightTimeout()
+    {
+        await using var env = await WorkflowEnvironment.StartLocalAsync();
+
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddSingleton<ITemporalClient>(env.Client);
+        builder.Services.AddSingleton<IChatClient>(new SlowStreamingChatClient());
+        builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(
+            new StubEmbeddingGenerator(4));
+
+        const string taskQueue = "test-heartbeat-6";
+
+        builder.Services
+            .AddHostedTemporalWorker(taskQueue)
+            .AddDurableAI(opts =>
+            {
+                opts.ActivityTimeout = TimeSpan.FromSeconds(30);
+                opts.HeartbeatTimeout = TimeSpan.FromSeconds(3);
+                opts.SessionTimeToLive = TimeSpan.FromMinutes(5);
+            })
+            .AddWorkflow<ChatActivityTestWorkflow>();
+
+        using var host = builder.Build();
+        await host.StartAsync();
+
+        var workflowId = $"heartbeat-test-{Guid.NewGuid():N}";
+        var handle = await env.Client.StartWorkflowAsync(
+            (ChatActivityTestWorkflow wf) => wf.RunAsync(),
+            new WorkflowOptions(workflowId, taskQueue));
+
+        // If heartbeats did not fire, the activity would be killed at 3 s and
+        // the workflow would fail with an ActivityFailureException. Successful
+        // completion is the proof that heartbeats kept it alive.
+        var result = await handle.GetResultAsync();
+        Assert.Equal("chunk1 chunk2 chunk3", result);
+
+        await host.StopAsync();
+    }
 
     // ── Shared helpers ────────────────────────────────────────────────────────
 
@@ -171,6 +215,35 @@ public class DurableMiddlewareIntegrationTests
         {
             var r = await GetResponseAsync(messages, options, cancellationToken);
             foreach (var u in r.ToChatResponseUpdates()) yield return u;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
+    /// <summary>
+    /// Yields 3 chunks with a 1.5-second delay before each chunk.
+    /// Total streaming duration ≈ 4.5 s — longer than the 3-second HeartbeatTimeout
+    /// used in Test 6. Without heartbeats the activity would be force-failed mid-stream.
+    /// </summary>
+    private sealed class SlowStreamingChatClient : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "chunk1 chunk2 chunk3")]));
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            foreach (var text in new[] { "chunk1", " chunk2", " chunk3" })
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1.5), cancellationToken);
+                yield return new ChatResponseUpdate(ChatRole.Assistant, text);
+            }
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
@@ -273,5 +346,35 @@ public sealed class EmbeddingTestWorkflow
             EmbeddingCount = embeddings.Count,
             Dimensions = embeddings.Count > 0 ? embeddings[0].Vector.Length : 0,
         };
+    }
+}
+
+// ── Chat activity test workflow ───────────────────────────────────────────────
+
+/// <summary>
+/// Minimal workflow that dispatches DurableChatActivities.GetResponseAsync directly
+/// to verify the heartbeat path under a tight HeartbeatTimeout (Test 6).
+/// </summary>
+[Workflow("ChatActivityTestWorkflow")]
+public sealed class ChatActivityTestWorkflow
+{
+    [WorkflowRun]
+    public async Task<string> RunAsync()
+    {
+        var input = new DurableChatInput
+        {
+            Messages = [new ChatMessage(ChatRole.User, "hello")],
+            ConversationId = Workflow.Info.WorkflowId,
+        };
+
+        var response = await Workflow.ExecuteActivityAsync(
+            (DurableChatActivities a) => a.GetResponseAsync(input),
+            new ActivityOptions
+            {
+                StartToCloseTimeout = TimeSpan.FromSeconds(30),
+                HeartbeatTimeout = TimeSpan.FromSeconds(3),
+            });
+
+        return response.Messages.Count > 0 ? response.Messages[0].Text ?? string.Empty : string.Empty;
     }
 }

@@ -124,11 +124,14 @@ public class DurableChatKeyedClientTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, label)]));
 
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
-            CancellationToken cancellationToken = default) =>
-            AsyncEnumerable.Empty<ChatResponseUpdate>();
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new ChatResponseUpdate(ChatRole.Assistant, label);
+            await Task.CompletedTask;
+        }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
         public void Dispose() { }
