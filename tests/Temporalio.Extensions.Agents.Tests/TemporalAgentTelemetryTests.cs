@@ -57,19 +57,28 @@ public class TemporalAgentTelemetryTests
     public void ActivitySource_EmitsSpanWhenListened()
     {
         // Arrange: subscribe to the ActivitySource to capture spans.
+        // Use a unique run-ID tag as a fingerprint so that ActivityStopped only captures
+        // *our* span — not any other activity that happens to stop on the same source
+        // concurrently (framework, xUnit, or parallel tests on Linux).
         Activity? captured = null;
+        var runId = Guid.NewGuid().ToString("N");
 
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == TemporalAgentTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activity => captured = activity
+            ActivityStopped = activity =>
+            {
+                if ((string?)activity.GetTagItem("test.run_id") == runId)
+                    captured = activity;
+            }
         };
         ActivitySource.AddActivityListener(listener);
 
         // Act: start + stop a span as AgentActivities would.
         using (var span = TemporalAgentTelemetry.ActivitySource.StartActivity("agent.turn"))
         {
+            span?.SetTag("test.run_id", runId);
             span?.SetTag(TemporalAgentTelemetry.AgentNameAttribute, "TestAgent");
             span?.SetTag(TemporalAgentTelemetry.AgentSessionIdAttribute, "ta-testagent-abc123");
         }
