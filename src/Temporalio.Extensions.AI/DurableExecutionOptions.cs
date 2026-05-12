@@ -52,15 +52,14 @@ public sealed class DurableExecutionOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The library sends a heartbeat after each streaming chunk during LLM inference, keeping the
-    /// activity alive in Temporal's eyes during long model calls. Set this value to be safely longer
-    /// than the expected time between individual token chunks (typically a few seconds), not the
-    /// total call latency.
+    /// The heartbeat timeout must be safely longer than the expected time between individual
+    /// token chunks (typically a few seconds), not the total call latency. The 2-minute default
+    /// is intentionally conservative to accommodate slow or throttled models.
     /// </para>
     /// <para>
-    /// Setting a heartbeat timeout that is shorter than the LLM call latency will cause the
-    /// activity to be force-failed mid-execution by the Temporal server, even if the LLM
-    /// eventually responds successfully.
+    /// Setting a heartbeat timeout that is shorter than the time between successive streaming
+    /// chunks will cause the activity to be force-failed mid-execution by the Temporal server,
+    /// even if the LLM eventually responds successfully.
     /// </para>
     /// <para>
     /// Per-request overrides are available via

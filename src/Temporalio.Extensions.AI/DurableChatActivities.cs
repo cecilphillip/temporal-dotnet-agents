@@ -53,7 +53,7 @@ internal sealed class DurableChatActivities(
                 .ConfigureAwait(false))
             {
                 collected.Add(update);
-                ctx?.Heartbeat();
+                ctx?.Heartbeat(update.Text);
             }
             var response = collected.ToChatResponse();
 
