@@ -116,14 +116,9 @@ jobs:
       - name: Publish to GitHub Packages
         if: github.event.inputs.packregistry == 'GitHub'
         run: |
-          dotnet nuget add source \
-            --username ${{ github.actor }} \
-            --password ${{ secrets.GITHUB_TOKEN }} \
-            --store-password-in-clear-text \
-            --name github \
-            "https://nuget.pkg.github.com/cecilphillip/index.json"
           dotnet nuget push "artifacts/packages/*.nupkg" \
-            --source "github" \
+            --api-key "${{ secrets.GITHUB_TOKEN }}" \
+            --source "https://nuget.pkg.github.com/cecilphillip/index.json" \
             --skip-duplicate
 
       - name: Publish to NuGet.org
