@@ -114,7 +114,7 @@ jobs:
         if: github.event.inputs.packregistry == 'GitHub'
         run: |
           dotnet nuget push "artifacts/packages/*.nupkg" \
-            --api-key "${{ secrets.NUGET_PAT }}" \
+            --api-key "${{ secrets.NUGET_GITHUB_PAT }}" \
             --source "https://nuget.pkg.github.com/cecilphillip/index.json" \
             --skip-duplicate
 
